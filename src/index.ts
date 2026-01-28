@@ -1,0 +1,542 @@
+#!/usr/bin/env node
+
+/**
+ * OilPriceAPI MCP Server
+ *
+ * Provides real-time oil, gas, and commodity prices through the Model Context Protocol.
+ * For use with Claude Desktop, Claude Code, and other MCP-compatible clients.
+ *
+ * @see https://oilpriceapi.com
+ * @see https://modelcontextprotocol.io
+ */
+
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+
+// API Configuration
+const API_BASE = "https://api.oilpriceapi.com";
+const USER_AGENT = "oilpriceapi-mcp/1.0.0";
+
+// Get API key from environment
+const API_KEY = process.env.OILPRICEAPI_KEY || process.env.OIL_PRICE_API_KEY;
+
+// Natural language to commodity code mapping
+const COMMODITY_ALIASES: Record<string, string> = {
+  // Crude Oil
+  "brent": "BRENT_CRUDE_USD",
+  "brent oil": "BRENT_CRUDE_USD",
+  "brent crude": "BRENT_CRUDE_USD",
+  "brent crude oil": "BRENT_CRUDE_USD",
+  "north sea oil": "BRENT_CRUDE_USD",
+  "wti": "WTI_USD",
+  "wti oil": "WTI_USD",
+  "wti crude": "WTI_USD",
+  "west texas": "WTI_USD",
+  "us oil": "WTI_USD",
+  "american oil": "WTI_USD",
+  "russian oil": "URALS_CRUDE_USD",
+  "urals": "URALS_CRUDE_USD",
+  "urals crude": "URALS_CRUDE_USD",
+  "dubai": "DUBAI_CRUDE_USD",
+  "dubai crude": "DUBAI_CRUDE_USD",
+  "dubai oil": "DUBAI_CRUDE_USD",
+  "middle east oil": "DUBAI_CRUDE_USD",
+
+  // Natural Gas
+  "natural gas": "NATURAL_GAS_USD",
+  "gas": "NATURAL_GAS_USD",
+  "nat gas": "NATURAL_GAS_USD",
+  "henry hub": "NATURAL_GAS_USD",
+  "us gas": "NATURAL_GAS_USD",
+  "us natural gas": "NATURAL_GAS_USD",
+  "uk gas": "NATURAL_GAS_GBP",
+  "uk natural gas": "NATURAL_GAS_GBP",
+  "british gas": "NATURAL_GAS_GBP",
+  "european gas": "DUTCH_TTF_EUR",
+  "ttf": "DUTCH_TTF_EUR",
+  "dutch ttf": "DUTCH_TTF_EUR",
+  "eu gas": "DUTCH_TTF_EUR",
+
+  // Coal
+  "coal": "COAL_USD",
+  "thermal coal": "COAL_USD",
+  "newcastle coal": "NEWCASTLE_COAL_USD",
+  "australian coal": "NEWCASTLE_COAL_USD",
+
+  // Refined Products
+  "diesel": "DIESEL_USD",
+  "diesel fuel": "DIESEL_USD",
+  "gasoline": "GASOLINE_USD",
+  "petrol": "GASOLINE_USD",
+  "gas fuel": "GASOLINE_USD",
+  "rbob": "GASOLINE_RBOB_USD",
+  "rbob gasoline": "GASOLINE_RBOB_USD",
+  "jet fuel": "JET_FUEL_USD",
+  "aviation fuel": "JET_FUEL_USD",
+  "kerosene": "JET_FUEL_USD",
+  "heating oil": "HEATING_OIL_USD",
+
+  // Other
+  "gold": "GOLD_USD",
+  "carbon": "EU_CARBON_EUR",
+  "eu carbon": "EU_CARBON_EUR",
+  "carbon credits": "EU_CARBON_EUR",
+  "euro": "EUR_USD",
+  "eur usd": "EUR_USD",
+  "pound": "GBP_USD",
+  "gbp usd": "GBP_USD",
+  "sterling": "GBP_USD",
+};
+
+// Commodity metadata for formatting
+const COMMODITY_INFO: Record<string, { name: string; unit: string }> = {
+  "BRENT_CRUDE_USD": { name: "Brent Crude Oil", unit: "barrel" },
+  "WTI_USD": { name: "WTI Crude Oil", unit: "barrel" },
+  "URALS_CRUDE_USD": { name: "Urals Crude Oil", unit: "barrel" },
+  "DUBAI_CRUDE_USD": { name: "Dubai Crude Oil", unit: "barrel" },
+  "NATURAL_GAS_USD": { name: "US Natural Gas (Henry Hub)", unit: "MMBtu" },
+  "NATURAL_GAS_GBP": { name: "UK Natural Gas", unit: "therm" },
+  "DUTCH_TTF_EUR": { name: "European Natural Gas (TTF)", unit: "MWh" },
+  "COAL_USD": { name: "Coal", unit: "metric ton" },
+  "NEWCASTLE_COAL_USD": { name: "Newcastle Coal", unit: "metric ton" },
+  "DIESEL_USD": { name: "Diesel", unit: "gallon" },
+  "GASOLINE_USD": { name: "Gasoline", unit: "gallon" },
+  "GASOLINE_RBOB_USD": { name: "RBOB Gasoline", unit: "gallon" },
+  "JET_FUEL_USD": { name: "Jet Fuel", unit: "gallon" },
+  "HEATING_OIL_USD": { name: "Heating Oil", unit: "gallon" },
+  "GOLD_USD": { name: "Gold", unit: "troy oz" },
+  "EU_CARBON_EUR": { name: "EU Carbon Allowances", unit: "metric ton CO2" },
+  "EUR_USD": { name: "Euro to USD", unit: "rate" },
+  "GBP_USD": { name: "British Pound to USD", unit: "rate" },
+};
+
+// Available commodity codes
+const COMMODITY_CODES = [
+  "BRENT_CRUDE_USD",
+  "WTI_USD",
+  "URALS_CRUDE_USD",
+  "DUBAI_CRUDE_USD",
+  "NATURAL_GAS_USD",
+  "NATURAL_GAS_GBP",
+  "DUTCH_TTF_EUR",
+  "COAL_USD",
+  "NEWCASTLE_COAL_USD",
+  "DIESEL_USD",
+  "GASOLINE_USD",
+  "GASOLINE_RBOB_USD",
+  "JET_FUEL_USD",
+  "HEATING_OIL_USD",
+  "GOLD_USD",
+  "EU_CARBON_EUR",
+  "EUR_USD",
+  "GBP_USD",
+] as const;
+
+// Types
+interface PriceData {
+  code: string;
+  price: number;
+  currency: string;
+  created_at?: string;
+  updated_at?: string;
+  change_24h?: number;
+  change_24h_percent?: number;
+}
+
+interface ApiResponse<T> {
+  status: string;
+  data: T;
+}
+
+interface AllPricesData {
+  prices: Record<string, PriceData>;
+  count: number;
+  timestamp: string;
+}
+
+// Create server instance
+const server = new McpServer({
+  name: "oilpriceapi",
+  version: "1.0.0",
+});
+
+/**
+ * Resolve a natural language commodity name to its API code
+ */
+function resolveCommodityCode(input: string): string {
+  const normalized = input.toLowerCase().trim();
+
+  // Check if it's already a valid code
+  if (COMMODITY_CODES.includes(normalized.toUpperCase() as typeof COMMODITY_CODES[number])) {
+    return normalized.toUpperCase();
+  }
+
+  // Try alias mapping
+  const mapped = COMMODITY_ALIASES[normalized];
+  if (mapped) {
+    return mapped;
+  }
+
+  // Fuzzy match - check if input contains key words
+  for (const [alias, code] of Object.entries(COMMODITY_ALIASES)) {
+    if (normalized.includes(alias) || alias.includes(normalized)) {
+      return code;
+    }
+  }
+
+  // Default to Brent if no match
+  return "BRENT_CRUDE_USD";
+}
+
+/**
+ * Format a price for display
+ */
+function formatPrice(data: PriceData): string {
+  const info = COMMODITY_INFO[data.code] || { name: data.code, unit: "unit" };
+  const currencySymbol = data.currency === "EUR" ? "€" :
+                         data.currency === "GBP" || data.currency === "GBp" ? "£" : "$";
+
+  let result = `**${info.name}**: ${currencySymbol}${data.price.toFixed(2)}/${info.unit}`;
+
+  if (data.change_24h !== undefined && data.change_24h_percent !== undefined) {
+    const sign = data.change_24h >= 0 ? "+" : "";
+    result += `\n- 24h Change: ${sign}${currencySymbol}${data.change_24h.toFixed(2)} (${sign}${data.change_24h_percent.toFixed(2)}%)`;
+  }
+
+  const timestamp = data.updated_at || data.created_at;
+  if (timestamp) {
+    const date = new Date(timestamp);
+    result += `\n- Updated: ${date.toLocaleString("en-US", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: "UTC"
+    })} UTC`;
+  }
+
+  return result;
+}
+
+/**
+ * Make API request to OilPriceAPI
+ */
+async function makeApiRequest<T>(endpoint: string): Promise<T | null> {
+  const headers: Record<string, string> = {
+    "User-Agent": USER_AGENT,
+    "Accept": "application/json",
+  };
+
+  if (API_KEY) {
+    headers["Authorization"] = `Bearer ${API_KEY}`;
+  }
+
+  try {
+    const response = await fetch(`${API_BASE}${endpoint}`, { headers });
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        console.error("Authentication failed. Check OILPRICEAPI_KEY environment variable.");
+      }
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    return await response.json() as T;
+  } catch (error) {
+    console.error(`API request failed: ${endpoint}`, error);
+    return null;
+  }
+}
+
+// Register Tools
+
+/**
+ * Get current price of a specific commodity
+ */
+server.tool(
+  "get_commodity_price",
+  "Get the current real-time price of an oil, gas, or energy commodity. Use natural language like 'brent oil', 'natural gas', 'wti', or 'diesel'.",
+  {
+    commodity: z
+      .string()
+      .describe("Commodity name or code (e.g., 'brent oil', 'natural gas', 'WTI_USD', 'diesel')"),
+  },
+  async ({ commodity }) => {
+    const code = resolveCommodityCode(commodity);
+
+    const response = await makeApiRequest<ApiResponse<PriceData>>(
+      `/v1/prices/latest?by_code=${code}`
+    );
+
+    if (!response || response.status !== "success") {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Failed to retrieve price for ${commodity}. Please try again or check if the commodity is supported.`,
+          },
+        ],
+      };
+    }
+
+    const formatted = formatPrice(response.data);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: `${formatted}\n\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`,
+        },
+      ],
+    };
+  }
+);
+
+/**
+ * Get all commodity prices (market overview)
+ */
+server.tool(
+  "get_market_overview",
+  "Get current prices for all tracked commodities. Returns a market overview with oil, gas, coal, and refined product prices.",
+  {
+    category: z
+      .enum(["all", "oil", "gas", "coal", "refined"])
+      .optional()
+      .describe("Filter by commodity category (default: all)"),
+  },
+  async ({ category = "all" }) => {
+    const response = await makeApiRequest<ApiResponse<{ data: AllPricesData }>>(
+      "/v1/prices/all"
+    );
+
+    if (!response || response.status !== "success") {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Failed to retrieve market data. Please try again.",
+          },
+        ],
+      };
+    }
+
+    const prices = response.data.data.prices;
+
+    // Category filters
+    const categoryFilters: Record<string, string[]> = {
+      oil: ["BRENT_CRUDE_USD", "WTI_USD", "URALS_CRUDE_USD", "DUBAI_CRUDE_USD"],
+      gas: ["NATURAL_GAS_USD", "NATURAL_GAS_GBP", "DUTCH_TTF_EUR"],
+      coal: ["COAL_USD", "NEWCASTLE_COAL_USD"],
+      refined: ["DIESEL_USD", "GASOLINE_USD", "GASOLINE_RBOB_USD", "JET_FUEL_USD", "HEATING_OIL_USD"],
+    };
+
+    let filteredCodes: string[];
+    if (category === "all") {
+      filteredCodes = Object.keys(prices);
+    } else {
+      filteredCodes = categoryFilters[category] || [];
+    }
+
+    const sections: string[] = ["# Energy Market Overview\n"];
+
+    // Group by category
+    const groupedPrices: Record<string, PriceData[]> = {
+      "Crude Oil": [],
+      "Natural Gas": [],
+      "Coal": [],
+      "Refined Products": [],
+      "Other": [],
+    };
+
+    for (const code of filteredCodes) {
+      const data = prices[code];
+      if (!data) continue;
+
+      if (code.includes("CRUDE") || code === "WTI_USD") {
+        groupedPrices["Crude Oil"].push(data);
+      } else if (code.includes("GAS") || code.includes("TTF")) {
+        groupedPrices["Natural Gas"].push(data);
+      } else if (code.includes("COAL")) {
+        groupedPrices["Coal"].push(data);
+      } else if (["DIESEL_USD", "GASOLINE_USD", "GASOLINE_RBOB_USD", "JET_FUEL_USD", "HEATING_OIL_USD", "ULSD_DIESEL_USD"].includes(code)) {
+        groupedPrices["Refined Products"].push(data);
+      } else {
+        groupedPrices["Other"].push(data);
+      }
+    }
+
+    for (const [group, items] of Object.entries(groupedPrices)) {
+      if (items.length === 0) continue;
+
+      sections.push(`## ${group}\n`);
+      for (const item of items) {
+        const info = COMMODITY_INFO[item.code] || { name: item.code, unit: "unit" };
+        const currencySymbol = item.currency === "EUR" ? "€" :
+                               item.currency === "GBP" || item.currency === "GBp" ? "£" : "$";
+
+        let line = `- **${info.name}**: ${currencySymbol}${item.price.toFixed(2)}`;
+
+        if (item.change_24h_percent !== undefined) {
+          const sign = item.change_24h_percent >= 0 ? "+" : "";
+          line += ` (${sign}${item.change_24h_percent.toFixed(1)}%)`;
+        }
+
+        sections.push(line);
+      }
+      sections.push("");
+    }
+
+    sections.push(`_Updated: ${new Date(response.data.data.timestamp).toLocaleString("en-US", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: "UTC"
+    })} UTC | Data from [OilPriceAPI](https://oilpriceapi.com)_`);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: sections.join("\n"),
+        },
+      ],
+    };
+  }
+);
+
+/**
+ * Compare prices between commodities
+ */
+server.tool(
+  "compare_prices",
+  "Compare current prices between multiple commodities (e.g., Brent vs WTI, US gas vs European gas).",
+  {
+    commodities: z
+      .array(z.string())
+      .min(2)
+      .max(5)
+      .describe("List of commodities to compare (2-5 items)"),
+  },
+  async ({ commodities }) => {
+    const codes = commodities.map(resolveCommodityCode);
+    const results: PriceData[] = [];
+
+    for (const code of codes) {
+      const response = await makeApiRequest<ApiResponse<PriceData>>(
+        `/v1/prices/latest?by_code=${code}`
+      );
+
+      if (response?.status === "success") {
+        results.push(response.data);
+      }
+    }
+
+    if (results.length < 2) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Could not retrieve enough price data for comparison. Please check commodity names.",
+          },
+        ],
+      };
+    }
+
+    const sections = ["# Price Comparison\n"];
+
+    for (const data of results) {
+      sections.push(formatPrice(data));
+      sections.push("");
+    }
+
+    // Calculate spread if comparing similar commodities
+    if (results.length === 2 && results[0].currency === results[1].currency) {
+      const spread = Math.abs(results[0].price - results[1].price);
+      const info0 = COMMODITY_INFO[results[0].code]?.name || results[0].code;
+      const info1 = COMMODITY_INFO[results[1].code]?.name || results[1].code;
+      sections.push(`**Spread**: $${spread.toFixed(2)} (${info0} vs ${info1})`);
+    }
+
+    sections.push(`\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: sections.join("\n"),
+        },
+      ],
+    };
+  }
+);
+
+/**
+ * List available commodities
+ */
+server.tool(
+  "list_commodities",
+  "List all available commodities that can be queried for prices.",
+  {},
+  async () => {
+    const sections = ["# Available Commodities\n"];
+
+    sections.push("## Crude Oil");
+    sections.push("- `BRENT_CRUDE_USD` - Brent Crude (global benchmark)");
+    sections.push("- `WTI_USD` - West Texas Intermediate (US benchmark)");
+    sections.push("- `URALS_CRUDE_USD` - Urals Crude (Russian)");
+    sections.push("- `DUBAI_CRUDE_USD` - Dubai Crude (Middle East)");
+    sections.push("");
+
+    sections.push("## Natural Gas");
+    sections.push("- `NATURAL_GAS_USD` - US Henry Hub ($/MMBtu)");
+    sections.push("- `NATURAL_GAS_GBP` - UK NBP (pence/therm)");
+    sections.push("- `DUTCH_TTF_EUR` - European TTF (€/MWh)");
+    sections.push("");
+
+    sections.push("## Coal");
+    sections.push("- `COAL_USD` - Thermal Coal");
+    sections.push("- `NEWCASTLE_COAL_USD` - Newcastle (Asia-Pacific)");
+    sections.push("");
+
+    sections.push("## Refined Products");
+    sections.push("- `DIESEL_USD` - Diesel");
+    sections.push("- `GASOLINE_USD` - Gasoline");
+    sections.push("- `GASOLINE_RBOB_USD` - RBOB Gasoline");
+    sections.push("- `JET_FUEL_USD` - Jet Fuel");
+    sections.push("- `HEATING_OIL_USD` - Heating Oil");
+    sections.push("");
+
+    sections.push("## Other");
+    sections.push("- `GOLD_USD` - Gold");
+    sections.push("- `EU_CARBON_EUR` - EU Carbon Allowances");
+    sections.push("- `EUR_USD` - Euro to USD");
+    sections.push("- `GBP_USD` - British Pound to USD");
+    sections.push("");
+
+    sections.push("_You can use natural language like 'brent oil' or 'natural gas' - I'll translate it to the right code._");
+
+    return {
+      content: [
+        {
+          type: "text",
+          text: sections.join("\n"),
+        },
+      ],
+    };
+  }
+);
+
+// Main entry point
+async function main() {
+  // Check for API key
+  if (!API_KEY) {
+    console.error("Warning: OILPRICEAPI_KEY not set. Some features may be limited.");
+  }
+
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error("OilPriceAPI MCP Server running on stdio");
+}
+
+main().catch((error) => {
+  console.error("Fatal error:", error);
+  process.exit(1);
+});
