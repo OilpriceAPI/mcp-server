@@ -1,6 +1,7 @@
 {
   "name": "oilpriceapi-mcp",
-  "version": "1.0.0",
+  "version": "1.0.4",
+  "mcpName": "io.github.OilpriceAPI/mcp-server",
   "description": "MCP server for real-time oil, gas, and commodity prices from OilPriceAPI",
   "type": "module",
   "bin": {
