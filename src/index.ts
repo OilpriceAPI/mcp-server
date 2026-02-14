@@ -753,6 +753,11 @@ server.prompt(
   }),
 );
 
+// Smithery sandbox export for server scanning
+export function createSandboxServer() {
+  return server;
+}
+
 // Main entry point
 async function main() {
   // Check for API key
