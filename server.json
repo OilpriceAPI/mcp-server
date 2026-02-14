@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.oilpriceapi/mcp-server",
+  "name": "io.github.OilpriceAPI/mcp-server",
   "description": "Real-time oil, gas & commodity prices. 40+ commodities with natural language queries.",
   "repository": {
     "url": "https://github.com/OilpriceAPI/mcp-server",
