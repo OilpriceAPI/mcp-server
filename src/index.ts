@@ -16,13 +16,13 @@ import { z } from "zod";
 
 // API Configuration
 const API_BASE = "https://api.oilpriceapi.com";
-const USER_AGENT = "oilpriceapi-mcp/1.0.0";
+export const USER_AGENT = "oilpriceapi-mcp/1.2.0";
 
 // Get API key from environment
 const API_KEY = process.env.OILPRICEAPI_KEY || process.env.OIL_PRICE_API_KEY;
 
 // Natural language to commodity code mapping
-const COMMODITY_ALIASES: Record<string, string> = {
+export const COMMODITY_ALIASES: Record<string, string> = {
   // Crude Oil
   brent: "BRENT_CRUDE_USD",
   "brent oil": "BRENT_CRUDE_USD",
@@ -90,7 +90,7 @@ const COMMODITY_ALIASES: Record<string, string> = {
 };
 
 // Commodity metadata for formatting
-const COMMODITY_INFO: Record<string, { name: string; unit: string }> = {
+export const COMMODITY_INFO: Record<string, { name: string; unit: string }> = {
   BRENT_CRUDE_USD: { name: "Brent Crude Oil", unit: "barrel" },
   WTI_USD: { name: "WTI Crude Oil", unit: "barrel" },
   URALS_CRUDE_USD: { name: "Urals Crude Oil", unit: "barrel" },
@@ -112,7 +112,7 @@ const COMMODITY_INFO: Record<string, { name: string; unit: string }> = {
 };
 
 // Available commodity codes
-const COMMODITY_CODES = [
+export const COMMODITY_CODES = [
   "BRENT_CRUDE_USD",
   "WTI_USD",
   "URALS_CRUDE_USD",
@@ -144,7 +144,7 @@ interface PriceData {
   change_24h_percent?: number;
 }
 
-interface ApiResponse<T> {
+export interface ApiResponse<T> {
   status: string;
   data: T;
 }
@@ -155,16 +155,66 @@ interface AllPricesData {
   timestamp: string;
 }
 
+interface HistoricalPriceData {
+  prices: Array<{
+    price: number;
+    created_at: string;
+    code?: string;
+  }>;
+}
+
+interface FuturesData {
+  contracts: Array<{
+    contract: string;
+    month: string;
+    price: number;
+    change?: number;
+    volume?: number;
+  }>;
+}
+
+interface MarineFuelPrice {
+  port: string;
+  fuel_type: string;
+  price: number;
+  currency: string;
+  unit: string;
+  region?: string;
+}
+
+interface MarineFuelsData {
+  prices: MarineFuelPrice[];
+}
+
+interface RigCountData {
+  oil: number;
+  gas: number;
+  total: number;
+  misc?: number;
+  change_from_prior_week?: number;
+  date: string;
+  source?: string;
+}
+
+interface DrillingData {
+  total_wells: number;
+  active_rigs: number;
+  permits_issued?: number;
+  completions?: number;
+  region_breakdown?: Array<{ region: string; count: number }>;
+  date: string;
+}
+
 // Create server instance
 const server = new McpServer({
   name: "oilpriceapi",
-  version: "1.0.0",
+  version: "1.2.0",
 });
 
 /**
  * Resolve a natural language commodity name to its API code
  */
-function resolveCommodityCode(input: string): string {
+export function resolveCommodityCode(input: string): string {
   const normalized = input.toLowerCase().trim();
 
   // Check if it's already a valid code
@@ -196,7 +246,7 @@ function resolveCommodityCode(input: string): string {
 /**
  * Format a price for display
  */
-function formatPrice(data: PriceData): string {
+export function formatPrice(data: PriceData): string {
   const info = COMMODITY_INFO[data.code] || { name: data.code, unit: "unit" };
   const currencySymbol =
     data.currency === "EUR"
@@ -208,8 +258,10 @@ function formatPrice(data: PriceData): string {
   let result = `**${info.name}**: ${currencySymbol}${data.price.toFixed(2)}/${info.unit}`;
 
   if (data.change_24h !== undefined && data.change_24h_percent !== undefined) {
-    const sign = data.change_24h >= 0 ? "+" : "";
-    result += `\n- 24h Change: ${sign}${currencySymbol}${data.change_24h.toFixed(2)} (${sign}${data.change_24h_percent.toFixed(2)}%)`;
+    const sign = data.change_24h >= 0 ? "+" : "-";
+    const absChange = Math.abs(data.change_24h).toFixed(2);
+    const absPct = Math.abs(data.change_24h_percent).toFixed(2);
+    result += `\n- 24h Change: ${sign}${currencySymbol}${absChange} (${sign}${absPct}%)`;
   }
 
   const timestamp = data.updated_at || data.created_at;
@@ -226,9 +278,12 @@ function formatPrice(data: PriceData): string {
 }
 
 /**
- * Make API request to OilPriceAPI
+ * Make API request to OilPriceAPI with retry and exponential backoff
  */
-async function makeApiRequest<T>(endpoint: string): Promise<T | null> {
+export async function makeApiRequest<T>(
+  endpoint: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<T | null> {
   const headers: Record<string, string> = {
     "User-Agent": USER_AGENT,
     Accept: "application/json",
@@ -238,23 +293,56 @@ async function makeApiRequest<T>(endpoint: string): Promise<T | null> {
     headers["Authorization"] = `Bearer ${API_KEY}`;
   }
 
-  try {
-    const response = await fetch(`${API_BASE}${endpoint}`, { headers });
+  const maxRetries = 3;
 
-    if (!response.ok) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetchFn(`${API_BASE}${endpoint}`, { headers });
+
+      if (response.ok) {
+        return (await response.json()) as T;
+      }
+
       if (response.status === 401) {
         console.error(
           "Authentication failed. Check OILPRICEAPI_KEY environment variable.",
         );
+        return null;
       }
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
 
-    return (await response.json()) as T;
-  } catch (error) {
-    console.error(`API request failed: ${endpoint}`, error);
-    return null;
+      // Retry on 429 and 5xx
+      if (
+        (response.status === 429 || response.status >= 500) &&
+        attempt < maxRetries
+      ) {
+        const retryAfter = response.headers.get("Retry-After");
+        const delay = retryAfter
+          ? Math.min(parseInt(retryAfter, 10), 60) * 1000
+          : Math.pow(2, attempt) * 1000;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+
+      // Non-retryable HTTP error (403, 404, etc.) — return null immediately
+      console.error(
+        `HTTP ${response.status}: ${response.statusText} for ${endpoint}`,
+      );
+      return null;
+    } catch (error) {
+      if (attempt === maxRetries) {
+        console.error(
+          `API request failed after ${maxRetries + 1} attempts: ${endpoint}`,
+          error,
+        );
+        return null;
+      }
+      // Network error - retry with backoff
+      const delay = Math.pow(2, attempt) * 1000;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
   }
+
+  return null;
 }
 
 // Register Tools
@@ -563,6 +651,308 @@ server.tool(
         },
       ],
     };
+  },
+);
+
+/**
+ * Get historical price data for a commodity
+ */
+server.tool(
+  "get_historical_prices",
+  "Get historical price data for a commodity over a time period (past day, week, month, or year).",
+  {
+    commodity: z.string().describe("Commodity name or code"),
+    period: z
+      .enum(["day", "week", "month", "year"])
+      .default("month")
+      .describe("Time period"),
+  },
+  async ({ commodity, period }) => {
+    const code = resolveCommodityCode(commodity);
+    const response = await makeApiRequest<ApiResponse<HistoricalPriceData>>(
+      `/v1/prices/past_${period}?by_code=${code}`,
+    );
+
+    if (
+      !response ||
+      response.status !== "success" ||
+      !response.data.prices?.length
+    ) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `No historical data found for ${commodity} over the past ${period}.`,
+          },
+        ],
+      };
+    }
+
+    const info = COMMODITY_INFO[code] || { name: code, unit: "unit" };
+    // Derive currency symbol from commodity code (same logic as formatPrice)
+    const currencyFromCode = code.endsWith("_EUR")
+      ? "EUR"
+      : code.endsWith("_GBP") || code.endsWith("_GBp")
+        ? "GBP"
+        : "USD";
+    const historicalCurrencySymbol =
+      currencyFromCode === "EUR" ? "€" : currencyFromCode === "GBP" ? "£" : "$";
+    const prices = response.data.prices;
+    const latest = prices[0];
+    const oldest = prices[prices.length - 1];
+    const high = Math.max(...prices.map((p) => p.price));
+    const low = Math.min(...prices.map((p) => p.price));
+    const avg = prices.reduce((sum, p) => sum + p.price, 0) / prices.length;
+    const change = latest.price - oldest.price;
+    const changePct = (change / oldest.price) * 100;
+
+    const sections = [
+      `# ${info.name} - Past ${period.charAt(0).toUpperCase() + period.slice(1)} Historical Data\n`,
+      `- **Latest**: ${historicalCurrencySymbol}${latest.price.toFixed(2)}/${info.unit}`,
+      `- **High**: ${historicalCurrencySymbol}${high.toFixed(2)}`,
+      `- **Low**: ${historicalCurrencySymbol}${low.toFixed(2)}`,
+      `- **Average**: ${historicalCurrencySymbol}${avg.toFixed(2)}`,
+      `- **Change**: ${change >= 0 ? "+" : ""}${historicalCurrencySymbol}${change.toFixed(2)} (${change >= 0 ? "+" : ""}${changePct.toFixed(1)}%)`,
+      `- **Data Points**: ${prices.length}`,
+      `\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`,
+    ];
+
+    return { content: [{ type: "text", text: sections.join("\n") }] };
+  },
+);
+
+/**
+ * Get the latest futures contract price
+ */
+server.tool(
+  "get_futures_price",
+  "Get the latest futures contract price for a commodity (Brent BZ or WTI CL).",
+  {
+    contract: z
+      .enum(["BZ", "CL"])
+      .default("BZ")
+      .describe("Futures contract (BZ=Brent, CL=WTI)"),
+  },
+  async ({ contract }) => {
+    const response = await makeApiRequest<ApiResponse<FuturesData>>(
+      `/v1/futures/latest?contract=${contract}`,
+    );
+
+    if (
+      !response ||
+      response.status !== "success" ||
+      !response.data.contracts?.length
+    ) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `No futures data available for contract ${contract}.`,
+          },
+        ],
+      };
+    }
+
+    const contractName = contract === "BZ" ? "Brent Crude" : "WTI Crude";
+    const front = response.data.contracts[0];
+
+    let text = `# ${contractName} Futures (${contract})\n\n`;
+    text += `**Front Month (${front.month})**: $${front.price.toFixed(2)}`;
+    if (front.change !== undefined) {
+      text += ` (${front.change >= 0 ? "+" : ""}$${front.change.toFixed(2)})`;
+    }
+    text += `\n\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
+
+    return { content: [{ type: "text", text }] };
+  },
+);
+
+/**
+ * Get the full futures forward curve
+ */
+server.tool(
+  "get_futures_curve",
+  "Get the full futures forward curve showing prices across contract months.",
+  {
+    contract: z
+      .enum(["BZ", "CL"])
+      .default("BZ")
+      .describe("Futures contract (BZ=Brent, CL=WTI)"),
+  },
+  async ({ contract }) => {
+    const response = await makeApiRequest<ApiResponse<FuturesData>>(
+      `/v1/futures/curve?contract=${contract}`,
+    );
+
+    if (
+      !response ||
+      response.status !== "success" ||
+      !response.data.contracts?.length
+    ) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `No futures curve data available for contract ${contract}.`,
+          },
+        ],
+      };
+    }
+
+    const contractName = contract === "BZ" ? "Brent Crude" : "WTI Crude";
+    const contracts = response.data.contracts;
+
+    let text = `# ${contractName} Futures Curve (${contract})\n\n`;
+    text += `| Month | Price | Change |\n|-------|-------|--------|\n`;
+
+    for (const c of contracts) {
+      const changeStr =
+        c.change !== undefined
+          ? `${c.change >= 0 ? "+" : ""}$${c.change.toFixed(2)}`
+          : "N/A";
+      text += `| ${c.month} | $${c.price.toFixed(2)} | ${changeStr} |\n`;
+    }
+
+    const front = contracts[0].price;
+    const back = contracts[contracts.length - 1].price;
+    const structure = front > back ? "backwardation" : "contango";
+    text += `\n**Market Structure**: ${structure} (front $${front.toFixed(2)} vs back $${back.toFixed(2)})`;
+    text += `\n\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
+
+    return { content: [{ type: "text", text }] };
+  },
+);
+
+/**
+ * Get marine fuel (bunker) prices
+ */
+server.tool(
+  "get_marine_fuel_prices",
+  "Get latest marine fuel (bunker) prices across major ports. Includes VLSFO, MGO, and IFO380.",
+  {
+    port: z
+      .string()
+      .optional()
+      .describe("Filter by port name (e.g., 'SINGAPORE', 'ROTTERDAM')"),
+    fuel_type: z
+      .string()
+      .optional()
+      .describe("Filter by fuel type (VLSFO, MGO, IFO380)"),
+  },
+  async ({ port, fuel_type }) => {
+    let endpoint = "/v1/marine-fuels/latest";
+    const params: string[] = [];
+    if (port) params.push(`port=${encodeURIComponent(port)}`);
+    if (fuel_type) params.push(`fuel_type=${encodeURIComponent(fuel_type)}`);
+    if (params.length) endpoint += `?${params.join("&")}`;
+
+    const response =
+      await makeApiRequest<ApiResponse<MarineFuelsData>>(endpoint);
+
+    if (
+      !response ||
+      response.status !== "success" ||
+      !response.data.prices?.length
+    ) {
+      return {
+        content: [
+          { type: "text", text: "No marine fuel price data available." },
+        ],
+      };
+    }
+
+    const prices = response.data.prices;
+    let text = "# Marine Fuel Prices\n\n";
+    text += `| Port | Fuel Type | Price | Currency | Unit |\n`;
+    text += `|------|-----------|-------|----------|------|\n`;
+
+    for (const p of prices) {
+      text += `| ${p.port} | ${p.fuel_type} | ${p.price.toFixed(2)} | ${p.currency} | ${p.unit} |\n`;
+    }
+
+    text += `\n_${prices.length} prices | Data from [OilPriceAPI](https://oilpriceapi.com)_`;
+
+    return { content: [{ type: "text", text }] };
+  },
+);
+
+/**
+ * Get the latest oil and gas rig count data
+ */
+server.tool(
+  "get_rig_counts",
+  "Get the latest oil and gas rig count data (Baker Hughes).",
+  {},
+  async () => {
+    const response = await makeApiRequest<ApiResponse<RigCountData>>(
+      "/v1/rig-counts/latest",
+    );
+
+    if (!response || response.status !== "success") {
+      return {
+        content: [{ type: "text", text: "Rig count data not available." }],
+      };
+    }
+
+    const data = response.data;
+    let text = `# Rig Count Data\n\n`;
+    text += `- **Oil Rigs**: ${data.oil}\n`;
+    text += `- **Gas Rigs**: ${data.gas}\n`;
+    text += `- **Total**: ${data.total}\n`;
+    if (data.change_from_prior_week !== undefined) {
+      const sign = data.change_from_prior_week >= 0 ? "+" : "";
+      text += `- **Change from Prior Week**: ${sign}${data.change_from_prior_week}\n`;
+    }
+    text += `- **Date**: ${data.date}\n`;
+    text += `\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
+
+    return { content: [{ type: "text", text }] };
+  },
+);
+
+/**
+ * Get drilling intelligence data
+ */
+server.tool(
+  "get_drilling_intelligence",
+  "Get drilling intelligence data including active wells, permits, and completions.",
+  {},
+  async () => {
+    const response = await makeApiRequest<ApiResponse<DrillingData>>(
+      "/v1/drilling/latest",
+    );
+
+    if (!response || response.status !== "success") {
+      return {
+        content: [
+          {
+            type: "text",
+            text: "Drilling intelligence data not available.",
+          },
+        ],
+      };
+    }
+
+    const data = response.data;
+    let text = `# Drilling Intelligence\n\n`;
+    text += `- **Total Wells**: ${data.total_wells.toLocaleString()}\n`;
+    text += `- **Active Rigs**: ${data.active_rigs.toLocaleString()}\n`;
+    if (data.permits_issued !== undefined)
+      text += `- **Permits Issued**: ${data.permits_issued.toLocaleString()}\n`;
+    if (data.completions !== undefined)
+      text += `- **Completions**: ${data.completions.toLocaleString()}\n`;
+    text += `- **Date**: ${data.date}\n`;
+
+    if (data.region_breakdown?.length) {
+      text += `\n## By Region\n`;
+      for (const r of data.region_breakdown) {
+        text += `- **${r.region}**: ${r.count}\n`;
+      }
+    }
+
+    text += `\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
+
+    return { content: [{ type: "text", text }] };
   },
 );
 

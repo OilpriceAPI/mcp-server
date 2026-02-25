@@ -205,7 +205,7 @@ Pre-built analyst templates:
 
 ### Other
 
-- Gold, EU Carbon Allowances, EUR/USD, GBP/USD
+- Gold, EU Carbon Allowances, UK Carbon Allowances, EUR/USD, GBP/USD
 
 ## Natural Language Support
 
