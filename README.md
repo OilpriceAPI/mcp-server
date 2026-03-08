@@ -5,6 +5,10 @@
 [![npm](https://img.shields.io/npm/v/oilpriceapi-mcp)](https://www.npmjs.com/package/oilpriceapi-mcp)
 [![license](https://img.shields.io/npm/l/oilpriceapi-mcp)](LICENSE)
 
+<a href="https://glama.ai/mcp/servers/OilpriceAPI/oil-price-api">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/OilpriceAPI/oil-price-api/badge" alt="OilPriceAPI MCP server" />
+</a>
+
 ## Features
 
 - **4 Tools** — get prices, market overviews, price comparisons, commodity listings
