@@ -79,6 +79,18 @@ export const COMMODITY_ALIASES: Record<string, string> = {
 
   // Other
   gold: "GOLD_USD",
+  "gold am fix": "GOLD_AM_USD",
+  "lbma gold am": "GOLD_AM_USD",
+  "gold am fix gbp": "GOLD_AM_GBP",
+  "gold am fix eur": "GOLD_AM_EUR",
+  "gold pm fix": "GOLD_PM_USD",
+  "lbma gold pm": "GOLD_PM_USD",
+  "gold pm fix gbp": "GOLD_PM_GBP",
+  "gold pm fix eur": "GOLD_PM_EUR",
+  "silver fix": "SILVER_FIX_USD",
+  "lbma silver": "SILVER_FIX_USD",
+  "silver fix gbp": "SILVER_FIX_GBP",
+  "silver fix eur": "SILVER_FIX_EUR",
   carbon: "EU_CARBON_EUR",
   "eu carbon": "EU_CARBON_EUR",
   "carbon credits": "EU_CARBON_EUR",
@@ -106,6 +118,15 @@ export const COMMODITY_INFO: Record<string, { name: string; unit: string }> = {
   JET_FUEL_USD: { name: "Jet Fuel", unit: "gallon" },
   HEATING_OIL_USD: { name: "Heating Oil", unit: "gallon" },
   GOLD_USD: { name: "Gold", unit: "troy oz" },
+  GOLD_AM_USD: { name: "LBMA Gold AM Fix", unit: "troy oz" },
+  GOLD_AM_GBP: { name: "LBMA Gold AM Fix (GBP)", unit: "troy oz" },
+  GOLD_AM_EUR: { name: "LBMA Gold AM Fix (EUR)", unit: "troy oz" },
+  GOLD_PM_USD: { name: "LBMA Gold PM Fix", unit: "troy oz" },
+  GOLD_PM_GBP: { name: "LBMA Gold PM Fix (GBP)", unit: "troy oz" },
+  GOLD_PM_EUR: { name: "LBMA Gold PM Fix (EUR)", unit: "troy oz" },
+  SILVER_FIX_USD: { name: "LBMA Silver Fix", unit: "troy oz" },
+  SILVER_FIX_GBP: { name: "LBMA Silver Fix (GBP)", unit: "troy oz" },
+  SILVER_FIX_EUR: { name: "LBMA Silver Fix (EUR)", unit: "troy oz" },
   EU_CARBON_EUR: { name: "EU Carbon Allowances", unit: "metric ton CO2" },
   EUR_USD: { name: "Euro to USD", unit: "rate" },
   GBP_USD: { name: "British Pound to USD", unit: "rate" },
@@ -128,6 +149,15 @@ export const COMMODITY_CODES = [
   "JET_FUEL_USD",
   "HEATING_OIL_USD",
   "GOLD_USD",
+  "GOLD_AM_USD",
+  "GOLD_AM_GBP",
+  "GOLD_AM_EUR",
+  "GOLD_PM_USD",
+  "GOLD_PM_GBP",
+  "GOLD_PM_EUR",
+  "SILVER_FIX_USD",
+  "SILVER_FIX_GBP",
+  "SILVER_FIX_EUR",
   "EU_CARBON_EUR",
   "EUR_USD",
   "GBP_USD",
@@ -632,8 +662,20 @@ server.tool(
     sections.push("- `HEATING_OIL_USD` - Heating Oil");
     sections.push("");
 
-    sections.push("## Other");
+    sections.push("## Precious Metals");
     sections.push("- `GOLD_USD` - Gold");
+    sections.push("- `GOLD_AM_USD` - LBMA Gold AM Fix (USD)");
+    sections.push("- `GOLD_AM_GBP` - LBMA Gold AM Fix (GBP)");
+    sections.push("- `GOLD_AM_EUR` - LBMA Gold AM Fix (EUR)");
+    sections.push("- `GOLD_PM_USD` - LBMA Gold PM Fix (USD)");
+    sections.push("- `GOLD_PM_GBP` - LBMA Gold PM Fix (GBP)");
+    sections.push("- `GOLD_PM_EUR` - LBMA Gold PM Fix (EUR)");
+    sections.push("- `SILVER_FIX_USD` - LBMA Silver Fix (USD)");
+    sections.push("- `SILVER_FIX_GBP` - LBMA Silver Fix (GBP)");
+    sections.push("- `SILVER_FIX_EUR` - LBMA Silver Fix (EUR)");
+    sections.push("");
+
+    sections.push("## Other");
     sections.push("- `EU_CARBON_EUR` - EU Carbon Allowances");
     sections.push("- `EUR_USD` - Euro to USD");
     sections.push("- `GBP_USD` - British Pound to USD");

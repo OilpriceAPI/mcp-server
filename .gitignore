@@ -2,7 +2,3 @@ node_modules/
 build/
 *.log
 .DS_Store
-.env
-.env.*
-.mcpregistry_*
-server.json

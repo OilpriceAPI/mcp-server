@@ -112,6 +112,24 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 }
 ```
 
+### Cody (VS Code)
+
+Add to `.vscode/cody.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "oilpriceapi": {
+      "command": "npx",
+      "args": ["-y", "oilpriceapi-mcp"],
+      "env": {
+        "OILPRICEAPI_KEY": "your-api-key-here"
+      }
+    }
+  }
+}
+```
+
 ### Global Install
 
 ```bash
@@ -120,7 +138,7 @@ npm install -g oilpriceapi-mcp
 
 ## Getting an API Key
 
-1. Sign up at [oilpriceapi.com](https://oilpriceapi.com)
+1. Sign up at [oilpriceapi.com/signup](https://www.oilpriceapi.com/signup?utm_source=npm&utm_medium=mcp&utm_campaign=readme)
 2. Get your API key from the dashboard
 3. Add it to your MCP config as shown above
 
@@ -217,6 +235,9 @@ Pre-built analyst templates:
 | "european gas", "ttf"      | DUTCH_TTF_EUR   |
 | "diesel"                   | DIESEL_USD      |
 | "gold"                     | GOLD_USD        |
+| "lbma gold am fix"         | GOLD_AM_USD     |
+| "lbma gold pm fix"         | GOLD_PM_USD     |
+| "lbma silver fix"          | SILVER_FIX_USD  |
 
 ## Development
 
@@ -232,6 +253,14 @@ MIT
 
 ## Links
 
-- [OilPriceAPI](https://oilpriceapi.com)
+- [OilPriceAPI](https://www.oilpriceapi.com)
 - [API Documentation](https://docs.oilpriceapi.com)
+- [Pricing](https://www.oilpriceapi.com/pricing?utm_source=npm&utm_medium=mcp&utm_campaign=pricing)
 - [MCP Protocol](https://modelcontextprotocol.io)
+
+## Also Available As
+
+- **[Python SDK](https://pypi.org/project/oilpriceapi/)** - Python client with Pandas integration
+- **[Node.js SDK](https://www.npmjs.com/package/oilpriceapi)** - TypeScript/JavaScript SDK
+- **[Go SDK](https://github.com/OilpriceAPI/oilpriceapi-go)** - Idiomatic Go client
+- **[OpenBB Integration](https://pypi.org/project/openbb-oilpriceapi/)** - OpenBB Platform provider
