@@ -1,0 +1,14 @@
+{
+  "name": "oilpriceapi",
+  "description": "Real-time oil, gas, and commodity prices for AI agents. 174+ commodities including crude oil, natural gas, metals, petrochemicals, and carbon credits.",
+  "version": "2.0.0",
+  "mcpServers": {
+    "oilpriceapi": {
+      "command": "npx",
+      "args": ["-y", "oilpriceapi-mcp"],
+      "env": {
+        "OILPRICEAPI_KEY": "<YOUR_API_KEY>"
+      }
+    }
+  }
+}
