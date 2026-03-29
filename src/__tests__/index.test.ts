@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   resolveCommodityCode,
+  resolveStateCode,
   formatPrice,
   makeApiRequest,
   COMMODITY_ALIASES,
@@ -40,14 +41,12 @@ describe("resolveCommodityCode", () => {
     expect(resolveCommodityCode("BRENT_CRUDE_USD")).toBe("BRENT_CRUDE_USD");
   });
 
-  it("defaults to BRENT_CRUDE_USD for unknown input", () => {
-    expect(resolveCommodityCode("unknown_commodity_xyz")).toBe(
-      "BRENT_CRUDE_USD",
-    );
+  it("returns null for unknown input", () => {
+    expect(resolveCommodityCode("unknown_commodity_xyz")).toBeNull();
   });
 
-  it("defaults to BRENT_CRUDE_USD for garbage input", () => {
-    expect(resolveCommodityCode("!!!")).toBe("BRENT_CRUDE_USD");
+  it("returns null for garbage input", () => {
+    expect(resolveCommodityCode("!!!")).toBeNull();
   });
 
   it("resolves case-insensitive alias ('BRENT')", () => {
@@ -64,6 +63,40 @@ describe("resolveCommodityCode", () => {
 
   it("resolves 'carbon' alias to EU_CARBON_EUR", () => {
     expect(resolveCommodityCode("carbon")).toBe("EU_CARBON_EUR");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveStateCode
+// ---------------------------------------------------------------------------
+
+describe("resolveStateCode", () => {
+  it("resolves a 2-letter code ('CA')", () => {
+    expect(resolveStateCode("CA")).toBe("CA");
+  });
+
+  it("resolves lowercase 2-letter code ('tx')", () => {
+    expect(resolveStateCode("tx")).toBe("TX");
+  });
+
+  it("resolves full state name ('California')", () => {
+    expect(resolveStateCode("California")).toBe("CA");
+  });
+
+  it("resolves multi-word state name ('New York')", () => {
+    expect(resolveStateCode("New York")).toBe("NY");
+  });
+
+  it("resolves 'district of columbia' to DC", () => {
+    expect(resolveStateCode("district of columbia")).toBe("DC");
+  });
+
+  it("returns null for invalid 2-letter code", () => {
+    expect(resolveStateCode("ZZ")).toBeNull();
+  });
+
+  it("returns null for unrecognized input", () => {
+    expect(resolveStateCode("Middle Earth")).toBeNull();
   });
 });
 
@@ -103,9 +136,7 @@ describe("formatPrice", () => {
 
     expect(result).toContain("WTI Crude Oil");
     expect(result).toContain("$80.00");
-    // No change line when fields are missing
     expect(result).not.toContain("24h Change");
-    // No updated line when timestamp missing
     expect(result).not.toContain("Updated:");
   });
 
@@ -122,11 +153,10 @@ describe("formatPrice", () => {
 
     expect(result).toContain("-$2.50");
     expect(result).toContain("-2.93%");
-    // No + prefix on negative change
     expect(result).not.toMatch(/\+\$-/);
   });
 
-  it("formats EUR currency with € symbol", () => {
+  it("formats EUR currency with euro symbol", () => {
     const data = {
       code: "EU_CARBON_EUR",
       price: 62.5,
@@ -139,7 +169,7 @@ describe("formatPrice", () => {
     expect(result).not.toContain("$62.50");
   });
 
-  it("formats GBP currency with £ symbol", () => {
+  it("formats GBP currency with pound symbol", () => {
     const data = {
       code: "NATURAL_GAS_GBP",
       price: 75.3,
@@ -152,7 +182,7 @@ describe("formatPrice", () => {
     expect(result).not.toContain("$75.30");
   });
 
-  it("formats GBp (pence) currency with £ symbol", () => {
+  it("formats GBp (pence) currency with pound symbol", () => {
     const data = {
       code: "NATURAL_GAS_GBP",
       price: 80.0,
@@ -232,7 +262,6 @@ describe("makeApiRequest - basic", () => {
     );
 
     expect(result).toBeNull();
-    // 401 is non-retryable — only one call
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 });
@@ -251,16 +280,11 @@ describe("makeApiRequest - retry behaviour", () => {
     vi.useRealTimers();
   });
 
-  /**
-   * Helper: run makeApiRequest while advancing fake timers so setTimeout
-   * callbacks fire immediately without real wall-clock delays.
-   */
   async function runWithFakeTimers<T>(
     endpoint: string,
     mockFetch: typeof fetch,
   ): Promise<T | null> {
     const promise = makeApiRequest<T>(endpoint, mockFetch);
-    // Advance time enough to cover all backoff delays (2^0 + 2^1 + 2^2 = 7s)
     await vi.runAllTimersAsync();
     return promise;
   }
@@ -279,7 +303,6 @@ describe("makeApiRequest - retry behaviour", () => {
     );
 
     expect(result).toBeNull();
-    // attempt 0,1,2,3 = 4 total calls
     expect(mockFetch).toHaveBeenCalledTimes(4);
   });
 
@@ -294,7 +317,6 @@ describe("makeApiRequest - retry behaviour", () => {
     );
 
     expect(result).toBeNull();
-    // 4 total attempts
     expect(mockFetch).toHaveBeenCalledTimes(4);
   });
 

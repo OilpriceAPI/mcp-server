@@ -7,11 +7,12 @@
 
 ## Features
 
-- **4 Tools** — get prices, market overviews, price comparisons, commodity listings
-- **4 Resources** — subscribable price snapshots for Brent, WTI, Natural Gas, and all commodities
-- **4 Prompts** — pre-built analyst templates (daily briefing, spread analysis, gas market, commodity report)
+- **14 Tools** — spot prices, history, futures, marine fuels, rig counts, diesel by state, storage, OPEC production, forecasts
+- **5 Resources** — subscribable price snapshots for Brent, WTI, Natural Gas, Diesel, and all commodities
+- **6 Prompts** — pre-built analyst templates (daily briefing, spread analysis, gas markets, commodity report, diesel costs, supply analysis)
 - **Natural language** — ask for "brent oil" or "natural gas", not codes
-- **40+ commodities** — oil, gas, coal, refined products, metals, forex
+- **70+ commodities** — oil, gas, coal, refined products, metals, forex, bunker fuels, state diesel
+- **Smart errors** — unrecognized commodities get suggestions, not silent fallbacks
 
 ## Quick Start
 
@@ -112,68 +113,54 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 }
 ```
 
-### Cody (VS Code)
-
-Add to `.vscode/cody.json` in your project root:
-
-```json
-{
-  "mcpServers": {
-    "oilpriceapi": {
-      "command": "npx",
-      "args": ["-y", "oilpriceapi-mcp"],
-      "env": {
-        "OILPRICEAPI_KEY": "your-api-key-here"
-      }
-    }
-  }
-}
-```
-
 ### Global Install
 
 ```bash
 npm install -g oilpriceapi-mcp
 ```
 
-## Getting an API Key
+## Environment Variables
 
-1. Sign up at [oilpriceapi.com/signup](https://www.oilpriceapi.com/signup?utm_source=npm&utm_medium=mcp&utm_campaign=readme)
-2. Get your API key from the dashboard
-3. Add it to your MCP config as shown above
+| Variable               | Required | Description                                                                                                                                                 |
+| ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OILPRICEAPI_KEY`      | Yes      | API key from [oilpriceapi.com/signup](https://www.oilpriceapi.com/signup?utm_source=npm&utm_medium=mcp&utm_campaign=readme). Free tier: 200 requests/month. |
+| `OILPRICEAPI_BASE_URL` | No       | Override API base URL (for staging/testing). Default: `https://api.oilpriceapi.com`                                                                         |
 
 ## Tools
 
-### `get_commodity_price`
+All tools are prefixed with `opa_` to avoid name collisions when multiple MCP servers are loaded.
 
-Get the current price of a specific commodity.
+| Tool                      | Description                                                      |
+| ------------------------- | ---------------------------------------------------------------- |
+| `opa_get_price`           | Current spot price for a single commodity                        |
+| `opa_market_overview`     | All commodity prices in one call, grouped by category            |
+| `opa_compare_prices`      | Side-by-side comparison of 2-5 commodities with spread           |
+| `opa_list_commodities`    | Full commodity catalog (fetched live from API)                   |
+| `opa_get_history`         | Historical prices with high/low/avg/change (day/week/month/year) |
+| `opa_get_futures`         | Front-month futures price (Brent BZ or WTI CL)                   |
+| `opa_get_futures_curve`   | Full forward curve with contango/backwardation analysis          |
+| `opa_get_marine_fuels`    | Bunker fuel prices by port and fuel type (VLSFO/MGO/IFO380)      |
+| `opa_get_rig_counts`      | Baker Hughes US rig count with week-over-week change             |
+| `opa_get_drilling`        | Drilling intelligence: wells, permits, completions by region     |
+| `opa_get_diesel_by_state` | AAA retail diesel price for any US state (50 states + DC)        |
+| `opa_get_storage`         | Cushing and SPR oil storage/inventory levels                     |
+| `opa_get_opec_production` | OPEC country-level production data                               |
+| `opa_get_forecasts`       | EIA STEO energy price forecasts                                  |
+
+## Example Questions
 
 ```
 "What's the current Brent oil price?"
-"Get the price of natural gas"
+"Compare Brent and WTI crude"
+"Show me oil prices for the past month"
+"What's diesel cost in California vs Texas?"
+"Give me a market overview of refined products"
+"What's the Brent futures curve look like?"
+"How many oil rigs are active in the US?"
+"What are OPEC production levels?"
+"What are bunker fuel prices in Singapore?"
+"Show me Cushing storage levels"
 ```
-
-### `get_market_overview`
-
-Get prices for all commodities, optionally filtered by category (`oil`, `gas`, `coal`, `refined`, `all`).
-
-```
-"Give me a market overview"
-"Show all oil prices"
-```
-
-### `compare_prices`
-
-Compare prices between 2-5 commodities.
-
-```
-"Compare Brent and WTI prices"
-"What's the spread between US and European gas?"
-```
-
-### `list_commodities`
-
-List all available commodities and their codes.
 
 ## Resources
 
@@ -184,68 +171,49 @@ Subscribable price data (JSON):
 | Brent Crude | `price://brent`       | Global benchmark crude oil price |
 | WTI Crude   | `price://wti`         | US benchmark crude oil price     |
 | Natural Gas | `price://natural-gas` | US Henry Hub natural gas price   |
+| Diesel      | `price://diesel`      | US national average diesel price |
 | All Prices  | `price://all`         | All tracked commodity prices     |
 
 ## Prompts
 
 Pre-built analyst templates:
 
-| Prompt                | Description                                             |
-| --------------------- | ------------------------------------------------------- |
-| `daily-briefing`      | Energy market daily briefing with key prices and movers |
-| `brent-wti-spread`    | Analyze the Brent-WTI crude oil spread                  |
-| `gas-market-analysis` | Compare US vs European natural gas markets              |
-| `commodity-report`    | Detailed report on a specific commodity (parameterized) |
-
-## Supported Commodities
-
-### Crude Oil
-
-- Brent Crude (global benchmark)
-- WTI (US benchmark)
-- Urals (Russian)
-- Dubai (Middle East)
-
-### Natural Gas
-
-- US Henry Hub ($/MMBtu)
-- UK NBP (pence/therm)
-- European TTF (EUR/MWh)
-
-### Coal
-
-- Thermal Coal
-- Newcastle Coal (Asia-Pacific)
-
-### Refined Products
-
-- Diesel, Gasoline, RBOB Gasoline, Jet Fuel, Heating Oil
-
-### Other
-
-- Gold, EU Carbon Allowances, UK Carbon Allowances, EUR/USD, GBP/USD
+| Prompt                 | Description                                               |
+| ---------------------- | --------------------------------------------------------- |
+| `daily-briefing`       | Energy market daily briefing with key prices and movers   |
+| `brent-wti-spread`     | Analyze the Brent-WTI crude oil spread                    |
+| `gas-market-analysis`  | Compare US vs European natural gas markets                |
+| `commodity-report`     | Detailed report on a specific commodity (parameterized)   |
+| `diesel-cost-analysis` | Compare diesel prices across US states for fleet planning |
+| `supply-analysis`      | Analyze supply using OPEC production, rig counts, storage |
 
 ## Natural Language Support
 
-| You say                    | We understand   |
-| -------------------------- | --------------- |
-| "brent oil", "brent crude" | BRENT_CRUDE_USD |
-| "wti", "us oil"            | WTI_USD         |
-| "natural gas", "henry hub" | NATURAL_GAS_USD |
-| "european gas", "ttf"      | DUTCH_TTF_EUR   |
-| "diesel"                   | DIESEL_USD      |
-| "gold"                     | GOLD_USD        |
-| "lbma gold am fix"         | GOLD_AM_USD     |
-| "lbma gold pm fix"         | GOLD_PM_USD     |
-| "lbma silver fix"          | SILVER_FIX_USD  |
+| You say                     | We understand   |
+| --------------------------- | --------------- |
+| "brent oil", "brent crude"  | BRENT_CRUDE_USD |
+| "wti", "us oil"             | WTI_USD         |
+| "natural gas", "henry hub"  | NATURAL_GAS_USD |
+| "european gas", "ttf"       | DUTCH_TTF_EUR   |
+| "diesel"                    | DIESEL_USD      |
+| "gold"                      | GOLD_USD        |
+| "jet fuel", "aviation fuel" | JET_FUEL_USD    |
+| "carbon", "carbon credits"  | EU_CARBON_EUR   |
 
 ## Development
 
 ```bash
 npm install
 npm run build
+npm test
 OILPRICEAPI_KEY=your-key node build/index.js
 ```
+
+## Breaking Changes in v2.0.0
+
+- All tool names now use `opa_` prefix (e.g., `get_commodity_price` -> `opa_get_price`)
+- Unrecognized commodity names now return an error with suggestions instead of silently defaulting to Brent
+- `list_commodities` now fetches live from the API (falls back to static list if unavailable)
 
 ## License
 
