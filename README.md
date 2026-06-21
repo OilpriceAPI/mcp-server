@@ -161,6 +161,18 @@ These tools create and manage **persistent** price alerts tied to your OilPriceA
 | `opa_delete_price_alert` | Permanently delete an alert by id                                            |
 | `opa_get_alert_triggers` | Recent alert trigger activity (optionally filtered by `since`)               |
 
+### Market Brief & Subscription Tools (authenticated)
+
+The market brief gives a multi-commodity snapshot in one call. Subscriptions ("watches") are **persistent, recurring** snapshots tied to your account — the API records an event every interval, and the agent **polls** for new events via a per-user cursor (events are polled, not pushed — there is no always-on connection). These **require an API key** (`OILPRICEAPI_KEY`). A subscription differs from an alert: a watch always emits an event each interval (a running log), whereas an alert fires only on a threshold crossing. Per-tier limits apply (free: 1 watch, 3 codes, 1h minimum interval); the API returns the exact limit if exceeded.
+
+| Tool                            | Description                                                                           |
+| ------------------------------- | ------------------------------------------------------------------------------------- |
+| `opa_get_market_brief`          | Multi-commodity brief: prices, 24h changes, 1m forecasts, spreads, optional narrative |
+| `opa_create_price_subscription` | Create a persistent recurring watch (codes, interval like `5m`/`1h`/`daily`)          |
+| `opa_list_subscriptions`        | List all subscriptions on the account                                                 |
+| `opa_delete_subscription`       | Permanently delete a subscription by id                                               |
+| `opa_get_subscription_events`   | Poll for new watch events since a cursor (`since`); returns snapshots + deltas        |
+
 ## Example Questions
 
 ```
