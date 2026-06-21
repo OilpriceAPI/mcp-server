@@ -7,7 +7,7 @@
 
 ## Features
 
-- **18 Tools** — spot prices, history, futures, marine fuels, rig counts, diesel by state, storage, OPEC production, forecasts, EIA oil inventories, well permits, refining spreads
+- **21 Tools** — 17 read tools (spot prices, history, futures, marine fuels, rig counts, diesel by state, storage, OPEC production, forecasts, EIA oil inventories, well permits, refining spreads) plus 4 authenticated price-alert tools (create/list/delete persistent alerts + trigger activity)
 - **5 Resources** — subscribable price snapshots for Brent, WTI, Natural Gas, Diesel, and all commodities
 - **6 Prompts** — pre-built analyst templates (daily briefing, spread analysis, gas markets, commodity report, diesel costs, supply analysis)
 - **Natural language** — ask for "brent oil" or "natural gas", not codes
@@ -149,6 +149,17 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_get_oil_inventories` | EIA weekly petroleum stocks (latest/summary/by_product)           |
 | `opa_get_well_permits`    | US well drilling permits (latest/by_state/by_operator)            |
 | `opa_get_spread`          | Refining/trading spreads (crack, basis, margin)                   |
+
+### Price Alert Tools (authenticated)
+
+These tools create and manage **persistent** price alerts tied to your OilPriceAPI account, so they **require an API key** (`OILPRICEAPI_KEY`). The alert engine continuously watches live prices and notifies you (by email, plus webhook if you provide one) when a condition is met.
+
+| Tool                     | Description                                                                  |
+| ------------------------ | ---------------------------------------------------------------------------- |
+| `opa_create_price_alert` | Create a persistent alert (commodity, operator, threshold, optional webhook) |
+| `opa_list_price_alerts`  | List all alerts on the account                                               |
+| `opa_delete_price_alert` | Permanently delete an alert by id                                            |
+| `opa_get_alert_triggers` | Recent alert trigger activity (optionally filtered by `since`)               |
 
 ## Example Questions
 
