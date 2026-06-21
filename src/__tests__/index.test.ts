@@ -4,6 +4,9 @@ import {
   resolveStateCode,
   formatPrice,
   makeApiRequest,
+  makeAuthRequest,
+  resolveIntervalSeconds,
+  SUBSCRIPTION_INTERVAL_PRESETS,
   COMMODITY_ALIASES,
   COMMODITY_INFO,
 } from "../index.js";
@@ -476,5 +479,140 @@ describe("COMMODITY_INFO", () => {
     expect(info).toBeDefined();
     expect(info.name).toBe("Gold");
     expect(info.unit).toBe("troy oz");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveIntervalSeconds (#3245 subscription tools)
+// ---------------------------------------------------------------------------
+
+describe("resolveIntervalSeconds", () => {
+  it("maps friendly presets to seconds", () => {
+    expect(resolveIntervalSeconds("5m")).toBe(300);
+    expect(resolveIntervalSeconds("1h")).toBe(3600);
+    expect(resolveIntervalSeconds("hourly")).toBe(3600);
+    expect(resolveIntervalSeconds("daily")).toBe(86400);
+    expect(resolveIntervalSeconds("1d")).toBe(86400);
+  });
+
+  it("is case- and whitespace-insensitive", () => {
+    expect(resolveIntervalSeconds("  5M ")).toBe(300);
+    expect(resolveIntervalSeconds("DAILY")).toBe(86400);
+  });
+
+  it("treats a bare integer as seconds", () => {
+    expect(resolveIntervalSeconds("3600")).toBe(3600);
+    expect(resolveIntervalSeconds("90")).toBe(90);
+  });
+
+  it("parses <n><unit> shorthand", () => {
+    expect(resolveIntervalSeconds("10m")).toBe(600);
+    expect(resolveIntervalSeconds("2h")).toBe(7200);
+    expect(resolveIntervalSeconds("3d")).toBe(259200);
+    expect(resolveIntervalSeconds("45s")).toBe(45);
+  });
+
+  it("returns null for invalid or non-positive inputs", () => {
+    expect(resolveIntervalSeconds("nonsense")).toBeNull();
+    expect(resolveIntervalSeconds("0")).toBeNull();
+    expect(resolveIntervalSeconds("0m")).toBeNull();
+    expect(resolveIntervalSeconds("")).toBeNull();
+  });
+
+  it("preset table covers the documented tier floors", () => {
+    // free 1h, developer 30m, starter 15m, professional 5m, scale 1m
+    expect(SUBSCRIPTION_INTERVAL_PRESETS["1h"]).toBe(3600);
+    expect(SUBSCRIPTION_INTERVAL_PRESETS["30m"]).toBe(1800);
+    expect(SUBSCRIPTION_INTERVAL_PRESETS["15m"]).toBe(900);
+    expect(SUBSCRIPTION_INTERVAL_PRESETS["5m"]).toBe(300);
+    expect(SUBSCRIPTION_INTERVAL_PRESETS["1m"]).toBe(60);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// makeAuthRequest — POST body + custom attribution headers
+// ---------------------------------------------------------------------------
+
+describe("makeAuthRequest - request shaping", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("POSTs a JSON body and merges custom headers (X-OPA-Source/Tool)", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ subscription: { id: "abc" } }),
+    });
+
+    const result = await makeAuthRequest(
+      "/v1/subscriptions",
+      {
+        method: "POST",
+        body: { codes: ["BRENT_CRUDE_USD"], interval_seconds: 3600 },
+        headers: {
+          "X-OPA-Source": "mcp",
+          "X-OPA-Tool": "opa_create_price_subscription",
+        },
+      },
+      mockFetch as typeof fetch,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe(200);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    const [, init] = mockFetch.mock.calls[0];
+    expect(init.method).toBe("POST");
+    expect(init.headers["Content-Type"]).toBe("application/json");
+    expect(init.headers["X-OPA-Source"]).toBe("mcp");
+    expect(init.headers["X-OPA-Tool"]).toBe("opa_create_price_subscription");
+    expect(JSON.parse(init.body)).toEqual({
+      codes: ["BRENT_CRUDE_USD"],
+      interval_seconds: 3600,
+    });
+  });
+
+  it("parses the { status, data } envelope on a GET events poll", async () => {
+    const payload = {
+      status: "success",
+      data: { cursor: 7, has_more: false, events: [] },
+    };
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(payload),
+    });
+
+    const result = await makeAuthRequest(
+      "/v1/subscriptions/events?since=3",
+      {},
+      mockFetch as typeof fetch,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.body).toEqual(payload);
+  });
+
+  it("surfaces a non-ok status with the parsed error body (422 limit)", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 422,
+      text: async () =>
+        JSON.stringify({
+          error: "WATCH_LIMIT",
+          message: "Your plan allows up to 1 active watches. Upgrade for more.",
+        }),
+    });
+
+    const result = await makeAuthRequest(
+      "/v1/subscriptions",
+      { method: "POST", body: { codes: ["WTI_USD"], interval_seconds: 3600 } },
+      mockFetch as typeof fetch,
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe(422);
+    expect((result.body as { error: string }).error).toBe("WATCH_LIMIT");
   });
 });

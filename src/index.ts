@@ -1,19 +1,29 @@
 #!/usr/bin/env node
 
 /**
- * OilPriceAPI MCP Server v2.2.1
+ * OilPriceAPI MCP Server v2.3.0
  *
  * The energy commodity MCP server. Real-time oil, gas, and commodity prices
  * for Claude, Cursor, VS Code, and any MCP-compatible client.
  *
- * 17 read-only tools (opa_ prefixed): prices, history, futures, marine fuels,
- * rig counts, drilling, diesel-by-state, storage, OPEC production, forecasts,
- * EIA oil inventories, well permits, refining spreads.
+ * 26 tools total (opa_ prefixed):
+ *
+ * 17 read-only tools: prices, history, futures, marine fuels, rig counts,
+ * drilling, diesel-by-state, storage, OPEC production, forecasts, EIA oil
+ * inventories, well permits, refining spreads.
  *
  * 4 authenticated price-alert tools (opa_*_price_alert / opa_get_alert_triggers):
  * create/list/delete persistent price alerts tied to the user's account and read
  * recent trigger activity. These wrap the existing /v1/alerts engine and REQUIRE
  * an API key (OILPRICEAPI_KEY).
+ *
+ * 5 authenticated agent-subscription + market-brief tools (#3245 Phase 2):
+ * opa_get_market_brief (multi-commodity structured + narrative summary) and
+ * opa_create_price_subscription / opa_list_subscriptions /
+ * opa_delete_subscription / opa_get_subscription_events. Subscriptions
+ * ("watches") are PERSISTENT, account-tied, recurring snapshots polled via a
+ * per-user cursor — they REQUIRE an API key. These wrap /v1/market-brief and
+ * /v1/subscriptions.
  *
  * @see https://oilpriceapi.com
  * @see https://modelcontextprotocol.io
@@ -26,7 +36,7 @@ import { z } from "zod";
 // API Configuration
 const API_BASE =
   process.env.OILPRICEAPI_BASE_URL || "https://api.oilpriceapi.com";
-export const USER_AGENT = "oilpriceapi-mcp/2.2.1";
+export const USER_AGENT = "oilpriceapi-mcp/2.3.0";
 
 // Get API key from environment
 const API_KEY = process.env.OILPRICEAPI_KEY || process.env.OIL_PRICE_API_KEY;
@@ -424,7 +434,7 @@ interface DrillingData {
 
 const server = new McpServer({
   name: "oilpriceapi",
-  version: "2.2.1",
+  version: "2.3.0",
 });
 
 // ---------------------------------------------------------------------------
@@ -662,10 +672,14 @@ export interface AuthRequestResult {
  */
 export async function makeAuthRequest(
   endpoint: string,
-  options: { method?: string; body?: unknown } = {},
+  options: {
+    method?: string;
+    body?: unknown;
+    headers?: Record<string, string>;
+  } = {},
   fetchFn: typeof fetch = fetch,
 ): Promise<AuthRequestResult> {
-  const { method = "GET", body } = options;
+  const { method = "GET", body, headers: extraHeaders } = options;
 
   const headers: Record<string, string> = {
     "User-Agent": USER_AGENT,
@@ -675,6 +689,10 @@ export async function makeAuthRequest(
   };
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
+  }
+  // Caller-supplied headers (e.g. MCP attribution: X-OPA-Source / X-OPA-Tool).
+  if (extraHeaders) {
+    Object.assign(headers, extraHeaders);
   }
 
   try {
@@ -747,6 +765,60 @@ export const ALERT_OPERATORS = [
   "greater_than_or_equal",
   "less_than_or_equal",
 ] as const;
+
+// ---------------------------------------------------------------------------
+// Subscription ("watch") interval mapping (#3245 Phase 2)
+//
+// The /v1/subscriptions API stores the snapshot cadence as `interval_seconds`
+// (an integer), and enforces a per-tier interval FLOOR server-side
+// (free 3600s/1h → developer 1800s/30m → starter 900s/15m → professional
+// 300s/5m → scale 60s/1m). We let agents pass a friendly `interval` like "5m",
+// "1h", or "daily" and translate it to seconds here. A bare integer string is
+// treated as seconds. If the chosen interval is below the caller's tier floor,
+// the API returns a 422 with the exact minimum — we surface that message.
+// ---------------------------------------------------------------------------
+
+export const SUBSCRIPTION_INTERVAL_PRESETS: Record<string, number> = {
+  "1m": 60,
+  "5m": 300,
+  "15m": 900,
+  "30m": 1800,
+  "1h": 3600,
+  hourly: 3600,
+  "6h": 21600,
+  "12h": 43200,
+  daily: 86400,
+  "1d": 86400,
+};
+
+/**
+ * Translate a friendly interval ("5m" / "1h" / "daily") or a bare seconds
+ * value ("300") into interval_seconds for POST /v1/subscriptions. Returns null
+ * for anything unrecognized so the caller can return an actionable error.
+ */
+export function resolveIntervalSeconds(input: string): number | null {
+  const normalized = input.toLowerCase().trim();
+
+  const preset = SUBSCRIPTION_INTERVAL_PRESETS[normalized];
+  if (preset) return preset;
+
+  // Bare integer (seconds), e.g. "300".
+  if (/^\d+$/.test(normalized)) {
+    const seconds = parseInt(normalized, 10);
+    return seconds > 0 ? seconds : null;
+  }
+
+  // "<n><unit>" shorthand, e.g. "10m", "2h", "3d".
+  const match = normalized.match(/^(\d+)\s*(s|m|h|d)$/);
+  if (match) {
+    const n = parseInt(match[1], 10);
+    if (n <= 0) return null;
+    const unitSeconds = { s: 1, m: 60, h: 3600, d: 86400 }[match[2]];
+    return unitSeconds ? n * unitSeconds : null;
+  }
+
+  return null;
+}
 
 /**
  * Resolve a US state name or abbreviation to a 2-letter code.
@@ -1920,6 +1992,490 @@ server.tool(
 );
 
 // =========================================================================
+// AGENT SUBSCRIPTION + MARKET BRIEF TOOLS (#3245 Phase 2)
+//
+// These activate the agent loop: a multi-commodity market brief plus
+// PERSISTENT, recurring "watches" (subscriptions) that the API snapshots every
+// interval. Agents POLL for new events via a per-user cursor — there is NO
+// always-on connection; nothing is pushed to the agent.
+//
+//   - opa_get_market_brief         GET    /v1/market-brief
+//   - opa_create_price_subscription POST  /v1/subscriptions
+//   - opa_list_subscriptions       GET    /v1/subscriptions
+//   - opa_delete_subscription      DELETE /v1/subscriptions/:id
+//   - opa_get_subscription_events  GET    /v1/subscriptions/events?since=<seq>
+//
+// Subscriptions are account-scoped and REQUIRE an API key. Per-tier limits
+// (max active watches, interval floor, codes per watch) are enforced
+// server-side; the API returns a 422 with the exact limit/minimum, which we
+// surface verbatim.
+// =========================================================================
+
+interface BriefCommodity {
+  code?: string;
+  name?: string;
+  price?: number;
+  currency?: string;
+  unit?: string;
+  change_24h_pct?: number | null;
+  change_24h_abs?: number | null;
+  as_of?: string;
+  stale?: boolean;
+  forecast_1m?: {
+    point?: number;
+    low?: number;
+    high?: number;
+    confidence?: number;
+  };
+}
+
+interface BriefData {
+  as_of?: string;
+  codes?: string[];
+  commodities?: BriefCommodity[];
+  spreads?: Array<{
+    pair?: string;
+    label?: string;
+    value?: number;
+    currency?: string;
+  }>;
+  summary?: string;
+  context?: {
+    disruptions?: Array<{ title?: string; severity?: string; region?: string }>;
+    top_indicators?: Array<{
+      code?: string;
+      value?: number;
+      change_pct?: number | null;
+    }>;
+  };
+}
+
+interface WatchRecord {
+  id?: string;
+  name?: string | null;
+  codes?: string[];
+  interval_seconds?: number;
+  status?: string;
+  deliver_webhook?: boolean;
+  source?: string;
+  tool_name?: string | null;
+  last_evaluated_at?: string | null;
+  next_run_at?: string | null;
+  created_at?: string | null;
+}
+
+function describeInterval(seconds?: number): string {
+  if (!seconds || seconds <= 0) return "n/a";
+  if (seconds % 86400 === 0) return `${seconds / 86400}d`;
+  if (seconds % 3600 === 0) return `${seconds / 3600}h`;
+  if (seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
+}
+
+function formatWatchLine(w: WatchRecord): string {
+  const codes = Array.isArray(w.codes) ? w.codes.join(", ") : "—";
+  const every = describeInterval(w.interval_seconds);
+  const status = w.status || "active";
+  return (
+    `- **${w.name || codes}** (id: \`${w.id}\`) — ${codes}, every ${every}, ${status}` +
+    (w.next_run_at ? `, next run ${w.next_run_at}` : "")
+  );
+}
+
+server.tool(
+  "opa_get_market_brief",
+  "Get a multi-commodity market brief: latest spot prices, 24h changes, " +
+    "1-month forecasts (for Brent/WTI/Natural Gas), and notable spreads — for " +
+    "several commodities in ONE call. Use when the user wants a market snapshot, " +
+    "morning brief, or an at-a-glance read across multiple commodities. Set " +
+    "`narrative: true` to also get a plain-English summary plus market context " +
+    "(active supply disruptions, key economic indicators). Accepts natural " +
+    "language ('brent', 'us gas') or API codes. REQUIRES an API key " +
+    "(OILPRICEAPI_KEY); counts as 1 request. Per-tier code limits apply (free: 3 " +
+    "codes). For a single price use opa_get_price; for ongoing recurring " +
+    "monitoring use opa_create_price_subscription.",
+  {
+    codes: z
+      .array(z.string())
+      .min(1)
+      .describe(
+        "Commodity names or codes to include (e.g., ['brent', 'wti'] or " +
+          "['BRENT_CRUDE_USD', 'NATURAL_GAS_USD']). Free tier allows up to 3.",
+      ),
+    narrative: z
+      .boolean()
+      .optional()
+      .describe(
+        "If true, also include a plain-English summary + market context " +
+          "(disruptions, indicators). Default: false (structured data only).",
+      ),
+  },
+  async ({ codes, narrative }) => {
+    const keyErr = requireApiKey();
+    if (keyErr) return keyErr;
+
+    const resolvedCodes: string[] = [];
+    const unresolved: string[] = [];
+    for (const c of codes) {
+      const r = resolveCommodityCode(c);
+      if (r) resolvedCodes.push(r);
+      else unresolved.push(c);
+    }
+
+    if (resolvedCodes.length === 0) {
+      return errorResult(
+        `None of the requested commodities were recognized: ${unresolved.join(", ")}. ` +
+          "Use opa_list_commodities to see valid codes.",
+      );
+    }
+
+    const params = new URLSearchParams();
+    params.set("codes", resolvedCodes.join(","));
+    if (narrative) params.set("narrative", "true");
+
+    const result = await makeAuthRequest(
+      `/v1/market-brief?${params.toString()}`,
+    );
+    if (!result.ok) {
+      return errorResult(alertHttpError(result, "get the market brief"));
+    }
+
+    const envelope = result.body as ApiResponse<BriefData> | null;
+    const data = envelope?.data;
+    if (!data || !Array.isArray(data.commodities)) {
+      return errorResult(
+        "The market brief returned no data. Try again in a moment.",
+      );
+    }
+
+    const sections = ["# Market Brief\n"];
+    if (data.as_of) sections.push(`_As of ${data.as_of}_\n`);
+
+    for (const c of data.commodities) {
+      const sym =
+        c.currency === "EUR"
+          ? "€"
+          : c.currency === "GBP" || c.currency === "GBp"
+            ? "£"
+            : "$";
+      const price =
+        typeof c.price === "number" ? `${sym}${c.price.toFixed(2)}` : "n/a";
+      let line = `- **${c.name || c.code}**: ${price}`;
+      if (typeof c.change_24h_pct === "number") {
+        const sign = c.change_24h_pct >= 0 ? "+" : "";
+        line += ` (${sign}${c.change_24h_pct.toFixed(2)}% 24h)`;
+      }
+      if (c.stale) line += " ⚠️ stale";
+      if (c.forecast_1m && typeof c.forecast_1m.point === "number") {
+        line += ` — 1m forecast ~${sym}${c.forecast_1m.point.toFixed(2)}`;
+      }
+      sections.push(line);
+    }
+
+    if (Array.isArray(data.spreads) && data.spreads.length > 0) {
+      sections.push("\n## Spreads");
+      for (const s of data.spreads) {
+        const sym =
+          s.currency === "EUR" ? "€" : s.currency === "GBP" ? "£" : "$";
+        sections.push(
+          `- **${s.label || s.pair}**: ${sym}${typeof s.value === "number" ? s.value.toFixed(2) : "n/a"}`,
+        );
+      }
+    }
+
+    if (data.summary) {
+      sections.push(`\n## Summary\n${data.summary}`);
+    }
+
+    if (data.context) {
+      const disruptions = data.context.disruptions ?? [];
+      if (disruptions.length > 0) {
+        sections.push("\n## Active Disruptions");
+        for (const d of disruptions) {
+          sections.push(
+            `- ${d.title}${d.severity ? ` (${d.severity})` : ""}${d.region ? ` — ${d.region}` : ""}`,
+          );
+        }
+      }
+    }
+
+    if (unresolved.length > 0) {
+      sections.push(
+        `\n_Note: skipped unrecognized commodities: ${unresolved.join(", ")}._`,
+      );
+    }
+
+    sections.push(`\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
+    return textResult(sections.join("\n"));
+  },
+);
+
+server.tool(
+  "opa_create_price_subscription",
+  "Create a PERSISTENT, recurring price subscription (a 'watch') tied to the " +
+    "user's OilPriceAPI account. The API snapshots the watched commodities every " +
+    "`interval` and records an event each time — so the agent can come back later " +
+    "and poll for what changed via opa_get_subscription_events. Use when the user " +
+    "wants ONGOING monitoring of one or more commodities (e.g. 'keep watching " +
+    "Brent and WTI every hour'). This is different from a price alert: a watch " +
+    "ALWAYS emits an event every interval (a running log), whereas an alert only " +
+    "fires when a threshold is crossed. REQUIRES an API key (OILPRICEAPI_KEY) — " +
+    "this writes to the user's account. Events are POLLED, not pushed: there is " +
+    "no always-on connection. Manage watches with opa_list_subscriptions and " +
+    "opa_delete_subscription. Per-tier limits apply (free: 1 watch, 3 codes, 1h " +
+    "minimum interval); the API returns the exact limit if exceeded.",
+  {
+    codes: z
+      .array(z.string())
+      .min(1)
+      .describe(
+        "Commodity names or codes to watch (e.g., ['brent', 'wti'] or " +
+          "['BRENT_CRUDE_USD']). Free tier allows up to 3 codes per watch.",
+      ),
+    interval: z
+      .string()
+      .describe(
+        "How often to snapshot: a friendly interval like '5m', '1h', '6h', " +
+          "'daily', or a bare number of seconds ('3600'). The minimum allowed " +
+          "interval depends on the plan (free: 1h). If below the floor the API " +
+          "returns the exact minimum.",
+      ),
+    name: z
+      .string()
+      .optional()
+      .describe(
+        "Optional human-readable label for the watch (e.g., 'Crude desk hourly').",
+      ),
+  },
+  async ({ codes, interval, name }) => {
+    const keyErr = requireApiKey();
+    if (keyErr) return keyErr;
+
+    const intervalSeconds = resolveIntervalSeconds(interval);
+    if (intervalSeconds === null) {
+      return errorResult(
+        `'${interval}' is not a valid interval. Use a friendly value like '5m', ` +
+          "'1h', '6h', 'daily', or a number of seconds (e.g. '3600').",
+      );
+    }
+
+    const resolvedCodes: string[] = [];
+    const unresolved: string[] = [];
+    for (const c of codes) {
+      const r = resolveCommodityCode(c);
+      if (r) resolvedCodes.push(r);
+      else unresolved.push(c);
+    }
+    if (resolvedCodes.length === 0) {
+      return errorResult(
+        `None of the requested commodities were recognized: ${unresolved.join(", ")}. ` +
+          "Use opa_list_commodities to see valid codes.",
+      );
+    }
+
+    const subscription: Record<string, unknown> = {
+      codes: resolvedCodes,
+      interval_seconds: intervalSeconds,
+    };
+    if (name) subscription.name = name;
+
+    // Attribution: stamp this as an MCP-created watch via the dedicated headers
+    // the API reads (X-OPA-Source / X-OPA-Tool) for MCP funnel analytics.
+    const result = await makeAuthRequest("/v1/subscriptions", {
+      method: "POST",
+      body: subscription,
+      headers: {
+        "X-OPA-Source": "mcp",
+        "X-OPA-Tool": "opa_create_price_subscription",
+      },
+    });
+
+    if (!result.ok) {
+      return errorResult(
+        alertHttpError(result, "create the price subscription"),
+      );
+    }
+
+    const created = (result.body as { subscription?: WatchRecord } | null)
+      ?.subscription;
+    let text = "# Price Subscription Created\n\n";
+    text += created
+      ? formatWatchLine(created)
+      : `- Watching ${resolvedCodes.join(", ")} every ${describeInterval(intervalSeconds)}`;
+    text +=
+      "\n\nThis is a PERSISTENT, recurring watch. The API snapshots these " +
+      "commodities each interval and records an event. Poll for new events with " +
+      "`opa_get_subscription_events` (events are polled, not pushed — there is no " +
+      "always-on connection). List or remove watches with `opa_list_subscriptions` " +
+      "and `opa_delete_subscription`.";
+    if (unresolved.length > 0) {
+      text += `\n\n_Note: skipped unrecognized commodities: ${unresolved.join(", ")}._`;
+    }
+    text += `\n\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
+    return textResult(text);
+  },
+);
+
+server.tool(
+  "opa_list_subscriptions",
+  "List all PERSISTENT price subscriptions ('watches') on the user's " +
+    "OilPriceAPI account. Use when the user asks what they're monitoring, or to " +
+    "find a watch's id before deleting it. Each watch is a recurring, " +
+    "account-tied snapshot job. REQUIRES an API key (OILPRICEAPI_KEY). No " +
+    "parameters needed.",
+  {},
+  async () => {
+    const keyErr = requireApiKey();
+    if (keyErr) return keyErr;
+
+    const result = await makeAuthRequest("/v1/subscriptions");
+    if (!result.ok) {
+      return errorResult(alertHttpError(result, "list subscriptions"));
+    }
+
+    const watches =
+      (result.body as { subscriptions?: WatchRecord[] } | null)
+        ?.subscriptions ?? [];
+
+    if (watches.length === 0) {
+      return textResult(
+        "No price subscriptions are set up on this account yet. Use " +
+          "`opa_create_price_subscription` to create a recurring watch.",
+      );
+    }
+
+    const sections = [`# Price Subscriptions (${watches.length})\n`];
+    for (const w of watches) sections.push(formatWatchLine(w));
+    sections.push(`\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
+    return textResult(sections.join("\n"));
+  },
+);
+
+server.tool(
+  "opa_delete_subscription",
+  "Permanently delete a price subscription ('watch') from the user's " +
+    "OilPriceAPI account by id. Use when the user wants to stop/cancel/remove an " +
+    "ongoing watch. Get the id from opa_list_subscriptions first. This " +
+    "permanently removes the recurring watch (and its event history) from the " +
+    "account. REQUIRES an API key (OILPRICEAPI_KEY).",
+  {
+    id: z
+      .string()
+      .describe(
+        "The id of the subscription to delete (a UUID, as returned by " +
+          "opa_list_subscriptions or opa_create_price_subscription).",
+      ),
+  },
+  async ({ id }) => {
+    const keyErr = requireApiKey();
+    if (keyErr) return keyErr;
+
+    const result = await makeAuthRequest(
+      `/v1/subscriptions/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
+
+    if (result.status === 404) {
+      return errorResult(
+        `No subscription found with id \`${id}\` on this account. Use ` +
+          "opa_list_subscriptions to see valid ids.",
+      );
+    }
+    if (!result.ok) {
+      return errorResult(alertHttpError(result, "delete the subscription"));
+    }
+
+    return textResult(
+      `Price subscription \`${id}\` was permanently deleted from the user's account.`,
+    );
+  },
+);
+
+server.tool(
+  "opa_get_subscription_events",
+  "Poll for new subscription events — the recurring snapshots recorded by the " +
+    "user's watches. Use this to catch up on what changed since the last poll: " +
+    "pass the `since` cursor (the seq number) returned by the previous call to " +
+    "get only newer events. Events are POLLED, not pushed — there is no always-on " +
+    "connection, so call this periodically to stay current. Each event carries a " +
+    "price snapshot plus per-code deltas vs the prior snapshot. The returned " +
+    "`cursor` is what you pass as `since` next time. REQUIRES an API key " +
+    "(OILPRICEAPI_KEY). This poll does NOT count against the monthly request " +
+    "quota.",
+  {
+    since: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe(
+        "Cursor: only return events with a seq greater than this. Use the " +
+          "`cursor` from the previous call. Omit (or 0) to get the earliest " +
+          "available events.",
+      ),
+  },
+  async ({ since }) => {
+    const keyErr = requireApiKey();
+    if (keyErr) return keyErr;
+
+    const params = new URLSearchParams();
+    if (typeof since === "number") params.set("since", String(since));
+    const qs = params.toString();
+
+    const result = await makeAuthRequest(
+      `/v1/subscriptions/events${qs ? `?${qs}` : ""}`,
+    );
+    if (!result.ok) {
+      return errorResult(alertHttpError(result, "poll subscription events"));
+    }
+
+    const envelope = result.body as ApiResponse<{
+      cursor?: number;
+      has_more?: boolean;
+      events?: Array<{
+        id?: string;
+        seq?: number;
+        watch_id?: string;
+        observed_at?: string;
+        snapshot?: Record<string, unknown>;
+        deltas?: Record<string, unknown>;
+      }>;
+    }> | null;
+
+    const data = envelope?.data;
+    const events = data?.events ?? [];
+    const cursor = data?.cursor ?? since ?? 0;
+
+    if (events.length === 0) {
+      return textResult(
+        `No new subscription events since cursor ${since ?? 0}. Cursor is ${cursor}. ` +
+          "Poll again later for new snapshots.",
+      );
+    }
+
+    const sections = [`# Subscription Events (${events.length})\n`];
+    for (const e of events) {
+      sections.push(
+        `## Event seq ${e.seq}${e.observed_at ? ` — ${e.observed_at}` : ""} (watch \`${e.watch_id}\`)`,
+      );
+      sections.push("```json");
+      sections.push(
+        JSON.stringify({ snapshot: e.snapshot, deltas: e.deltas }, null, 2),
+      );
+      sections.push("```");
+    }
+    sections.push(
+      `\n**Next cursor**: \`${cursor}\`${data?.has_more ? " (more events available — poll again)" : ""}`,
+    );
+    sections.push(
+      "\n_Pass the next cursor as `since` on your next poll to get only newer events._",
+    );
+    sections.push(`\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
+    return textResult(sections.join("\n"));
+  },
+);
+
+// =========================================================================
 // RESOURCES — subscribable price snapshots + dynamic template
 // =========================================================================
 
@@ -2186,7 +2742,7 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("OilPriceAPI MCP Server v2.2.1 running on stdio");
+  console.error("OilPriceAPI MCP Server v2.3.0 running on stdio");
 }
 
 main().catch((error) => {
