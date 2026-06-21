@@ -7,7 +7,7 @@
 
 ## Features
 
-- **14 Tools** — spot prices, history, futures, marine fuels, rig counts, diesel by state, storage, OPEC production, forecasts
+- **18 Tools** — spot prices, history, futures, marine fuels, rig counts, diesel by state, storage, OPEC production, forecasts, EIA oil inventories, well permits, refining spreads
 - **5 Resources** — subscribable price snapshots for Brent, WTI, Natural Gas, Diesel, and all commodities
 - **6 Prompts** — pre-built analyst templates (daily briefing, spread analysis, gas markets, commodity report, diesel costs, supply analysis)
 - **Natural language** — ask for "brent oil" or "natural gas", not codes
@@ -130,22 +130,25 @@ npm install -g oilpriceapi-mcp
 
 All tools are prefixed with `opa_` to avoid name collisions when multiple MCP servers are loaded.
 
-| Tool                      | Description                                                      |
-| ------------------------- | ---------------------------------------------------------------- |
-| `opa_get_price`           | Current spot price for a single commodity                        |
-| `opa_market_overview`     | All commodity prices in one call, grouped by category            |
-| `opa_compare_prices`      | Side-by-side comparison of 2-5 commodities with spread           |
-| `opa_list_commodities`    | Full commodity catalog (fetched live from API)                   |
-| `opa_get_history`         | Historical prices with high/low/avg/change (day/week/month/year) |
-| `opa_get_futures`         | Front-month futures price (Brent BZ or WTI CL)                   |
-| `opa_get_futures_curve`   | Full forward curve with contango/backwardation analysis          |
-| `opa_get_marine_fuels`    | Bunker fuel prices by port and fuel type (VLSFO/MGO/IFO380)      |
-| `opa_get_rig_counts`      | Baker Hughes US rig count with week-over-week change             |
-| `opa_get_drilling`        | Drilling intelligence: wells, permits, completions by region     |
-| `opa_get_diesel_by_state` | AAA retail diesel price for any US state (50 states + DC)        |
-| `opa_get_storage`         | Cushing and SPR oil storage/inventory levels                     |
-| `opa_get_opec_production` | OPEC country-level production data                               |
-| `opa_get_forecasts`       | EIA STEO energy price forecasts                                  |
+| Tool                      | Description                                                       |
+| ------------------------- | ----------------------------------------------------------------- |
+| `opa_get_price`           | Current spot price for a single commodity                         |
+| `opa_market_overview`     | All commodity prices in one call, grouped by category             |
+| `opa_compare_prices`      | Side-by-side comparison of 2-5 commodities with spread            |
+| `opa_list_commodities`    | Full commodity catalog (fetched live from API)                    |
+| `opa_get_history`         | Historical prices with high/low/avg/change (day/week/month/year)  |
+| `opa_get_futures`         | Front-month futures (Brent BZ, WTI CL, ICE Gasoil, TTF, JKM, EUA) |
+| `opa_get_futures_curve`   | Full forward curve with contango/backwardation analysis           |
+| `opa_get_marine_fuels`    | Bunker fuel prices by port and fuel type (VLSFO/MGO/IFO380)       |
+| `opa_get_rig_counts`      | Baker Hughes US rig count with week-over-week change              |
+| `opa_get_drilling`        | Drilling intelligence: wells, permits, completions by region      |
+| `opa_get_diesel_by_state` | AAA retail diesel price for any US state (50 states + DC)         |
+| `opa_get_storage`         | Cushing and SPR oil storage/inventory levels                      |
+| `opa_get_opec_production` | OPEC country-level production data                                |
+| `opa_get_forecasts`       | EIA STEO energy price forecasts                                   |
+| `opa_get_oil_inventories` | EIA weekly petroleum stocks (latest/summary/by_product)           |
+| `opa_get_well_permits`    | US well drilling permits (latest/by_state/by_operator)            |
+| `opa_get_spread`          | Refining/trading spreads (crack, basis, margin)                   |
 
 ## Example Questions
 
@@ -160,6 +163,10 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 "What are OPEC production levels?"
 "What are bunker fuel prices in Singapore?"
 "Show me Cushing storage levels"
+"What were the latest EIA crude oil inventories?"
+"How many well permits were issued in Texas?"
+"What's the current 3-2-1 crack spread?"
+"Show me the ICE Gasoil futures curve"
 ```
 
 ## Resources

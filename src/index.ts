@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 
 /**
- * OilPriceAPI MCP Server v2.0.0
+ * OilPriceAPI MCP Server v2.1.0
  *
  * The energy commodity MCP server. Real-time oil, gas, and commodity prices
  * for Claude, Cursor, VS Code, and any MCP-compatible client.
+ *
+ * 18 read-only tools (opa_ prefixed): prices, history, futures, marine fuels,
+ * rig counts, drilling, diesel-by-state, storage, OPEC production, forecasts,
+ * EIA oil inventories, well permits, refining spreads.
  *
  * @see https://oilpriceapi.com
  * @see https://modelcontextprotocol.io
@@ -17,7 +21,7 @@ import { z } from "zod";
 // API Configuration
 const API_BASE =
   process.env.OILPRICEAPI_BASE_URL || "https://api.oilpriceapi.com";
-export const USER_AGENT = "oilpriceapi-mcp/2.0.0";
+export const USER_AGENT = "oilpriceapi-mcp/2.1.0";
 
 // Get API key from environment
 const API_KEY = process.env.OILPRICEAPI_KEY || process.env.OIL_PRICE_API_KEY;
@@ -268,6 +272,28 @@ interface FuturesData {
   }>;
 }
 
+// Supported futures contracts (used by opa_get_futures + opa_get_futures_curve)
+export const FUTURES_CONTRACTS = [
+  "BZ",
+  "CL",
+  "ice-gasoil",
+  "ttf-gas",
+  "lng-jkm",
+  "eua-carbon",
+] as const;
+
+export const FUTURES_CONTRACT_NAMES: Record<
+  (typeof FUTURES_CONTRACTS)[number],
+  string
+> = {
+  BZ: "Brent Crude",
+  CL: "WTI Crude",
+  "ice-gasoil": "ICE Gasoil",
+  "ttf-gas": "European TTF Natural Gas",
+  "lng-jkm": "LNG JKM (Asia)",
+  "eua-carbon": "EU Carbon Allowance (EUA)",
+};
+
 interface MarineFuelPrice {
   port: string;
   fuel_type: string;
@@ -306,7 +332,7 @@ interface DrillingData {
 
 const server = new McpServer({
   name: "oilpriceapi",
-  version: "2.0.0",
+  version: "2.1.0",
 });
 
 // ---------------------------------------------------------------------------
@@ -538,7 +564,7 @@ export function resolveStateCode(input: string): string | null {
 }
 
 // =========================================================================
-// TOOLS (14 total — opa_ prefixed to avoid collisions)
+// TOOLS (18 total — opa_ prefixed to avoid collisions)
 // =========================================================================
 
 server.tool(
@@ -929,18 +955,18 @@ server.tool(
 
 server.tool(
   "opa_get_futures",
-  "Get the latest front-month futures contract price for crude oil. Use when the user asks about futures, forward prices, or contract prices. Supports Brent (BZ) and WTI (CL) futures. For the full forward curve across all contract months, use opa_get_futures_curve instead.",
+  "Get the latest front-month futures contract price for energy commodities. Use when the user asks about futures, forward prices, or contract prices. Supports crude oil (BZ = Brent, CL = WTI), ICE Gasoil (ice-gasoil), European TTF gas (ttf-gas), LNG JKM (lng-jkm), and EUA carbon (eua-carbon). For the full forward curve across all contract months, use opa_get_futures_curve instead.",
   {
     contract: z
-      .enum(["BZ", "CL"])
+      .enum(FUTURES_CONTRACTS)
       .default("BZ")
       .describe(
-        "Futures contract: BZ = Brent crude, CL = WTI crude (default: BZ)",
+        "Futures contract: BZ = Brent crude, CL = WTI crude, ice-gasoil = ICE Gasoil, ttf-gas = European TTF natural gas, lng-jkm = LNG JKM (Asia), eua-carbon = EU carbon allowance (default: BZ)",
       ),
   },
   async ({ contract }) => {
     const response = await makeApiRequest<ApiResponse<FuturesData>>(
-      `/v1/futures/latest?contract=${contract}`,
+      `/v1/futures/latest?contract=${encodeURIComponent(contract)}`,
     );
 
     if (
@@ -949,11 +975,11 @@ server.tool(
       !response.data.contracts?.length
     ) {
       return errorResult(
-        `No futures data available for ${contract === "BZ" ? "Brent" : "WTI"} (${contract}). Futures data requires a paid plan.`,
+        `No futures data available for ${FUTURES_CONTRACT_NAMES[contract]} (${contract}). Futures data requires a paid plan.`,
       );
     }
 
-    const contractName = contract === "BZ" ? "Brent Crude" : "WTI Crude";
+    const contractName = FUTURES_CONTRACT_NAMES[contract];
     const front = response.data.contracts[0];
 
     let text = `# ${contractName} Futures (${contract})\n\n`;
@@ -969,18 +995,18 @@ server.tool(
 
 server.tool(
   "opa_get_futures_curve",
-  "Get the full futures forward curve showing prices across all contract months. Use when the user asks about the forward curve, contango/backwardation, or term structure. Returns a table of contract months with prices and changes, plus market structure analysis.",
+  "Get the full futures forward curve showing prices across all contract months. Use when the user asks about the forward curve, contango/backwardation, or term structure. Supports crude oil (BZ = Brent, CL = WTI), ICE Gasoil (ice-gasoil), European TTF gas (ttf-gas), LNG JKM (lng-jkm), and EUA carbon (eua-carbon). Returns a table of contract months with prices and changes, plus market structure analysis.",
   {
     contract: z
-      .enum(["BZ", "CL"])
+      .enum(FUTURES_CONTRACTS)
       .default("BZ")
       .describe(
-        "Futures contract: BZ = Brent crude, CL = WTI crude (default: BZ)",
+        "Futures contract: BZ = Brent crude, CL = WTI crude, ice-gasoil = ICE Gasoil, ttf-gas = European TTF natural gas, lng-jkm = LNG JKM (Asia), eua-carbon = EU carbon allowance (default: BZ)",
       ),
   },
   async ({ contract }) => {
     const response = await makeApiRequest<ApiResponse<FuturesData>>(
-      `/v1/futures/curve?contract=${contract}`,
+      `/v1/futures/curve?contract=${encodeURIComponent(contract)}`,
     );
 
     if (
@@ -989,11 +1015,11 @@ server.tool(
       !response.data.contracts?.length
     ) {
       return errorResult(
-        `No futures curve data available for ${contract === "BZ" ? "Brent" : "WTI"} (${contract}). Futures data requires a paid plan.`,
+        `No futures curve data available for ${FUTURES_CONTRACT_NAMES[contract]} (${contract}). Futures data requires a paid plan.`,
       );
     }
 
-    const contractName = contract === "BZ" ? "Brent Crude" : "WTI Crude";
+    const contractName = FUTURES_CONTRACT_NAMES[contract];
     const contracts = response.data.contracts;
 
     let text = `# ${contractName} Futures Curve (${contract})\n\n`;
@@ -1287,6 +1313,129 @@ server.tool(
   },
 );
 
+// ---------------------------------------------------------------------------
+// NEW TOOLS — Sprint 4 (EIA inventories, well permits, refining spreads)
+// ---------------------------------------------------------------------------
+
+server.tool(
+  "opa_get_oil_inventories",
+  "Get the latest EIA weekly petroleum inventory (stocks) data. Use when the user asks about oil inventories, crude stocks, weekly EIA stocks, inventory builds/draws, or product-level inventory levels. Returns the latest weekly figures; optionally a summary view or a breakdown by petroleum product. Requires a paid plan with energy intelligence access.",
+  {
+    view: z
+      .enum(["latest", "summary", "by_product"])
+      .default("latest")
+      .describe(
+        "Which view to return: latest (most recent weekly snapshot), summary (headline totals + week-over-week change), or by_product (breakdown per petroleum product). Default: latest.",
+      ),
+  },
+  async ({ view }) => {
+    const endpointByView: Record<string, string> = {
+      latest: "/v1/ei/oil_inventories/latest",
+      summary: "/v1/ei/oil_inventories/summary",
+      by_product: "/v1/ei/oil_inventories/by_product",
+    };
+
+    const response = await makeApiRequest<ApiResponse<Record<string, unknown>>>(
+      endpointByView[view],
+    );
+
+    if (!response || response.status !== "success") {
+      return errorResult(
+        "EIA oil inventory data not available. This requires a paid plan with energy intelligence access.",
+      );
+    }
+
+    let text = `# EIA Weekly Oil Inventories (${view})\n\n`;
+    text += "```json\n" + JSON.stringify(response.data, null, 2) + "\n```\n";
+    text +=
+      "\n_Source: EIA Weekly Petroleum Status Report | Data from [OilPriceAPI](https://oilpriceapi.com)_";
+
+    return textResult(text);
+  },
+);
+
+server.tool(
+  "opa_get_well_permits",
+  "Get the latest US oil & gas well drilling permit data. Use when the user asks about well permits, new drilling permits, permitting activity, or upstream permit trends. Returns the latest permits; optionally filtered/aggregated by state or by operator. Requires a paid plan with energy intelligence access.",
+  {
+    view: z
+      .enum(["latest", "by_state", "by_operator"])
+      .default("latest")
+      .describe(
+        "Which view to return: latest (most recent permits), by_state (counts aggregated per state), or by_operator (counts aggregated per operator). Default: latest.",
+      ),
+    state: z
+      .string()
+      .optional()
+      .describe(
+        "Optional US state name or 2-letter code to filter permits (e.g., 'Texas', 'TX'). Applies to the latest and by_state views.",
+      ),
+  },
+  async ({ view, state }) => {
+    const pathByView: Record<string, string> = {
+      latest: "/v1/ei/well-permits/latest",
+      by_state: "/v1/ei/well-permits/by-state",
+      by_operator: "/v1/ei/well-permits/by-operator",
+    };
+
+    let endpoint = pathByView[view];
+
+    if (state) {
+      const stateCode = resolveStateCode(state);
+      if (!stateCode) {
+        return errorResult(
+          `'${state}' is not a recognized US state. Use a full state name (e.g., 'Texas') or 2-letter code (e.g., 'TX').`,
+        );
+      }
+      endpoint += `?state=${stateCode}`;
+    }
+
+    const response =
+      await makeApiRequest<ApiResponse<Record<string, unknown>>>(endpoint);
+
+    if (!response || response.status !== "success") {
+      return errorResult(
+        "Well permit data not available. This requires a paid plan with energy intelligence access.",
+      );
+    }
+
+    let text = `# US Well Permits (${view})\n\n`;
+    text += "```json\n" + JSON.stringify(response.data, null, 2) + "\n```\n";
+    text += "\n_Data from [OilPriceAPI](https://oilpriceapi.com)_";
+
+    return textResult(text);
+  },
+);
+
+server.tool(
+  "opa_get_spread",
+  "Get refining and trading spreads: crack spreads (refining margin proxy), basis spreads (regional price differentials), and blending/transport margins. Use when the user asks about crack spreads, 3-2-1 crack, refining margins, basis differentials, or blend/transport margins. Requires a paid plan with energy intelligence access.",
+  {
+    type: z
+      .enum(["crack", "basis", "margin"])
+      .describe(
+        "Spread type: crack (refining crack spread, e.g. 3-2-1), basis (regional/grade price differential), or margin (blending/transport margin).",
+      ),
+  },
+  async ({ type }) => {
+    const response = await makeApiRequest<ApiResponse<Record<string, unknown>>>(
+      `/v1/spreads/${type}`,
+    );
+
+    if (!response || response.status !== "success") {
+      return errorResult(
+        `${type.charAt(0).toUpperCase() + type.slice(1)} spread data not available. This requires a paid plan with energy intelligence access.`,
+      );
+    }
+
+    let text = `# ${type.charAt(0).toUpperCase() + type.slice(1)} Spread\n\n`;
+    text += "```json\n" + JSON.stringify(response.data, null, 2) + "\n```\n";
+    text += "\n_Data from [OilPriceAPI](https://oilpriceapi.com)_";
+
+    return textResult(text);
+  },
+);
+
 // =========================================================================
 // RESOURCES — subscribable price snapshots + dynamic template
 // =========================================================================
@@ -1554,7 +1703,7 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("OilPriceAPI MCP Server v2.0.0 running on stdio");
+  console.error("OilPriceAPI MCP Server v2.1.0 running on stdio");
 }
 
 main().catch((error) => {

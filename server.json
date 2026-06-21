@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.OilpriceAPI/mcp-server",
-  "description": "The energy commodity MCP server. 14 tools for real-time spot prices, historical data, futures curves, marine fuels, rig counts, diesel by state, OPEC production, storage levels, and price forecasts. 70+ commodities with natural language queries.",
+  "description": "The energy commodity MCP server. 18 tools for real-time spot prices, historical data, futures curves, marine fuels, rig counts, diesel by state, OPEC production, storage levels, price forecasts, EIA oil inventories, well permits, and refining spreads. 70+ commodities with natural language queries.",
   "repository": {
     "url": "https://github.com/OilpriceAPI/mcp-server",
     "source": "github"
   },
-  "version": "2.0.0",
+  "version": "2.1.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "oilpriceapi-mcp",
-      "version": "2.0.0",
+      "version": "2.1.0",
       "transport": {
         "type": "stdio"
       },
