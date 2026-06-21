@@ -1,14 +1,19 @@
 #!/usr/bin/env node
 
 /**
- * OilPriceAPI MCP Server v2.1.0
+ * OilPriceAPI MCP Server v2.2.0
  *
  * The energy commodity MCP server. Real-time oil, gas, and commodity prices
  * for Claude, Cursor, VS Code, and any MCP-compatible client.
  *
- * 18 read-only tools (opa_ prefixed): prices, history, futures, marine fuels,
+ * 17 read-only tools (opa_ prefixed): prices, history, futures, marine fuels,
  * rig counts, drilling, diesel-by-state, storage, OPEC production, forecasts,
  * EIA oil inventories, well permits, refining spreads.
+ *
+ * 4 authenticated price-alert tools (opa_*_price_alert / opa_get_alert_triggers):
+ * create/list/delete persistent price alerts tied to the user's account and read
+ * recent trigger activity. These wrap the existing /v1/alerts engine and REQUIRE
+ * an API key (OILPRICEAPI_KEY).
  *
  * @see https://oilpriceapi.com
  * @see https://modelcontextprotocol.io
@@ -21,7 +26,7 @@ import { z } from "zod";
 // API Configuration
 const API_BASE =
   process.env.OILPRICEAPI_BASE_URL || "https://api.oilpriceapi.com";
-export const USER_AGENT = "oilpriceapi-mcp/2.1.0";
+export const USER_AGENT = "oilpriceapi-mcp/2.2.0";
 
 // Get API key from environment
 const API_KEY = process.env.OILPRICEAPI_KEY || process.env.OIL_PRICE_API_KEY;
@@ -332,7 +337,7 @@ interface DrillingData {
 
 const server = new McpServer({
   name: "oilpriceapi",
-  version: "2.1.0",
+  version: "2.2.0",
 });
 
 // ---------------------------------------------------------------------------
@@ -543,6 +548,119 @@ export async function makeApiRequest<T>(
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Authenticated request helper (price alerts)
+//
+// The /v1/alerts endpoints are authenticated and STATEFUL — they create,
+// read, and delete persistent records tied to the caller's account. Unlike
+// the read tools (where auth is optional and responses are wrapped in
+// { status, data }), these endpoints:
+//   - REQUIRE an API key (no key => 401),
+//   - support POST / PATCH / DELETE,
+//   - return the serialized record(s) directly (bare object/array), not an
+//     { status, data } envelope.
+// So we use a dedicated helper rather than makeApiRequest.
+// ---------------------------------------------------------------------------
+
+export interface AuthRequestResult {
+  ok: boolean;
+  status: number;
+  body: unknown;
+}
+
+/**
+ * Make an authenticated request to a stateful endpoint. Requires API_KEY.
+ * Returns { ok, status, body }; callers decide how to render success/error.
+ * Returns status 0 on a network/transport failure.
+ */
+export async function makeAuthRequest(
+  endpoint: string,
+  options: { method?: string; body?: unknown } = {},
+  fetchFn: typeof fetch = fetch,
+): Promise<AuthRequestResult> {
+  const { method = "GET", body } = options;
+
+  const headers: Record<string, string> = {
+    "User-Agent": USER_AGENT,
+    Accept: "application/json",
+    // The API accepts the customer API key as a bearer token.
+    Authorization: `Bearer ${API_KEY}`,
+  };
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  try {
+    const response = await fetchFn(`${API_BASE}${endpoint}`, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+
+    let parsed: unknown = null;
+    const text = await response.text();
+    if (text) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        parsed = text;
+      }
+    }
+
+    return { ok: response.ok, status: response.status, body: parsed };
+  } catch (error) {
+    console.error(`Authenticated request failed: ${method} ${endpoint}`, error);
+    return { ok: false, status: 0, body: null };
+  }
+}
+
+/**
+ * Standard guard for alert tools: returns an actionable error result when no
+ * API key is configured, otherwise null.
+ */
+function requireApiKey(): ReturnType<typeof errorResult> | null {
+  if (!API_KEY) {
+    return errorResult(
+      "Price alerts require an OilPriceAPI key. These tools create and manage " +
+        "persistent alerts tied to your account, so the server must be configured " +
+        "with one. Set the OILPRICEAPI_KEY environment variable for this MCP " +
+        "server (get a free key at https://oilpriceapi.com/signup), then retry.",
+    );
+  }
+  return null;
+}
+
+/**
+ * Map an authenticated-request failure to a clear, agent-readable error.
+ */
+function alertHttpError(result: AuthRequestResult, action: string): string {
+  if (result.status === 0) {
+    return `Could not ${action} — the OilPriceAPI service was unreachable. Try again in a moment.`;
+  }
+  if (result.status === 401) {
+    return `Could not ${action}: authentication failed (401). The configured OILPRICEAPI_KEY is missing or invalid. Set a valid key (https://oilpriceapi.com/signup) and retry.`;
+  }
+  // Surface the API's own error/validation message when present.
+  const body = result.body;
+  let detail = "";
+  if (body && typeof body === "object") {
+    const obj = body as Record<string, unknown>;
+    if (typeof obj.message === "string") detail = obj.message;
+    else if (typeof obj.error === "string") detail = obj.error;
+    else if (obj.errors) detail = JSON.stringify(obj.errors);
+  }
+  return `Could not ${action} (HTTP ${result.status})${detail ? `: ${detail}` : "."}`;
+}
+
+// Operators accepted by the /v1/alerts engine (PriceAlert::VALID_OPERATORS).
+export const ALERT_OPERATORS = [
+  "greater_than",
+  "less_than",
+  "equals",
+  "greater_than_or_equal",
+  "less_than_or_equal",
+] as const;
+
 /**
  * Resolve a US state name or abbreviation to a 2-letter code.
  */
@@ -564,7 +682,8 @@ export function resolveStateCode(input: string): string | null {
 }
 
 // =========================================================================
-// TOOLS (18 total — opa_ prefixed to avoid collisions)
+// READ TOOLS (17 — opa_ prefixed to avoid collisions). Plus 4 authenticated
+// price-alert tools further below, for 21 tools total.
 // =========================================================================
 
 server.tool(
@@ -1437,6 +1556,286 @@ server.tool(
 );
 
 // =========================================================================
+// PRICE ALERT TOOLS (authenticated, stateful — require OILPRICEAPI_KEY)
+//
+// These wrap the existing /v1/alerts engine. They create and manage
+// PERSISTENT alerts tied to the user's OilPriceAPI account, and require an
+// API key. The alert engine continuously evaluates the user's alerts against
+// live prices and notifies them (email and/or webhook) when conditions are met.
+// =========================================================================
+
+interface AlertRecord {
+  id?: string;
+  name?: string;
+  commodity_code?: string;
+  condition_operator?: string;
+  condition_value?: number | string;
+  condition?: string;
+  summary?: string;
+  enabled?: boolean;
+  webhook_url?: string | null;
+  has_webhook?: boolean;
+  cooldown_minutes?: number;
+  trigger_count?: number;
+  last_triggered_at?: string | null;
+  created_at?: string;
+  [key: string]: unknown;
+}
+
+function formatAlertLine(a: AlertRecord): string {
+  const label =
+    a.summary ||
+    a.condition ||
+    `${a.commodity_code} ${a.condition_operator} ${a.condition_value}`;
+  const status = a.enabled === false ? "disabled" : "enabled";
+  const triggers =
+    typeof a.trigger_count === "number" ? `, ${a.trigger_count} triggers` : "";
+  const last = a.last_triggered_at
+    ? `, last triggered ${a.last_triggered_at}`
+    : "";
+  return `- **${a.name || label}** (id: \`${a.id}\`) — ${label} [${status}${triggers}${last}]`;
+}
+
+server.tool(
+  "opa_create_price_alert",
+  "Create a PERSISTENT price alert tied to the user's OilPriceAPI account. " +
+    "The alert engine continuously watches live prices and notifies the user (by " +
+    "email, plus webhook if a URL is given) when the commodity price crosses the " +
+    "threshold. Use when the user asks to be alerted/notified when a price goes " +
+    "above or below a level (e.g. 'tell me when Brent drops below $70'). " +
+    "REQUIRES an API key (OILPRICEAPI_KEY) — this writes to the user's account. " +
+    "Alerts persist until deleted; manage them with opa_list_price_alerts and " +
+    "opa_delete_price_alert.",
+  {
+    commodity: z
+      .string()
+      .describe(
+        "Commodity name or code to watch (e.g., 'brent', 'natural gas', 'WTI_USD').",
+      ),
+    operator: z
+      .enum(ALERT_OPERATORS)
+      .describe(
+        "Threshold comparison: greater_than, less_than, equals, greater_than_or_equal, or less_than_or_equal. The alert fires when (current price) <operator> (threshold).",
+      ),
+    threshold: z
+      .number()
+      .positive()
+      .describe(
+        "The price threshold to compare against, in the commodity's native currency (e.g., 70 for $70/barrel).",
+      ),
+    name: z
+      .string()
+      .optional()
+      .describe(
+        "Optional human-readable label for the alert. If omitted, a descriptive name is generated.",
+      ),
+    notify: z
+      .string()
+      .url()
+      .optional()
+      .describe(
+        "Optional HTTPS webhook URL to POST to when the alert triggers (in addition to email). Must start with https://.",
+      ),
+  },
+  async ({ commodity, operator, threshold, name, notify }) => {
+    const keyErr = requireApiKey();
+    if (keyErr) return keyErr;
+
+    const resolved = resolveOrError(commodity);
+    if ("error" in resolved) return resolved.error;
+
+    const operatorText: Record<string, string> = {
+      greater_than: ">",
+      less_than: "<",
+      equals: "=",
+      greater_than_or_equal: ">=",
+      less_than_or_equal: "<=",
+    };
+    const defaultName = `${resolved.code} ${operatorText[operator]} ${threshold}`;
+
+    const alert: Record<string, unknown> = {
+      name: name || defaultName,
+      commodity_code: resolved.code,
+      condition_operator: operator,
+      condition_value: threshold,
+      // Attribution: stamp the alert as MCP-created via the alert's metadata
+      // (the API permits a free-form metadata object on price alerts).
+      metadata: { source: "mcp" },
+    };
+    if (notify) alert.webhook_url = notify;
+
+    const result = await makeAuthRequest("/v1/alerts", {
+      method: "POST",
+      body: { price_alert: alert },
+    });
+
+    if (!result.ok) {
+      return errorResult(alertHttpError(result, "create the price alert"));
+    }
+
+    const created = result.body as AlertRecord;
+    let text = "# Price Alert Created\n\n";
+    text += formatAlertLine(created);
+    text +=
+      "\n\nThis alert is now active on the user's account and will notify them when the condition is met. " +
+      "Use `opa_list_price_alerts` to see all alerts or `opa_delete_price_alert` to remove it.";
+    text += `\n\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
+    return textResult(text);
+  },
+);
+
+server.tool(
+  "opa_list_price_alerts",
+  "List all PERSISTENT price alerts on the user's OilPriceAPI account. Use when " +
+    "the user asks what alerts they have set up, or to find an alert's id before " +
+    "deleting it. REQUIRES an API key (OILPRICEAPI_KEY) — alerts are account-scoped. " +
+    "No parameters needed.",
+  {},
+  async () => {
+    const keyErr = requireApiKey();
+    if (keyErr) return keyErr;
+
+    const result = await makeAuthRequest("/v1/alerts");
+    if (!result.ok) {
+      return errorResult(alertHttpError(result, "list price alerts"));
+    }
+
+    const alerts = Array.isArray(result.body)
+      ? (result.body as AlertRecord[])
+      : [];
+
+    if (alerts.length === 0) {
+      return textResult(
+        "No price alerts are set up on this account yet. Use `opa_create_price_alert` to create one.",
+      );
+    }
+
+    const sections = [`# Price Alerts (${alerts.length})\n`];
+    for (const a of alerts) sections.push(formatAlertLine(a));
+    sections.push(`\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
+    return textResult(sections.join("\n"));
+  },
+);
+
+server.tool(
+  "opa_delete_price_alert",
+  "Permanently delete a price alert from the user's OilPriceAPI account by id. " +
+    "Use when the user wants to remove/cancel/stop an existing alert. Get the id " +
+    "from opa_list_price_alerts first. This permanently removes the alert from the " +
+    "user's account. REQUIRES an API key (OILPRICEAPI_KEY).",
+  {
+    id: z
+      .string()
+      .describe(
+        "The id of the alert to delete (a UUID, as returned by opa_list_price_alerts or opa_create_price_alert).",
+      ),
+  },
+  async ({ id }) => {
+    const keyErr = requireApiKey();
+    if (keyErr) return keyErr;
+
+    const result = await makeAuthRequest(
+      `/v1/alerts/${encodeURIComponent(id)}`,
+      { method: "DELETE" },
+    );
+
+    if (result.status === 404) {
+      return errorResult(
+        `No alert found with id \`${id}\` on this account. Use opa_list_price_alerts to see valid ids.`,
+      );
+    }
+    if (!result.ok) {
+      return errorResult(alertHttpError(result, "delete the price alert"));
+    }
+
+    return textResult(
+      `Price alert \`${id}\` was permanently deleted from the user's account.`,
+    );
+  },
+);
+
+server.tool(
+  "opa_get_alert_triggers",
+  "Get recent trigger activity for the user's price alerts — which alerts have " +
+    "fired, how many times, and when they last triggered. Use when the user asks " +
+    "whether any alerts have gone off or about recent alert activity. REQUIRES an " +
+    "API key (OILPRICEAPI_KEY). Note: the API tracks trigger history as per-alert " +
+    "counters (trigger_count / last_triggered_at) rather than a separate event " +
+    "feed, so this returns alerts that have triggered.",
+  {
+    since: z
+      .string()
+      .optional()
+      .describe(
+        "Optional ISO 8601 date/time (e.g., '2026-06-01' or '2026-06-01T00:00:00Z'). Only alerts last triggered on or after this time are shown.",
+      ),
+  },
+  async ({ since }) => {
+    const keyErr = requireApiKey();
+    if (keyErr) return keyErr;
+
+    let sinceTime: number | null = null;
+    if (since) {
+      const parsed = Date.parse(since);
+      if (Number.isNaN(parsed)) {
+        return errorResult(
+          `'${since}' is not a valid date. Use an ISO 8601 date like '2026-06-01' or '2026-06-01T00:00:00Z'.`,
+        );
+      }
+      sinceTime = parsed;
+    }
+
+    const result = await makeAuthRequest("/v1/alerts");
+    if (!result.ok) {
+      return errorResult(alertHttpError(result, "fetch alert triggers"));
+    }
+
+    const alerts = Array.isArray(result.body)
+      ? (result.body as AlertRecord[])
+      : [];
+
+    let triggered = alerts.filter(
+      (a) => typeof a.trigger_count === "number" && a.trigger_count > 0,
+    );
+
+    if (sinceTime !== null) {
+      triggered = triggered.filter((a) => {
+        if (!a.last_triggered_at) return false;
+        const t = Date.parse(a.last_triggered_at);
+        return !Number.isNaN(t) && t >= sinceTime!;
+      });
+    }
+
+    if (triggered.length === 0) {
+      return textResult(
+        since
+          ? `No price alerts have triggered since ${since}.`
+          : "No price alerts have triggered yet.",
+      );
+    }
+
+    triggered.sort((a, b) => {
+      const ta = a.last_triggered_at ? Date.parse(a.last_triggered_at) : 0;
+      const tb = b.last_triggered_at ? Date.parse(b.last_triggered_at) : 0;
+      return tb - ta;
+    });
+
+    const sections = [`# Recent Alert Triggers (${triggered.length})\n`];
+    for (const a of triggered) {
+      const label =
+        a.summary ||
+        a.condition ||
+        `${a.commodity_code} ${a.condition_operator} ${a.condition_value}`;
+      sections.push(
+        `- **${a.name || label}** (id: \`${a.id}\`) — ${a.trigger_count} trigger(s), last at ${a.last_triggered_at}`,
+      );
+    }
+    sections.push(`\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
+    return textResult(sections.join("\n"));
+  },
+);
+
+// =========================================================================
 // RESOURCES — subscribable price snapshots + dynamic template
 // =========================================================================
 
@@ -1703,7 +2102,7 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("OilPriceAPI MCP Server v2.1.0 running on stdio");
+  console.error("OilPriceAPI MCP Server v2.2.0 running on stdio");
 }
 
 main().catch((error) => {
