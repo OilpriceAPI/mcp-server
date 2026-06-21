@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * OilPriceAPI MCP Server v2.2.0
+ * OilPriceAPI MCP Server v2.2.1
  *
  * The energy commodity MCP server. Real-time oil, gas, and commodity prices
  * for Claude, Cursor, VS Code, and any MCP-compatible client.
@@ -26,7 +26,7 @@ import { z } from "zod";
 // API Configuration
 const API_BASE =
   process.env.OILPRICEAPI_BASE_URL || "https://api.oilpriceapi.com";
-export const USER_AGENT = "oilpriceapi-mcp/2.2.0";
+export const USER_AGENT = "oilpriceapi-mcp/2.2.1";
 
 // Get API key from environment
 const API_KEY = process.env.OILPRICEAPI_KEY || process.env.OIL_PRICE_API_KEY;
@@ -267,25 +267,101 @@ interface HistoricalPriceData {
   }>;
 }
 
-interface FuturesData {
-  contracts: Array<{
-    contract: string;
-    month: string;
-    price: number;
-    change?: number;
-    volume?: number;
-  }>;
+// Latest futures response (GET /v1/futures/{slug}). The API returns the object
+// at the top level (no { status, data } envelope) with each contract carrying
+// `contract_month` + `last_price` (see V1::FuturesController#format_response).
+interface FuturesLatestData {
+  commodity?: string;
+  source?: string;
+  updated_at?: string;
+  settlement_date?: string;
+  front_month?: FuturesLatestContract;
+  contracts: FuturesLatestContract[];
 }
 
-// Supported futures contracts (used by opa_get_futures + opa_get_futures_curve)
+interface FuturesLatestContract {
+  code?: string;
+  contract_month: string;
+  last_price: number;
+  currency?: string;
+  change_percent?: number;
+  volume?: number;
+  is_front_month?: boolean;
+}
+
+// Curve response (GET /v1/futures/{slug}/curve). Top-level object with each
+// contract carrying `contract_month` + `settlement_price`
+// (see Futures::SpreadsCalculationService#futures_curve_analysis).
+interface FuturesCurveData {
+  analysis_date?: string;
+  curve_type?: string;
+  total_contracts?: number;
+  front_month?: FuturesCurveContract;
+  back_month?: FuturesCurveContract;
+  contracts: FuturesCurveContract[];
+}
+
+interface FuturesCurveContract {
+  contract_month: string;
+  contract_code?: string;
+  settlement_price: number;
+  trading_date?: string;
+  months_to_expiry?: number;
+}
+
+// Supported futures contracts (used by opa_get_futures + opa_get_futures_curve).
+// Accepts both legacy codes (BZ/CL) and friendly API slug names. Each maps to a
+// canonical API slug used to build /v1/futures/{slug} and /v1/futures/{slug}/curve.
+// There is NO generic ?contract= route — paths are per-commodity slugs.
 export const FUTURES_CONTRACTS = [
+  // Crude
   "BZ",
   "CL",
+  "ice-brent",
+  "ice-wti",
+  // Gasoil
+  "G",
+  "QS",
   "ice-gasoil",
+  // Natural gas
+  "NG",
+  "natural-gas",
+  // TTF gas
+  "TTF",
   "ttf-gas",
+  // LNG JKM
+  "JKM",
   "lng-jkm",
+  // Carbon
+  "EUA",
   "eua-carbon",
+  "UKA",
+  "uk-carbon",
 ] as const;
+
+// Map every accepted contract code/alias to its canonical API slug.
+export const FUTURES_CONTRACT_SLUGS: Record<
+  (typeof FUTURES_CONTRACTS)[number],
+  string
+> = {
+  BZ: "ice-brent",
+  CL: "ice-wti",
+  "ice-brent": "ice-brent",
+  "ice-wti": "ice-wti",
+  G: "ice-gasoil",
+  QS: "ice-gasoil",
+  "ice-gasoil": "ice-gasoil",
+  NG: "natural-gas",
+  "natural-gas": "natural-gas",
+  TTF: "ttf-gas",
+  "ttf-gas": "ttf-gas",
+  JKM: "lng-jkm",
+  "lng-jkm": "lng-jkm",
+  EUA: "eua-carbon",
+  "eua-carbon": "eua-carbon",
+  UKA: "uk-carbon",
+  "uk-carbon": "uk-carbon",
+};
 
 export const FUTURES_CONTRACT_NAMES: Record<
   (typeof FUTURES_CONTRACTS)[number],
@@ -293,10 +369,21 @@ export const FUTURES_CONTRACT_NAMES: Record<
 > = {
   BZ: "Brent Crude",
   CL: "WTI Crude",
+  "ice-brent": "ICE Brent Crude",
+  "ice-wti": "ICE WTI Crude",
+  G: "ICE Gasoil",
+  QS: "ICE Gasoil",
   "ice-gasoil": "ICE Gasoil",
+  NG: "Natural Gas",
+  "natural-gas": "Natural Gas",
+  TTF: "European TTF Natural Gas",
   "ttf-gas": "European TTF Natural Gas",
+  JKM: "LNG JKM (Asia)",
   "lng-jkm": "LNG JKM (Asia)",
+  EUA: "EU Carbon Allowance (EUA)",
   "eua-carbon": "EU Carbon Allowance (EUA)",
+  UKA: "UK Carbon Allowance (UKA)",
+  "uk-carbon": "UK Carbon Allowance (UKA)",
 };
 
 interface MarineFuelPrice {
@@ -337,7 +424,7 @@ interface DrillingData {
 
 const server = new McpServer({
   name: "oilpriceapi",
-  version: "2.2.0",
+  version: "2.2.1",
 });
 
 // ---------------------------------------------------------------------------
@@ -1074,37 +1161,38 @@ server.tool(
 
 server.tool(
   "opa_get_futures",
-  "Get the latest front-month futures contract price for energy commodities. Use when the user asks about futures, forward prices, or contract prices. Supports crude oil (BZ = Brent, CL = WTI), ICE Gasoil (ice-gasoil), European TTF gas (ttf-gas), LNG JKM (lng-jkm), and EUA carbon (eua-carbon). For the full forward curve across all contract months, use opa_get_futures_curve instead.",
+  "Get the latest front-month futures contract price for energy commodities. Use when the user asks about futures, forward prices, or contract prices. Supports crude oil (BZ/ice-brent = Brent, CL/ice-wti = WTI), ICE Gasoil (ice-gasoil), natural gas (natural-gas), European TTF gas (ttf-gas), LNG JKM (lng-jkm), EUA carbon (eua-carbon), and UK carbon (uk-carbon). For the full forward curve across all contract months, use opa_get_futures_curve instead.",
   {
     contract: z
       .enum(FUTURES_CONTRACTS)
       .default("BZ")
       .describe(
-        "Futures contract: BZ = Brent crude, CL = WTI crude, ice-gasoil = ICE Gasoil, ttf-gas = European TTF natural gas, lng-jkm = LNG JKM (Asia), eua-carbon = EU carbon allowance (default: BZ)",
+        "Futures contract code or slug: BZ/ice-brent = Brent crude, CL/ice-wti = WTI crude, ice-gasoil (G/QS) = ICE Gasoil, natural-gas (NG) = Natural Gas, ttf-gas (TTF) = European TTF natural gas, lng-jkm (JKM) = LNG JKM (Asia), eua-carbon (EUA) = EU carbon allowance, uk-carbon (UKA) = UK carbon allowance (default: BZ)",
       ),
   },
   async ({ contract }) => {
-    const response = await makeApiRequest<ApiResponse<FuturesData>>(
-      `/v1/futures/latest?contract=${encodeURIComponent(contract)}`,
+    const slug = FUTURES_CONTRACT_SLUGS[contract];
+    // Latest = GET /v1/futures/{slug} (no /latest, no ?contract= query param).
+    const response = await makeApiRequest<FuturesLatestData>(
+      `/v1/futures/${slug}`,
     );
 
-    if (
-      !response ||
-      response.status !== "success" ||
-      !response.data.contracts?.length
-    ) {
+    if (!response || !response.contracts?.length) {
       return errorResult(
         `No futures data available for ${FUTURES_CONTRACT_NAMES[contract]} (${contract}). Futures data requires a paid plan.`,
       );
     }
 
     const contractName = FUTURES_CONTRACT_NAMES[contract];
-    const front = response.data.contracts[0];
+    const front = response.front_month ?? response.contracts[0];
 
     let text = `# ${contractName} Futures (${contract})\n\n`;
-    text += `**Front Month (${front.month})**: $${front.price.toFixed(2)}`;
-    if (front.change !== undefined) {
-      text += ` (${front.change >= 0 ? "+" : ""}$${front.change.toFixed(2)})`;
+    text += `**Front Month (${front.contract_month})**: $${front.last_price.toFixed(2)}`;
+    if (front.change_percent !== undefined && front.change_percent !== null) {
+      text += ` (${front.change_percent >= 0 ? "+" : ""}${front.change_percent.toFixed(2)}%)`;
+    }
+    if (response.source) {
+      text += `\n\n_Source: ${response.source}_`;
     }
     text += `\n\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
 
@@ -1114,47 +1202,43 @@ server.tool(
 
 server.tool(
   "opa_get_futures_curve",
-  "Get the full futures forward curve showing prices across all contract months. Use when the user asks about the forward curve, contango/backwardation, or term structure. Supports crude oil (BZ = Brent, CL = WTI), ICE Gasoil (ice-gasoil), European TTF gas (ttf-gas), LNG JKM (lng-jkm), and EUA carbon (eua-carbon). Returns a table of contract months with prices and changes, plus market structure analysis.",
+  "Get the full futures forward curve showing prices across all contract months. Use when the user asks about the forward curve, contango/backwardation, or term structure. Supports crude oil (BZ/ice-brent = Brent, CL/ice-wti = WTI), ICE Gasoil (ice-gasoil), natural gas (natural-gas), European TTF gas (ttf-gas), LNG JKM (lng-jkm), EUA carbon (eua-carbon), and UK carbon (uk-carbon). Returns a table of contract months with settlement prices, plus market structure analysis.",
   {
     contract: z
       .enum(FUTURES_CONTRACTS)
       .default("BZ")
       .describe(
-        "Futures contract: BZ = Brent crude, CL = WTI crude, ice-gasoil = ICE Gasoil, ttf-gas = European TTF natural gas, lng-jkm = LNG JKM (Asia), eua-carbon = EU carbon allowance (default: BZ)",
+        "Futures contract code or slug: BZ/ice-brent = Brent crude, CL/ice-wti = WTI crude, ice-gasoil (G/QS) = ICE Gasoil, natural-gas (NG) = Natural Gas, ttf-gas (TTF) = European TTF natural gas, lng-jkm (JKM) = LNG JKM (Asia), eua-carbon (EUA) = EU carbon allowance, uk-carbon (UKA) = UK carbon allowance (default: BZ)",
       ),
   },
   async ({ contract }) => {
-    const response = await makeApiRequest<ApiResponse<FuturesData>>(
-      `/v1/futures/curve?contract=${encodeURIComponent(contract)}`,
+    const slug = FUTURES_CONTRACT_SLUGS[contract];
+    // Curve = GET /v1/futures/{slug}/curve (no generic ?contract= route).
+    const response = await makeApiRequest<FuturesCurveData>(
+      `/v1/futures/${slug}/curve`,
     );
 
-    if (
-      !response ||
-      response.status !== "success" ||
-      !response.data.contracts?.length
-    ) {
+    if (!response || !response.contracts?.length) {
       return errorResult(
         `No futures curve data available for ${FUTURES_CONTRACT_NAMES[contract]} (${contract}). Futures data requires a paid plan.`,
       );
     }
 
     const contractName = FUTURES_CONTRACT_NAMES[contract];
-    const contracts = response.data.contracts;
+    const contracts = response.contracts;
 
     let text = `# ${contractName} Futures Curve (${contract})\n\n`;
-    text += `| Month | Price | Change |\n|-------|-------|--------|\n`;
+    text += `| Month | Settlement |\n|-------|------------|\n`;
 
     for (const c of contracts) {
-      const changeStr =
-        c.change !== undefined
-          ? `${c.change >= 0 ? "+" : ""}$${c.change.toFixed(2)}`
-          : "N/A";
-      text += `| ${c.month} | $${c.price.toFixed(2)} | ${changeStr} |\n`;
+      text += `| ${c.contract_month} | $${c.settlement_price.toFixed(2)} |\n`;
     }
 
-    const front = contracts[0].price;
-    const back = contracts[contracts.length - 1].price;
-    const structure = front > back ? "backwardation" : "contango";
+    const front = contracts[0].settlement_price;
+    const back = contracts[contracts.length - 1].settlement_price;
+    // Prefer the API's own curve classification when present.
+    const structure =
+      response.curve_type ?? (front > back ? "backwardation" : "contango");
     text += `\n**Market Structure**: ${structure} (front $${front.toFixed(2)} vs back $${back.toFixed(2)})`;
     text += `\n\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
 
@@ -2102,7 +2186,7 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("OilPriceAPI MCP Server v2.2.0 running on stdio");
+  console.error("OilPriceAPI MCP Server v2.2.1 running on stdio");
 }
 
 main().catch((error) => {

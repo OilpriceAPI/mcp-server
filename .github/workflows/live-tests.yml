@@ -1,0 +1,44 @@
+name: Live API tests
+
+# Runs the live smoke test (scripts/live-smoke.mjs) against the real
+# OilPriceAPI to catch path/contract regressions like the v2.2.0 futures 404
+# (/v1/futures/latest?contract= — a route that does not exist). The unit
+# suite (vitest) mocks fetch, so only this job exercises the real endpoints.
+#
+# Gated on the OILPRICEAPI_TEST_KEY repo secret so forks without the secret
+# are not blocked. The job is a no-op (clean skip) when the secret is absent.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    name: Unit tests + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  live:
+    name: Live API smoke test
+    runs-on: ubuntu-latest
+    # Only run when the secret is configured (skips on forks / PRs without it).
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - name: Live smoke test (ice-brent latest + curve)
+        env:
+          OILPRICEAPI_TEST_KEY: ${{ secrets.OILPRICEAPI_TEST_KEY }}
+        run: npm run test:live
