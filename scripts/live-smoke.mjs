@@ -28,6 +28,11 @@
  * forks / contributors without the secret are not blocked.
  *
  * Rate limit: the API allows 1 req/sec, so calls are spaced >= 1.1s apart.
+ * Despite that spacing, CI shares a single 1-req/sec test key across repos, so
+ * concurrent jobs elsewhere can still trip HTTP 429 (Too Many Requests) on our
+ * calls. A 429 is rate-limit contention, NOT a regression, so each check treats
+ * a 429 as a SKIP (logged, not counted as a failure) and the run still exits 0.
+ * Only real errors (non-429: 4xx auth, 404, 5xx, malformed body) fail the run.
  */
 
 const API_BASE =
@@ -84,6 +89,39 @@ function assert(cond, msg) {
   }
 }
 
+// Sentinel thrown when a live call is rate-limited (HTTP 429). The shared CI
+// test key is 1 req/sec across repos, so concurrent jobs elsewhere can 429 our
+// calls. That is contention, not a regression — callers catch this and SKIP
+// (no failure counted) instead of failing the run.
+class RateLimited extends Error {
+  constructor(label) {
+    super(`rate-limited (HTTP 429): ${label}`);
+    this.name = "RateLimited";
+  }
+}
+
+// Throw RateLimited when a response is a 429 so the per-check try/catch can
+// distinguish a transient rate-limit (SKIP) from a real failure. Call this
+// immediately after each live request, before asserting on the body.
+function rateLimitGuard(status, label) {
+  if (status === 429) {
+    throw new RateLimited(label);
+  }
+}
+
+// Centralised per-check error handling. Returns the new failure count: a 429
+// (RateLimited) is logged as a tolerated SKIP and does NOT increment failures;
+// any other error is a real failure and increments.
+function handleCheckError(err, failures) {
+  if (err instanceof RateLimited) {
+    console.log(
+      `SKIP (rate-limited (shared CI key), skipping live assertion): ${err.message}`,
+    );
+    return failures;
+  }
+  return failures + 1;
+}
+
 async function main() {
   let failures = 0;
 
@@ -94,6 +132,7 @@ async function main() {
   // require a numeric front-month last price in a sane range.
   try {
     const { status, body } = await getJson(`/v1/futures/${SLUG}`);
+    rateLimitGuard(status, `GET /v1/futures/${SLUG}`);
     assert(status === 200, `latest expected 200, got ${status}`);
     assert(
       body && typeof body === "object" && !body.error,
@@ -118,8 +157,10 @@ async function main() {
       `PASS: GET /v1/futures/${SLUG} -> 200, front ${monthLabel} @ $${front.last_price}`,
     );
   } catch (err) {
-    failures++;
-    console.error(`FAIL (latest): ${err.message}`);
+    failures = handleCheckError(err, failures);
+    if (!(err instanceof RateLimited)) {
+      console.error(`FAIL (latest): ${err.message}`);
+    }
   }
 
   // Space requests — API rate limit is 1 req/sec.
@@ -132,6 +173,7 @@ async function main() {
   // on a real error: non-200, auth failure, or a malformed/unexpected body.
   try {
     const { status, body } = await getJson(`/v1/futures/${SLUG}/curve`);
+    rateLimitGuard(status, `GET /v1/futures/${SLUG}/curve`);
     assert(status === 200, `curve expected 200, got ${status}`);
     assert(body && typeof body === "object", "curve returned no/invalid body");
 
@@ -166,8 +208,10 @@ async function main() {
       );
     }
   } catch (err) {
-    failures++;
-    console.error(`FAIL (curve): ${err.message}`);
+    failures = handleCheckError(err, failures);
+    if (!(err instanceof RateLimited)) {
+      console.error(`FAIL (curve): ${err.message}`);
+    }
   }
 
   // Space requests — API rate limit is 1 req/sec.
@@ -180,6 +224,7 @@ async function main() {
     const { status, body } = await getJson(
       "/v1/market-brief?codes=BRENT_CRUDE_USD",
     );
+    rateLimitGuard(status, "GET /v1/market-brief?codes=BRENT_CRUDE_USD");
     assert(status === 200, `market-brief expected 200, got ${status}`);
     const data = body && body.data;
     assert(
@@ -198,8 +243,10 @@ async function main() {
       `PASS: GET /v1/market-brief -> 200, Brent @ $${brent.price} (${brent.currency})`,
     );
   } catch (err) {
-    failures++;
-    console.error(`FAIL (market-brief): ${err.message}`);
+    failures = handleCheckError(err, failures);
+    if (!(err instanceof RateLimited)) {
+      console.error(`FAIL (market-brief): ${err.message}`);
+    }
   }
 
   await sleep(RATE_LIMIT_MS);
@@ -209,6 +256,7 @@ async function main() {
   // (empty or populated — both valid).
   try {
     const { status, body } = await getJson("/v1/subscriptions");
+    rateLimitGuard(status, "GET /v1/subscriptions");
     assert(status === 200, `subscriptions list expected 200, got ${status}`);
     const subs = body && body.data && body.data.subscriptions;
     assert(
@@ -219,8 +267,10 @@ async function main() {
       `PASS: GET /v1/subscriptions -> 200, ${subs.length} subscription(s)`,
     );
   } catch (err) {
-    failures++;
-    console.error(`FAIL (subscriptions list): ${err.message}`);
+    failures = handleCheckError(err, failures);
+    if (!(err instanceof RateLimited)) {
+      console.error(`FAIL (subscriptions list): ${err.message}`);
+    }
   }
 
   // 5. WRITE round-trip (opt-in) — create -> poll events -> delete.
@@ -244,6 +294,7 @@ async function main() {
           "X-OPA-Tool": "opa_create_price_subscription",
         },
       });
+      rateLimitGuard(created.status, "POST /v1/subscriptions");
       assert(
         created.status === 200 || created.status === 201,
         `create expected 200/201, got ${created.status}: ${JSON.stringify(created.body)}`,
@@ -258,6 +309,7 @@ async function main() {
       await sleep(RATE_LIMIT_MS);
       // List should now include it.
       const list = await getJson("/v1/subscriptions");
+      rateLimitGuard(list.status, "GET /v1/subscriptions (re-list)");
       assert(list.status === 200, `re-list expected 200, got ${list.status}`);
       const ids = (list.body?.data?.subscriptions ?? []).map((s) => s.id);
       assert(
@@ -269,6 +321,7 @@ async function main() {
       await sleep(RATE_LIMIT_MS);
       // Events poll should 200 (likely empty until the evaluator runs).
       const events = await getJson("/v1/subscriptions/events?since=0");
+      rateLimitGuard(events.status, "GET /v1/subscriptions/events");
       assert(
         events.status === 200,
         `events expected 200, got ${events.status}`,
@@ -281,8 +334,10 @@ async function main() {
         `PASS: GET /v1/subscriptions/events -> 200, ${events.body.data.events.length} event(s), cursor ${events.body.data.cursor}`,
       );
     } catch (err) {
-      failures++;
-      console.error(`FAIL (subscription write round-trip): ${err.message}`);
+      failures = handleCheckError(err, failures);
+      if (!(err instanceof RateLimited)) {
+        console.error(`FAIL (subscription write round-trip): ${err.message}`);
+      }
     } finally {
       // Always clean up the created watch so prod is not littered.
       if (createdId) {
@@ -295,6 +350,12 @@ async function main() {
           if (del.status === 204 || del.status === 200) {
             console.log(
               `PASS: DELETE /v1/subscriptions/${createdId} -> cleaned up`,
+            );
+          } else if (del.status === 429) {
+            // Rate-limited cleanup is contention, not a regression. Do NOT fail
+            // the run, but surface that the watch may linger in prod.
+            console.log(
+              `SKIP (rate-limited (shared CI key), skipping live assertion): DELETE /v1/subscriptions/${createdId} -> 429 — watch may remain in prod`,
             );
           } else {
             failures++;
