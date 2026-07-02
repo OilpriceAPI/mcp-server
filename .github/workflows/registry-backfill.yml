@@ -1,0 +1,47 @@
+name: MCP registry backfill
+
+# Manual re-publish of server.json to the official MCP registry
+# (registry.modelcontextprotocol.io) WITHOUT cutting a release or touching
+# npm. Use when the registry has drifted behind npm — e.g. the 2.0.0→2.3.0
+# staleness that motivated issue #14. Normal releases publish via publish.yml;
+# this exists only for backfill/repair.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  registry:
+    name: Publish to MCP registry
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify server.json version matches package.json
+        run: |
+          PKG=$(jq -r .version package.json)
+          SRV=$(jq -r .version server.json)
+          SRVPKG=$(jq -r '.packages[0].version' server.json)
+          if [ "$PKG" != "$SRV" ] || [ "$PKG" != "$SRVPKG" ]; then
+            echo "::error::Version mismatch: package.json=$PKG server.json=$SRV packages[0]=$SRVPKG"
+            exit 1
+          fi
+          echo "Version check OK: $PKG"
+
+      - name: Verify version exists on npm (registry must never lead npm)
+        run: |
+          PKG=$(jq -r .version package.json)
+          npm view "oilpriceapi-mcp@$PKG" version
+
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+
+      - name: Login to MCP registry (GitHub OIDC)
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server.json
+        run: ./mcp-publisher publish
