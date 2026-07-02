@@ -1,10 +1,21 @@
 #!/usr/bin/env node
 
 /**
- * OilPriceAPI MCP Server v2.3.0
+ * OilPriceAPI MCP Server v2.4.0
  *
  * The energy commodity MCP server. Real-time oil, gas, and commodity prices
  * for Claude, Cursor, VS Code, and any MCP-compatible client.
+ *
+ * KEYLESS DEMO MODE (#16): when no OILPRICEAPI_KEY is configured, the four
+ * price-read tools (opa_get_price, opa_compare_prices, opa_list_commodities,
+ * opa_market_overview) serve live data from the keyless /v1/demo/prices
+ * endpoint (limited commodity set) with a signup footer. All other tools
+ * return a helpful teaser (what the tool does + illustrative response shape +
+ * signup link) instead of a raw 401.
+ *
+ * TIER-LIMIT NUDGES (#17): every 402/403/429 error path surfaces the exact
+ * limit/feature gate hit by the API plus an upgrade link (see ApiGateError in
+ * makeApiRequest and alertHttpError for the authenticated tools).
  *
  * 26 tools total (opa_ prefixed):
  *
@@ -36,10 +47,25 @@ import { z } from "zod";
 // API Configuration
 const API_BASE =
   process.env.OILPRICEAPI_BASE_URL || "https://api.oilpriceapi.com";
-export const USER_AGENT = "oilpriceapi-mcp/2.3.0";
+export const USER_AGENT = "oilpriceapi-mcp/2.4.0";
 
-// Get API key from environment
-const API_KEY = process.env.OILPRICEAPI_KEY || process.env.OIL_PRICE_API_KEY;
+/**
+ * Get the API key from the environment. Read dynamically (not captured at
+ * module load) so demo-mode behavior is testable and reflects the live env.
+ */
+export function getApiKey(): string | undefined {
+  return process.env.OILPRICEAPI_KEY || process.env.OIL_PRICE_API_KEY;
+}
+
+// Conversion links (#16/#17). utm_source distinguishes demo-mode signups from
+// tier-limit upgrade nudges.
+export const SIGNUP_URL =
+  "https://oilpriceapi.com/auth/signup?utm_source=mcp-demo";
+export const UPGRADE_URL =
+  "https://oilpriceapi.com/pricing?utm_source=mcp-limit";
+
+// Footer appended to EVERY demo-mode (keyless) response.
+export const DEMO_FOOTER = `⚠ Demo data (limited commodity set). Get a free API key for 40+ commodities: ${SIGNUP_URL}`;
 
 // ---------------------------------------------------------------------------
 // Natural language to commodity code mapping
@@ -434,7 +460,7 @@ interface DrillingData {
 
 const server = new McpServer({
   name: "oilpriceapi",
-  version: "2.3.0",
+  version: "2.4.0",
 });
 
 // ---------------------------------------------------------------------------
@@ -579,8 +605,68 @@ export function formatPrice(data: PriceData): string {
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// Tier-limit gate errors (#17)
+//
+// When the API answers 402/403 (immediately) or 429 (after retries are
+// exhausted), we throw an ApiGateError whose message contains the API's own
+// limit/feature-gate detail plus an upgrade link. The MCP SDK converts a
+// thrown error from a tool handler into an isError tool result carrying
+// error.message, so centralizing here gives EVERY read tool the nudge without
+// per-tool edits.
+// ---------------------------------------------------------------------------
+
+export class ApiGateError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiGateError";
+    this.status = status;
+  }
+}
+
+/** Extract the API's own error/limit message from a response body, if any. */
+async function extractErrorDetail(response: Response): Promise<string> {
+  try {
+    if (typeof response.text !== "function") return "";
+    const text = await response.text();
+    if (!text) return "";
+    try {
+      const obj = JSON.parse(text) as Record<string, unknown>;
+      if (typeof obj.message === "string") return obj.message;
+      if (typeof obj.error === "string") return obj.error;
+      if (obj.errors) return JSON.stringify(obj.errors);
+      return "";
+    } catch {
+      return text.slice(0, 200);
+    }
+  } catch {
+    return "";
+  }
+}
+
+/** Build the standard 402/403/429 gate error with the upgrade nudge. */
+async function buildGateError(response: Response): Promise<ApiGateError> {
+  const detail = await extractErrorDetail(response);
+  const label =
+    response.status === 402
+      ? "Payment required (HTTP 402) — this data is not included in the current plan"
+      : response.status === 403
+        ? "Access denied (HTTP 403) — this feature is gated to a higher plan"
+        : "Rate limit exceeded (HTTP 429) — the plan's request limit was hit";
+  return new ApiGateError(
+    response.status,
+    `${label}${detail ? `: ${detail}` : "."} Upgrade: ${UPGRADE_URL}`,
+  );
+}
+
 /**
- * Make API request to OilPriceAPI with retry and exponential backoff
+ * Make API request to OilPriceAPI with retry and exponential backoff.
+ *
+ * Throws ApiGateError on 402/403 (immediately) and 429 (after retries are
+ * exhausted) so tier-limit gates surface the exact limit + upgrade link (#17).
+ * Returns null on other failures (401, 404, 5xx exhausted, network).
  */
 export async function makeApiRequest<T>(
   endpoint: string,
@@ -591,8 +677,9 @@ export async function makeApiRequest<T>(
     Accept: "application/json",
   };
 
-  if (API_KEY) {
-    headers["Authorization"] = `Bearer ${API_KEY}`;
+  const apiKey = getApiKey();
+  if (apiKey) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
   }
 
   const maxRetries = 3;
@@ -612,6 +699,11 @@ export async function makeApiRequest<T>(
         return null;
       }
 
+      // Tier/feature gate — surface the exact limit + upgrade link (#17).
+      if (response.status === 402 || response.status === 403) {
+        throw await buildGateError(response);
+      }
+
       // Retry on 429 and 5xx
       if (
         (response.status === 429 || response.status >= 500) &&
@@ -625,11 +717,17 @@ export async function makeApiRequest<T>(
         continue;
       }
 
+      // 429 with retries exhausted — surface the rate limit + upgrade link.
+      if (response.status === 429) {
+        throw await buildGateError(response);
+      }
+
       console.error(
         `HTTP ${response.status}: ${response.statusText} for ${endpoint}`,
       );
       return null;
     } catch (error) {
+      if (error instanceof ApiGateError) throw error;
       if (attempt === maxRetries) {
         console.error(
           `API request failed after ${maxRetries + 1} attempts: ${endpoint}`,
@@ -685,7 +783,7 @@ export async function makeAuthRequest(
     "User-Agent": USER_AGENT,
     Accept: "application/json",
     // The API accepts the customer API key as a bearer token.
-    Authorization: `Bearer ${API_KEY}`,
+    Authorization: `Bearer ${getApiKey()}`,
   };
   if (body !== undefined) {
     headers["Content-Type"] = "application/json";
@@ -720,25 +818,27 @@ export async function makeAuthRequest(
 }
 
 /**
- * Standard guard for alert tools: returns an actionable error result when no
- * API key is configured, otherwise null.
+ * Standard keyless guard for authenticated tools: returns the teaser result
+ * (what the tool does + illustrative shape + signup link) when no API key is
+ * configured, otherwise null. See keylessTeaserResult below (#16).
  */
-function requireApiKey(): ReturnType<typeof errorResult> | null {
-  if (!API_KEY) {
-    return errorResult(
-      "Price alerts require an OilPriceAPI key. These tools create and manage " +
-        "persistent alerts tied to your account, so the server must be configured " +
-        "with one. Set the OILPRICEAPI_KEY environment variable for this MCP " +
-        "server (get a free key at https://oilpriceapi.com/signup), then retry.",
-    );
+function requireApiKey(
+  toolName: string,
+): ReturnType<typeof errorResult> | null {
+  if (!getApiKey()) {
+    return keylessTeaserResult(toolName);
   }
   return null;
 }
 
 /**
  * Map an authenticated-request failure to a clear, agent-readable error.
+ * 402/403/429 gate errors carry the API's exact limit plus the upgrade link (#17).
  */
-function alertHttpError(result: AuthRequestResult, action: string): string {
+export function alertHttpError(
+  result: AuthRequestResult,
+  action: string,
+): string {
   if (result.status === 0) {
     return `Could not ${action} — the OilPriceAPI service was unreachable. Try again in a moment.`;
   }
@@ -754,7 +854,12 @@ function alertHttpError(result: AuthRequestResult, action: string): string {
     else if (typeof obj.error === "string") detail = obj.error;
     else if (obj.errors) detail = JSON.stringify(obj.errors);
   }
-  return `Could not ${action} (HTTP ${result.status})${detail ? `: ${detail}` : "."}`;
+  let msg = `Could not ${action} (HTTP ${result.status})${detail ? `: ${detail}` : "."}`;
+  // Tier/feature gate or rate limit — add the upgrade nudge (#17).
+  if (result.status === 402 || result.status === 403 || result.status === 429) {
+    msg += ` Upgrade: ${UPGRADE_URL}`;
+  }
+  return msg;
 }
 
 // Operators accepted by the /v1/alerts engine (PriceAlert::VALID_OPERATORS).
@@ -841,6 +946,418 @@ export function resolveStateCode(input: string): string | null {
 }
 
 // =========================================================================
+// KEYLESS DEMO MODE (#16)
+//
+// The production API exposes GET /v1/demo/prices — a keyless endpoint with a
+// small live commodity set (Brent, WTI, diesel, gasoline, natural gas, gold,
+// heating oil, EUR/USD, GBP/USD). When no OILPRICEAPI_KEY is configured:
+//   - the four price-read tools serve from this endpoint (with DEMO_FOOTER),
+//   - every other tool returns a teaser (keylessTeaserResult) instead of a
+//     raw 401.
+// =========================================================================
+
+interface DemoPrice {
+  code: string;
+  name?: string;
+  price: number;
+  currency?: string;
+  updated_at?: string;
+  // NOTE: the demo endpoint's change_24h is a PERCENTAGE (e.g. EUR_USD at
+  // 1.1428 with change_24h 0.44 can only be 0.44%), unlike /v1/prices/latest
+  // where change_24h is absolute and change_24h_percent carries the percent.
+  change_24h?: number;
+  source?: string;
+}
+
+/**
+ * Fetch the keyless demo price set. Returns null if unreachable/malformed.
+ */
+export async function fetchDemoPrices(
+  fetchFn: typeof fetch = fetch,
+): Promise<DemoPrice[] | null> {
+  try {
+    const response = await fetchFn(`${API_BASE}/v1/demo/prices`, {
+      headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+    });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as ApiResponse<{
+      prices: DemoPrice[];
+    }> | null;
+    if (payload?.status !== "success" || !Array.isArray(payload.data?.prices)) {
+      return null;
+    }
+    return payload.data.prices;
+  } catch {
+    return null;
+  }
+}
+
+/** Append the mandatory demo footer to a tool result's text. */
+function withDemoFooter(text: string) {
+  return textResult(`${text}\n\n${DEMO_FOOTER}`);
+}
+
+function demoErrorResult(message: string) {
+  return {
+    content: [{ type: "text" as const, text: `${message}\n\n${DEMO_FOOTER}` }],
+    isError: true,
+  };
+}
+
+function formatDemoPrice(p: DemoPrice): string {
+  const info = COMMODITY_INFO[p.code] || {
+    name: p.name || p.code,
+    unit: "unit",
+  };
+  const currencySymbol =
+    p.currency === "EUR" ? "€" : p.currency === "GBP" ? "£" : "$";
+  let result = `**${info.name}**: ${currencySymbol}${p.price.toFixed(2)}/${info.unit}`;
+  if (typeof p.change_24h === "number") {
+    const sign = p.change_24h >= 0 ? "+" : "";
+    result += `\n- 24h Change: ${sign}${p.change_24h.toFixed(2)}%`;
+  }
+  if (p.updated_at) {
+    result += `\n- Updated: ${new Date(p.updated_at).toLocaleString("en-US", {
+      dateStyle: "medium",
+      timeStyle: "short",
+      timeZone: "UTC",
+    })} UTC`;
+  }
+  return result;
+}
+
+function demoUnreachableResult() {
+  return demoErrorResult(
+    "Could not reach the keyless demo endpoint. The API may be temporarily unavailable — try again in a moment.",
+  );
+}
+
+function listDemoCodes(prices: DemoPrice[]): string {
+  return prices.map((p) => `\`${p.code}\``).join(", ");
+}
+
+/** Keyless opa_get_price: serve a single price from the demo set. */
+export async function demoPriceResult(
+  commodity: string,
+  fetchFn: typeof fetch = fetch,
+) {
+  const resolved = resolveOrError(commodity);
+  if ("error" in resolved) return resolved.error;
+
+  const prices = await fetchDemoPrices(fetchFn);
+  if (!prices) return demoUnreachableResult();
+
+  const match = prices.find((p) => p.code === resolved.code);
+  if (!match) {
+    return demoErrorResult(
+      `'${commodity}' (${resolved.code}) is not in the keyless demo commodity set. ` +
+        `Demo commodities available without an API key: ${listDemoCodes(prices)}.`,
+    );
+  }
+
+  return withDemoFooter(formatDemoPrice(match));
+}
+
+/** Keyless opa_compare_prices: compare commodities within the demo set. */
+export async function demoComparePricesResult(
+  commodities: string[],
+  fetchFn: typeof fetch = fetch,
+) {
+  const prices = await fetchDemoPrices(fetchFn);
+  if (!prices) return demoUnreachableResult();
+
+  const found: DemoPrice[] = [];
+  const missing: string[] = [];
+  for (const commodity of commodities) {
+    const code = resolveCommodityCode(commodity);
+    const match = code ? prices.find((p) => p.code === code) : undefined;
+    if (match) found.push(match);
+    else missing.push(commodity);
+  }
+
+  if (found.length < 2) {
+    return demoErrorResult(
+      `Could not compare — fewer than 2 of the requested commodities are in the keyless demo set` +
+        `${missing.length ? ` (not available in demo: ${missing.join(", ")})` : ""}. ` +
+        `Demo commodities available without an API key: ${listDemoCodes(prices)}.`,
+    );
+  }
+
+  const sections = ["# Price Comparison\n"];
+  for (const p of found) {
+    sections.push(formatDemoPrice(p));
+    sections.push("");
+  }
+
+  if (
+    found.length === 2 &&
+    (found[0].currency || "USD") === (found[1].currency || "USD")
+  ) {
+    const spread = Math.abs(found[0].price - found[1].price);
+    const name0 = COMMODITY_INFO[found[0].code]?.name || found[0].code;
+    const name1 = COMMODITY_INFO[found[1].code]?.name || found[1].code;
+    const sym =
+      found[0].currency === "EUR"
+        ? "€"
+        : found[0].currency === "GBP"
+          ? "£"
+          : "$";
+    sections.push(
+      `**Spread**: ${sym}${spread.toFixed(2)} (${name0} vs ${name1})`,
+    );
+  }
+
+  if (missing.length > 0) {
+    sections.push(
+      `\n_Not in the demo set (needs an API key): ${missing.join(", ")}._`,
+    );
+  }
+
+  return withDemoFooter(sections.join("\n"));
+}
+
+/** Keyless opa_list_commodities: list the demo commodity set. */
+export async function demoListCommoditiesResult(fetchFn: typeof fetch = fetch) {
+  const prices = await fetchDemoPrices(fetchFn);
+  if (!prices) return demoUnreachableResult();
+
+  const sections = [
+    `# Available Commodities — Demo Mode (${prices.length} of 40+)\n`,
+    "No API key is configured, so only the keyless demo commodity set is available:\n",
+  ];
+  for (const p of prices) {
+    const name = COMMODITY_INFO[p.code]?.name || p.name || p.code;
+    sections.push(`- \`${p.code}\` — ${name}`);
+  }
+  sections.push(
+    "\n_You can use natural language like 'brent oil' or 'natural gas' — the server translates it to the right code._",
+  );
+
+  return withDemoFooter(sections.join("\n"));
+}
+
+/** Keyless opa_market_overview: build the overview from the demo set. */
+export async function demoMarketOverviewResult(
+  category: string = "all",
+  fetchFn: typeof fetch = fetch,
+) {
+  const prices = await fetchDemoPrices(fetchFn);
+  if (!prices) return demoUnreachableResult();
+
+  const groups: Record<string, DemoPrice[]> = {
+    "Crude Oil": [],
+    "Natural Gas": [],
+    "Refined Products": [],
+    "Precious Metals": [],
+    Forex: [],
+    Other: [],
+  };
+  const groupByCategory: Record<string, string> = {
+    oil: "Crude Oil",
+    gas: "Natural Gas",
+    refined: "Refined Products",
+    metals: "Precious Metals",
+    forex: "Forex",
+  };
+
+  for (const p of prices) {
+    const code = p.code;
+    if (code.includes("CRUDE") || code === "WTI_USD") {
+      groups["Crude Oil"].push(p);
+    } else if (code.includes("GAS") && code !== "GASOLINE_USD") {
+      groups["Natural Gas"].push(p);
+    } else if (
+      [
+        "DIESEL_USD",
+        "GASOLINE_USD",
+        "HEATING_OIL_USD",
+        "JET_FUEL_USD",
+      ].includes(code)
+    ) {
+      groups["Refined Products"].push(p);
+    } else if (code.includes("GOLD") || code.includes("SILVER")) {
+      groups["Precious Metals"].push(p);
+    } else if (code === "EUR_USD" || code === "GBP_USD") {
+      groups["Forex"].push(p);
+    } else {
+      groups["Other"].push(p);
+    }
+  }
+
+  const wantedGroup = groupByCategory[category];
+  const sections = ["# Energy Market Overview (Demo)\n"];
+  let shown = 0;
+
+  for (const [group, items] of Object.entries(groups)) {
+    if (items.length === 0) continue;
+    if (wantedGroup && group !== wantedGroup) continue;
+
+    sections.push(`## ${group}\n`);
+    for (const p of items) {
+      const name = COMMODITY_INFO[p.code]?.name || p.name || p.code;
+      const sym = p.currency === "EUR" ? "€" : p.currency === "GBP" ? "£" : "$";
+      let line = `- **${name}**: ${sym}${p.price.toFixed(2)}`;
+      if (typeof p.change_24h === "number") {
+        const sign = p.change_24h >= 0 ? "+" : "";
+        line += ` (${sign}${p.change_24h.toFixed(1)}%)`;
+      }
+      sections.push(line);
+      shown++;
+    }
+    sections.push("");
+  }
+
+  if (shown === 0) {
+    return demoErrorResult(
+      `No demo commodities match the '${category}' category. ` +
+        `Demo commodities available without an API key: ${listDemoCodes(prices)}.`,
+    );
+  }
+
+  return withDemoFooter(sections.join("\n"));
+}
+
+// ---------------------------------------------------------------------------
+// Keyless teasers for tools with no demo coverage (#16)
+//
+// One sentence on what the tool does + a one-line ILLUSTRATIVE example of the
+// response shape ($XX.XX placeholders — never fabricated prices) + signup
+// link. Never a raw "Authentication failed".
+// ---------------------------------------------------------------------------
+
+const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
+  {
+    opa_get_history: {
+      does: "Returns historical price statistics (latest, high, low, average, change) for a commodity over a day, week, month, or year.",
+      example:
+        "Brent Crude Oil — Past Month: Latest $XX.XX · High $XX.XX · Low $XX.XX · Average $XX.XX · Change +X.X% (NN data points)",
+    },
+    opa_get_futures: {
+      does: "Returns the latest front-month futures contract price for crude, gasoil, natural gas, TTF, LNG JKM, and carbon contracts.",
+      example:
+        "Brent Crude Futures (BZ) — Front Month (MMM-YY): $XX.XX (+X.XX%)",
+    },
+    opa_get_futures_curve: {
+      does: "Returns the full futures forward curve across contract months with contango/backwardation analysis.",
+      example:
+        "Month: MMM-YY → Settlement $XX.XX (× NN contracts) | Market Structure: contango/backwardation",
+    },
+    opa_get_marine_fuels: {
+      does: "Returns marine bunker fuel prices (VLSFO, MGO, IFO380) across major shipping ports like Singapore and Rotterdam.",
+      example: "SINGAPORE | VLSFO | $XXX.XX | USD | metric ton",
+    },
+    opa_get_rig_counts: {
+      does: "Returns the latest Baker Hughes US oil & gas rig counts with week-over-week change.",
+      example: "Oil Rigs: NNN · Gas Rigs: NNN · Total: NNN (±N vs prior week)",
+    },
+    opa_get_drilling: {
+      does: "Returns drilling intelligence: active wells, rigs, permits, and completions with a regional breakdown.",
+      example:
+        "Total Wells: N,NNN · Active Rigs: NNN · Permits Issued: NNN · Completions: NNN",
+    },
+    opa_get_diesel_by_state: {
+      does: "Returns the AAA average retail diesel price for any US state.",
+      example: "Diesel Price — TX: $X.XXX/gallon (24h change ±$0.0XX)",
+    },
+    opa_get_storage: {
+      does: "Returns oil storage/inventory levels for Cushing, Oklahoma and the US Strategic Petroleum Reserve.",
+      example:
+        "Cushing: NN.N million barrels (±N.N wk/wk) · SPR: NNN.N million barrels",
+    },
+    opa_get_opec_production: {
+      does: "Returns the latest OPEC country-level oil production figures.",
+      example:
+        "Saudi Arabia: N.NN mb/d · Iraq: N.NN mb/d · ... (per-country output)",
+    },
+    opa_get_forecasts: {
+      does: "Returns energy price forecasts from the EIA Short-Term Energy Outlook.",
+      example:
+        "Brent 2027 forecast: $XX.XX avg · WTI: $XX.XX · Henry Hub: $X.XX",
+    },
+    opa_get_oil_inventories: {
+      does: "Returns EIA weekly petroleum inventory (stocks) data with builds/draws, optionally summarized or by product.",
+      example:
+        "Crude stocks: NNN.N million barrels (build/draw ±N.N wk/wk) per product",
+    },
+    opa_get_well_permits: {
+      does: "Returns US oil & gas well drilling permit data, filterable by state or operator.",
+      example:
+        "TX: NNN permits · NM: NNN permits · ... (latest week, by state/operator)",
+    },
+    opa_get_spread: {
+      does: "Returns refining and trading spreads: crack spreads, basis differentials, and blending/transport margins.",
+      example: "3-2-1 crack spread: $XX.XX/bbl (as of YYYY-MM-DD)",
+    },
+    opa_create_price_alert: {
+      does: "Creates a persistent price alert on your account that emails (and optionally webhooks) you when a commodity crosses a threshold.",
+      example:
+        "Price Alert Created — BRENT_CRUDE_USD < XX.XX (id: `uuid`) [enabled]",
+    },
+    opa_list_price_alerts: {
+      does: "Lists all persistent price alerts on your OilPriceAPI account.",
+      example:
+        "Price Alerts (N): **Brent < XX** (id: `uuid`) — [enabled, N triggers]",
+    },
+    opa_delete_price_alert: {
+      does: "Permanently deletes a price alert from your OilPriceAPI account by id.",
+      example:
+        "Price alert `uuid` was permanently deleted from the user's account.",
+    },
+    opa_get_alert_triggers: {
+      does: "Shows which of your price alerts have fired recently, how many times, and when.",
+      example:
+        "Recent Alert Triggers (N): **Brent < XX** — N trigger(s), last at YYYY-MM-DDTHH:MM:SSZ",
+    },
+    opa_get_market_brief: {
+      does: "Returns a multi-commodity market brief in one call: spot prices, 24h changes, 1-month forecasts, and notable spreads, with an optional narrative summary.",
+      example:
+        "**Brent Crude Oil**: $XX.XX (+X.XX% 24h) — 1m forecast ~$XX.XX · Spreads: Brent-WTI $X.XX",
+    },
+    opa_create_price_subscription: {
+      does: "Creates a persistent recurring watch on your account that snapshots chosen commodities every interval so agents can poll for changes.",
+      example:
+        "Price Subscription Created — BRENT_CRUDE_USD, WTI_USD, every 1h, active (id: `uuid`)",
+    },
+    opa_list_subscriptions: {
+      does: "Lists all persistent price subscriptions (watches) on your OilPriceAPI account.",
+      example:
+        "Price Subscriptions (N): **Crude desk hourly** (id: `uuid`) — BRENT_CRUDE_USD, every 1h, active",
+    },
+    opa_delete_subscription: {
+      does: "Permanently deletes a price subscription (watch) from your OilPriceAPI account by id.",
+      example:
+        "Price subscription `uuid` was permanently deleted from the user's account.",
+    },
+    opa_get_subscription_events: {
+      does: "Polls for new subscription events — the recurring price snapshots and deltas recorded by your watches since the last cursor.",
+      example:
+        "Event seq NN — YYYY-MM-DDTHH:MM:SSZ (watch `uuid`): { snapshot: {...}, deltas: {...} } · Next cursor: NN",
+    },
+  };
+
+/**
+ * Teaser returned by keyless calls to tools that cannot work without a key:
+ * one sentence on what the tool does, a one-line illustrative response shape
+ * (clearly marked as NOT real data), and the signup link (#16).
+ */
+export function keylessTeaserResult(toolName: string) {
+  const teaser = KEYLESS_TOOL_TEASERS[toolName];
+  const lines = [
+    `\`${toolName}\` requires an API key — no OILPRICEAPI_KEY is configured, so this MCP server is running in keyless demo mode.`,
+  ];
+  if (teaser) {
+    lines.push("", teaser.does);
+    lines.push("", "Illustrative response shape (NOT real data):");
+    lines.push("```", teaser.example, "```");
+  }
+  lines.push(
+    "",
+    `Get a free API key (40+ commodities, current prices in demo; more on paid plans): ${SIGNUP_URL}`,
+  );
+  return errorResult(lines.join("\n"));
+}
+
+// =========================================================================
 // READ TOOLS (17 — opa_ prefixed to avoid collisions). Plus 4 authenticated
 // price-alert tools further below, for 21 tools total.
 // =========================================================================
@@ -856,6 +1373,9 @@ server.tool(
       ),
   },
   async ({ commodity }) => {
+    // Keyless demo mode (#16): serve from /v1/demo/prices.
+    if (!getApiKey()) return demoPriceResult(commodity);
+
     const resolved = resolveOrError(commodity);
     if ("error" in resolved) return resolved.error;
 
@@ -887,6 +1407,9 @@ server.tool(
       ),
   },
   async ({ category = "all" }) => {
+    // Keyless demo mode (#16): serve from /v1/demo/prices.
+    if (!getApiKey()) return demoMarketOverviewResult(category);
+
     const response =
       await makeApiRequest<ApiResponse<{ data: AllPricesData }>>(
         "/v1/prices/all",
@@ -1016,6 +1539,9 @@ server.tool(
       ),
   },
   async ({ commodities }) => {
+    // Keyless demo mode (#16): compare within the demo set.
+    if (!getApiKey()) return demoComparePricesResult(commodities);
+
     const results: PriceData[] = [];
     const errors: string[] = [];
 
@@ -1077,6 +1603,9 @@ server.tool(
   "List all available commodities that can be queried for prices. Use when the user asks what commodities are available, what codes to use, or when another tool returns a 'commodity not recognized' error. Returns the full catalog fetched live from the API, grouped by category. No parameters needed.",
   {},
   async () => {
+    // Keyless demo mode (#16): list the demo commodity set.
+    if (!getApiKey()) return demoListCommoditiesResult();
+
     // Try to fetch the live commodity catalog from the API
     const response = await makeApiRequest<
       ApiResponse<{
@@ -1179,6 +1708,8 @@ server.tool(
       .describe("Time period: day, week, month, or year (default: month)"),
   },
   async ({ commodity, period }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_history");
+
     const resolved = resolveOrError(commodity);
     if ("error" in resolved) return resolved.error;
 
@@ -1243,6 +1774,8 @@ server.tool(
       ),
   },
   async ({ contract }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_futures");
+
     const slug = FUTURES_CONTRACT_SLUGS[contract];
     // Latest = GET /v1/futures/{slug} (no /latest, no ?contract= query param).
     const response = await makeApiRequest<FuturesLatestData>(
@@ -1284,6 +1817,8 @@ server.tool(
       ),
   },
   async ({ contract }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_futures_curve");
+
     const slug = FUTURES_CONTRACT_SLUGS[contract];
     // Curve = GET /v1/futures/{slug}/curve (no generic ?contract= route).
     const response = await makeApiRequest<FuturesCurveData>(
@@ -1334,6 +1869,8 @@ server.tool(
       .describe("Filter by fuel type: VLSFO, MGO, or IFO380"),
   },
   async ({ port, fuel_type }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_marine_fuels");
+
     let endpoint = "/v1/marine-fuels/latest";
     const params: string[] = [];
     if (port) params.push(`port=${encodeURIComponent(port)}`);
@@ -1373,6 +1910,8 @@ server.tool(
   "Get the latest US oil and gas rig count data (Baker Hughes). Use when the user asks about drilling activity, rig counts, or oil field operations. Returns oil rigs, gas rigs, total count, and week-over-week change. No parameters needed.",
   {},
   async () => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_rig_counts");
+
     const response = await makeApiRequest<ApiResponse<RigCountData>>(
       "/v1/rig-counts/latest",
     );
@@ -1404,6 +1943,8 @@ server.tool(
   "Get drilling intelligence data including active wells, permits issued, and completions by region. Use when the user asks about drilling activity, well permits, or upstream operations. Returns totals and regional breakdown.",
   {},
   async () => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_drilling");
+
     const response = await makeApiRequest<ApiResponse<DrillingData>>(
       "/v1/drilling/latest",
     );
@@ -1452,6 +1993,8 @@ server.tool(
       ),
   },
   async ({ state }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_diesel_by_state");
+
     const stateCode = resolveStateCode(state);
     if (!stateCode) {
       return errorResult(
@@ -1500,6 +2043,8 @@ server.tool(
       ),
   },
   async ({ facility }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_storage");
+
     const sections: string[] = ["# Oil Storage Levels\n"];
     let hasData = false;
 
@@ -1546,6 +2091,8 @@ server.tool(
   "Get the latest OPEC oil production data. Use when the user asks about OPEC output, production quotas, supply cuts, or OPEC+ compliance. Returns country-level production figures. Requires a paid plan with energy intelligence access.",
   {},
   async () => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_opec_production");
+
     const response = await makeApiRequest<ApiResponse<Record<string, unknown>>>(
       "/v1/ei/opec_productions/latest",
     );
@@ -1569,6 +2116,8 @@ server.tool(
   "Get energy price forecasts from EIA Short-Term Energy Outlook (STEO) and other sources. Use when the user asks about price predictions, outlooks, or where oil/gas prices are heading. Returns forecast data for key commodities. Requires a paid plan with energy intelligence access.",
   {},
   async () => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_forecasts");
+
     const response = await makeApiRequest<ApiResponse<Record<string, unknown>>>(
       "/v1/ei/forecasts/latest",
     );
@@ -1604,6 +2153,8 @@ server.tool(
       ),
   },
   async ({ view }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_oil_inventories");
+
     const endpointByView: Record<string, string> = {
       latest: "/v1/ei/oil_inventories/latest",
       summary: "/v1/ei/oil_inventories/summary",
@@ -1647,6 +2198,8 @@ server.tool(
       ),
   },
   async ({ view, state }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_well_permits");
+
     const pathByView: Record<string, string> = {
       latest: "/v1/ei/well-permits/latest",
       by_state: "/v1/ei/well-permits/by-state",
@@ -1693,6 +2246,8 @@ server.tool(
       ),
   },
   async ({ type }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_spread");
+
     const response = await makeApiRequest<ApiResponse<Record<string, unknown>>>(
       `/v1/spreads/${type}`,
     );
@@ -1794,7 +2349,7 @@ server.tool(
       ),
   },
   async ({ commodity, operator, threshold, name, notify }) => {
-    const keyErr = requireApiKey();
+    const keyErr = requireApiKey("opa_create_price_alert");
     if (keyErr) return keyErr;
 
     const resolved = resolveOrError(commodity);
@@ -1848,7 +2403,7 @@ server.tool(
     "No parameters needed.",
   {},
   async () => {
-    const keyErr = requireApiKey();
+    const keyErr = requireApiKey("opa_list_price_alerts");
     if (keyErr) return keyErr;
 
     const result = await makeAuthRequest("/v1/alerts");
@@ -1887,7 +2442,7 @@ server.tool(
       ),
   },
   async ({ id }) => {
-    const keyErr = requireApiKey();
+    const keyErr = requireApiKey("opa_delete_price_alert");
     if (keyErr) return keyErr;
 
     const result = await makeAuthRequest(
@@ -1927,7 +2482,7 @@ server.tool(
       ),
   },
   async ({ since }) => {
-    const keyErr = requireApiKey();
+    const keyErr = requireApiKey("opa_get_alert_triggers");
     if (keyErr) return keyErr;
 
     let sinceTime: number | null = null;
@@ -2111,7 +2666,7 @@ server.tool(
       ),
   },
   async ({ codes, narrative }) => {
-    const keyErr = requireApiKey();
+    const keyErr = requireApiKey("opa_get_market_brief");
     if (keyErr) return keyErr;
 
     const resolvedCodes: string[] = [];
@@ -2248,7 +2803,7 @@ server.tool(
       ),
   },
   async ({ codes, interval, name }) => {
-    const keyErr = requireApiKey();
+    const keyErr = requireApiKey("opa_create_price_subscription");
     if (keyErr) return keyErr;
 
     const intervalSeconds = resolveIntervalSeconds(interval);
@@ -2325,7 +2880,7 @@ server.tool(
     "parameters needed.",
   {},
   async () => {
-    const keyErr = requireApiKey();
+    const keyErr = requireApiKey("opa_list_subscriptions");
     if (keyErr) return keyErr;
 
     const result = await makeAuthRequest("/v1/subscriptions");
@@ -2367,7 +2922,7 @@ server.tool(
       ),
   },
   async ({ id }) => {
-    const keyErr = requireApiKey();
+    const keyErr = requireApiKey("opa_delete_subscription");
     if (keyErr) return keyErr;
 
     const result = await makeAuthRequest(
@@ -2415,7 +2970,7 @@ server.tool(
       ),
   },
   async ({ since }) => {
-    const keyErr = requireApiKey();
+    const keyErr = requireApiKey("opa_get_subscription_events");
     if (keyErr) return keyErr;
 
     const params = new URLSearchParams();
@@ -2734,15 +3289,19 @@ export function createSandboxServer() {
 
 // Main entry point
 async function main() {
-  if (!API_KEY) {
+  if (!getApiKey()) {
+    // stderr only — stdout is the MCP protocol channel.
     console.error(
-      "Warning: OILPRICEAPI_KEY not set. Get a free key at https://oilpriceapi.com/signup",
+      "OilPriceAPI MCP: no OILPRICEAPI_KEY set — running in DEMO MODE. " +
+        "Price tools serve a limited live commodity set from the keyless demo " +
+        "endpoint; most other tools are limited. " +
+        `Get a free API key for 40+ commodities: ${SIGNUP_URL}`,
     );
   }
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("OilPriceAPI MCP Server v2.3.0 running on stdio");
+  console.error("OilPriceAPI MCP Server v2.4.0 running on stdio");
 }
 
 main().catch((error) => {

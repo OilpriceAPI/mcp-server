@@ -22,6 +22,10 @@ npx oilpriceapi-mcp
 
 ## Installation
 
+### Try it without an API key
+
+The server works out of the box in **keyless demo mode** — just omit `OILPRICEAPI_KEY` from the configs below. The price tools (`opa_get_price`, `opa_compare_prices`, `opa_list_commodities`, `opa_market_overview`) serve **live prices** for a limited demo commodity set (Brent, WTI, diesel, gasoline, natural gas, gold, heating oil, EUR/USD, GBP/USD), and every other tool explains what it does and what its output looks like. Demo responses are marked with a footer. When you're ready for 40+ commodities, history, futures, and alerts, [get a free API key](https://oilpriceapi.com/auth/signup?utm_source=mcp-demo) and add it to your config.
+
 ### Claude Desktop
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
@@ -121,10 +125,10 @@ npm install -g oilpriceapi-mcp
 
 ## Environment Variables
 
-| Variable               | Required | Description                                                                                                                                                 |
-| ---------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OILPRICEAPI_KEY`      | Yes      | API key from [oilpriceapi.com/signup](https://www.oilpriceapi.com/signup?utm_source=npm&utm_medium=mcp&utm_campaign=readme). Free tier: 200 requests/month. |
-| `OILPRICEAPI_BASE_URL` | No       | Override API base URL (for staging/testing). Default: `https://api.oilpriceapi.com`                                                                         |
+| Variable               | Required | Description                                                                                                                                                                                                                          |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `OILPRICEAPI_KEY`      | No       | API key from [oilpriceapi.com/signup](https://www.oilpriceapi.com/signup?utm_source=npm&utm_medium=mcp&utm_campaign=readme). Free tier: 200 requests/month. Without it the server runs in keyless demo mode (limited commodity set). |
+| `OILPRICEAPI_BASE_URL` | No       | Override API base URL (for staging/testing). Default: `https://api.oilpriceapi.com`                                                                                                                                                  |
 
 ## Tools
 
