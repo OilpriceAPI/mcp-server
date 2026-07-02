@@ -1,0 +1,61 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/dist/mcpb-manifest.schema.json",
+  "manifest_version": "0.2",
+  "name": "oilpriceapi",
+  "display_name": "OilPriceAPI — Oil, Gas & Commodity Prices",
+  "version": "2.4.0",
+  "description": "Real-time oil, gas & commodity prices. 26 tools: spot, history, futures, alerts, market briefs.",
+  "long_description": "The energy commodity MCP server. Live spot prices for Brent, WTI, natural gas, diesel, gasoline and 70+ commodities, plus historical data, futures curves, refining spreads, rig counts, OPEC production, price alerts and multi-commodity market briefs. Works instantly in demo mode (no API key) with a limited commodity set; a free API key from oilpriceapi.com unlocks everything.",
+  "author": {
+    "name": "OilPriceAPI",
+    "email": "support@oilpriceapi.com",
+    "url": "https://oilpriceapi.com"
+  },
+  "homepage": "https://oilpriceapi.com/mcp",
+  "documentation": "https://github.com/OilpriceAPI/mcp-server#readme",
+  "support": "https://github.com/OilpriceAPI/mcp-server/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "build/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/build/index.js"],
+      "env": {
+        "OILPRICEAPI_KEY": "${user_config.api_key}"
+      }
+    }
+  },
+  "user_config": {
+    "api_key": {
+      "type": "string",
+      "title": "OilPriceAPI Key",
+      "description": "Optional — leave empty for demo mode (limited commodities). Get a free key at oilpriceapi.com/auth/signup for 40+ commodities.",
+      "sensitive": true,
+      "required": false
+    }
+  },
+  "tools_generated": true,
+  "keywords": [
+    "oil",
+    "gas",
+    "commodities",
+    "energy",
+    "prices",
+    "brent",
+    "wti",
+    "futures",
+    "finance"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OilpriceAPI/mcp-server"
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}
