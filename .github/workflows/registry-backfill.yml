@@ -30,6 +30,14 @@ jobs:
             exit 1
           fi
           echo "Version check OK: $PKG"
+          # Registry rejects description > 100 chars (422) — the silent killer
+          # that kept 2.3.0 unpublished. Fail fast here instead.
+          DLEN=$(jq -r '.description | length' server.json)
+          if [ "$DLEN" -gt 100 ]; then
+            echo "::error::server.json description is $DLEN chars; registry max is 100"
+            exit 1
+          fi
+          echo "Description length OK: $DLEN"
 
       - name: Verify version exists on npm (registry must never lead npm)
         run: |
