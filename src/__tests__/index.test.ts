@@ -9,6 +9,17 @@ import {
   SUBSCRIPTION_INTERVAL_PRESETS,
   COMMODITY_ALIASES,
   COMMODITY_INFO,
+  ApiGateError,
+  alertHttpError,
+  fetchDemoPrices,
+  demoPriceResult,
+  demoComparePricesResult,
+  demoListCommoditiesResult,
+  demoMarketOverviewResult,
+  keylessTeaserResult,
+  DEMO_FOOTER,
+  SIGNUP_URL,
+  UPGRADE_URL,
 } from "../index.js";
 
 // ---------------------------------------------------------------------------
@@ -292,20 +303,31 @@ describe("makeApiRequest - retry behaviour", () => {
     return promise;
   }
 
-  it("returns null on 429 after exhausting all retries", async () => {
+  // v2.4.0 (#17): an exhausted 429 now surfaces the rate limit + upgrade link
+  // as an ApiGateError instead of silently returning null.
+  it("throws ApiGateError with upgrade link on 429 after exhausting all retries", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 429,
       statusText: "Too Many Requests",
       headers: { get: () => null },
+      text: async () =>
+        JSON.stringify({ message: "Monthly request limit of 200 reached" }),
     });
 
-    const result = await runWithFakeTimers(
+    const promise = makeApiRequest(
       "/v1/prices/latest",
       mockFetch as typeof fetch,
-    );
+    ).catch((e: unknown) => e);
+    await vi.runAllTimersAsync();
+    const error = await promise;
 
-    expect(result).toBeNull();
+    expect(error).toBeInstanceOf(ApiGateError);
+    expect((error as ApiGateError).status).toBe(429);
+    expect((error as ApiGateError).message).toContain(
+      "Monthly request limit of 200 reached",
+    );
+    expect((error as ApiGateError).message).toContain(UPGRADE_URL);
     expect(mockFetch).toHaveBeenCalledTimes(4);
   });
 
@@ -614,5 +636,348 @@ describe("makeAuthRequest - request shaping", () => {
     expect(result.ok).toBe(false);
     expect(result.status).toBe(422);
     expect((result.body as { error: string }).error).toBe("WATCH_LIMIT");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v2.4.0 — Keyless demo mode (#16)
+// ---------------------------------------------------------------------------
+
+const DEMO_PAYLOAD = {
+  status: "success",
+  data: {
+    prices: [
+      {
+        code: "BRENT_CRUDE_USD",
+        name: "Brent Crude Oil",
+        price: 71.59,
+        currency: "USD",
+        updated_at: "2026-07-02T19:51:14Z",
+        change_24h: 0.53,
+        source: "OilPriceAPI",
+      },
+      {
+        code: "WTI_USD",
+        name: "WTI Crude Oil",
+        price: 68.47,
+        currency: "USD",
+        updated_at: "2026-07-02T19:45:03Z",
+        change_24h: 0.53,
+        source: "OilPriceAPI",
+      },
+      {
+        code: "DIESEL_USD",
+        name: "Diesel (Gulf Coast)",
+        price: 3.18,
+        currency: "USD",
+        updated_at: "2026-07-02T18:40:14Z",
+        change_24h: -0.93,
+        source: "OilPriceAPI",
+      },
+      {
+        code: "EUR_USD",
+        name: "EUR/USD",
+        price: 1.1428,
+        currency: "USD",
+        updated_at: "2026-07-02T19:52:46Z",
+        change_24h: 0.44,
+        source: "OilPriceAPI",
+      },
+    ],
+  },
+};
+
+function mockDemoFetch() {
+  return vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => DEMO_PAYLOAD,
+  });
+}
+
+describe("demo mode (#16) - fetchDemoPrices", () => {
+  it("fetches /v1/demo/prices without an Authorization header", async () => {
+    const mockFetch = mockDemoFetch();
+    const prices = await fetchDemoPrices(mockFetch as unknown as typeof fetch);
+
+    expect(prices).toHaveLength(4);
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(String(url)).toContain("/v1/demo/prices");
+    expect(init.headers.Authorization).toBeUndefined();
+  });
+
+  it("returns null when the demo endpoint is unreachable", async () => {
+    const mockFetch = vi.fn().mockRejectedValue(new Error("network down"));
+    expect(
+      await fetchDemoPrices(mockFetch as unknown as typeof fetch),
+    ).toBeNull();
+  });
+});
+
+describe("demo mode (#16) - demoPriceResult", () => {
+  it("returns live demo data plus the demo footer for a demo commodity", async () => {
+    const result = await demoPriceResult(
+      "brent",
+      mockDemoFetch() as unknown as typeof fetch,
+    );
+
+    const text = result.content[0].text;
+    expect((result as { isError?: boolean }).isError).toBeUndefined();
+    expect(text).toContain("Brent Crude Oil");
+    expect(text).toContain("$71.59");
+    expect(text).toContain("+0.53%");
+    expect(
+      text.endsWith(DEMO_FOOTER),
+      "demo response must END with the footer",
+    ).toBe(true);
+    expect(text).toContain(
+      "⚠ Demo data (limited commodity set). Get a free API key for 40+ commodities: https://oilpriceapi.com/auth/signup?utm_source=mcp-demo",
+    );
+  });
+
+  it("lists available demo commodities when the requested one is not in the demo set", async () => {
+    const result = await demoPriceResult(
+      "jet fuel",
+      mockDemoFetch() as unknown as typeof fetch,
+    );
+
+    const text = result.content[0].text;
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(text).toContain("JET_FUEL_USD");
+    expect(text).toContain("not in the keyless demo commodity set");
+    expect(text).toContain("BRENT_CRUDE_USD");
+    expect(text).toContain("WTI_USD");
+    expect(text.endsWith(DEMO_FOOTER)).toBe(true);
+  });
+
+  it("still returns the commodity-not-recognized error for garbage input", async () => {
+    const result = await demoPriceResult(
+      "flux capacitors",
+      mockDemoFetch() as unknown as typeof fetch,
+    );
+    expect((result as { isError?: boolean }).isError).toBe(true);
+    expect(result.content[0].text).toContain("not recognized");
+  });
+});
+
+describe("demo mode (#16) - compare / list / overview", () => {
+  it("compares two demo commodities with spread and footer", async () => {
+    const result = await demoComparePricesResult(
+      ["brent", "wti"],
+      mockDemoFetch() as unknown as typeof fetch,
+    );
+
+    const text = result.content[0].text;
+    expect(text).toContain("$71.59");
+    expect(text).toContain("$68.47");
+    expect(text).toContain("**Spread**: $3.12");
+    expect(text.endsWith(DEMO_FOOTER)).toBe(true);
+  });
+
+  it("lists only the demo commodity set with footer", async () => {
+    const result = await demoListCommoditiesResult(
+      mockDemoFetch() as unknown as typeof fetch,
+    );
+
+    const text = result.content[0].text;
+    expect(text).toContain("Demo Mode");
+    expect(text).toContain("`BRENT_CRUDE_USD`");
+    expect(text).toContain("`DIESEL_USD`");
+    expect(text.endsWith(DEMO_FOOTER)).toBe(true);
+  });
+
+  it("builds a grouped market overview from demo prices with footer", async () => {
+    const result = await demoMarketOverviewResult(
+      "all",
+      mockDemoFetch() as unknown as typeof fetch,
+    );
+
+    const text = result.content[0].text;
+    expect(text).toContain("Crude Oil");
+    expect(text).toContain("Refined Products");
+    expect(text).toContain("Forex");
+    expect(text.endsWith(DEMO_FOOTER)).toBe(true);
+  });
+
+  it("respects the category filter in demo overview", async () => {
+    const result = await demoMarketOverviewResult(
+      "oil",
+      mockDemoFetch() as unknown as typeof fetch,
+    );
+
+    const text = result.content[0].text;
+    expect(text).toContain("Brent Crude Oil");
+    expect(text).not.toContain("EUR");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v2.4.0 — Keyless teasers for gated tools (#16)
+// ---------------------------------------------------------------------------
+
+describe("keylessTeaserResult (#16)", () => {
+  it("returns a teaser (not a raw 401) for a gated read tool", () => {
+    const result = keylessTeaserResult("opa_get_history");
+    const text = result.content[0].text;
+
+    expect(result.isError).toBe(true);
+    expect(text).toContain("opa_get_history");
+    expect(text).toContain("historical price statistics");
+    expect(text).toContain("Illustrative response shape (NOT real data)");
+    expect(text).toContain(SIGNUP_URL);
+    expect(text).not.toContain("Authentication failed");
+    // Illustrative example must use placeholders, not fabricated prices.
+    expect(text).toContain("$XX.XX");
+  });
+
+  it("covers alert and subscription tools too", () => {
+    for (const tool of [
+      "opa_create_price_alert",
+      "opa_get_market_brief",
+      "opa_create_price_subscription",
+      "opa_get_subscription_events",
+    ]) {
+      const text = keylessTeaserResult(tool).content[0].text;
+      expect(text).toContain(tool);
+      expect(text).toContain(SIGNUP_URL);
+      expect(text).not.toContain("Authentication failed");
+    }
+  });
+
+  it("still returns the signup link for an unknown tool name", () => {
+    const text = keylessTeaserResult("opa_future_tool").content[0].text;
+    expect(text).toContain(SIGNUP_URL);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v2.4.0 — Tier-limit upgrade nudges (#17)
+// ---------------------------------------------------------------------------
+
+describe("tier-limit gate errors (#17) - makeApiRequest", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("throws ApiGateError with the API's limit detail + upgrade link on 403", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      statusText: "Forbidden",
+      headers: { get: () => null },
+      text: async () =>
+        JSON.stringify({
+          error: "FEATURE_GATE",
+          message: "Futures data requires the Professional plan",
+        }),
+    });
+
+    const error = await makeApiRequest(
+      "/v1/futures/ice-brent",
+      mockFetch as typeof fetch,
+    ).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ApiGateError);
+    expect((error as ApiGateError).status).toBe(403);
+    expect((error as ApiGateError).message).toContain(
+      "Futures data requires the Professional plan",
+    );
+    expect((error as ApiGateError).message).toContain(UPGRADE_URL);
+    expect(mockFetch).toHaveBeenCalledTimes(1); // no retry on 403
+  });
+
+  it("throws ApiGateError with upgrade link on 402", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 402,
+      statusText: "Payment Required",
+      headers: { get: () => null },
+      text: async () => "",
+    });
+
+    const error = await makeApiRequest(
+      "/v1/prices/latest",
+      mockFetch as typeof fetch,
+    ).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ApiGateError);
+    expect((error as ApiGateError).message).toContain("402");
+    expect((error as ApiGateError).message).toContain(UPGRADE_URL);
+  });
+});
+
+describe("tier-limit gate errors (#17) - alertHttpError", () => {
+  it("appends the upgrade link on 429 with the API's exact limit", () => {
+    const msg = alertHttpError(
+      {
+        ok: false,
+        status: 429,
+        body: { message: "Rate limit exceeded: 200 requests/month" },
+      },
+      "get the market brief",
+    );
+
+    expect(msg).toContain("Rate limit exceeded: 200 requests/month");
+    expect(msg).toContain(UPGRADE_URL);
+  });
+
+  it("appends the upgrade link on 403", () => {
+    const msg = alertHttpError(
+      { ok: false, status: 403, body: { error: "plan_gate" } },
+      "create the price subscription",
+    );
+    expect(msg).toContain(UPGRADE_URL);
+  });
+
+  it("keeps the 422 watch-limit message verbatim (existing idiom) without the nudge", () => {
+    const msg = alertHttpError(
+      {
+        ok: false,
+        status: 422,
+        body: {
+          error: "WATCH_LIMIT",
+          message: "Your plan allows up to 1 active watches. Upgrade for more.",
+        },
+      },
+      "create the price subscription",
+    );
+    expect(msg).toContain("Your plan allows up to 1 active watches");
+    expect(msg).not.toContain(UPGRADE_URL);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// v2.4.0 — Keyed behavior unchanged
+// ---------------------------------------------------------------------------
+
+describe("keyed behavior unchanged", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("sends the Bearer key and hits the normal endpoint when a key is set", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+
+    const mockPayload = {
+      status: "success",
+      data: { code: "BRENT_CRUDE_USD", price: 85.0, currency: "USD" },
+    };
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => mockPayload,
+      headers: { get: () => null },
+    });
+
+    const result = await makeApiRequest(
+      "/v1/prices/latest?by_code=BRENT_CRUDE_USD",
+      mockFetch as typeof fetch,
+    );
+
+    expect(result).toEqual(mockPayload);
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(String(url)).toContain("/v1/prices/latest?by_code=BRENT_CRUDE_USD");
+    expect(String(url)).not.toContain("/v1/demo/");
+    expect(init.headers.Authorization).toBe("Bearer test-key-123");
   });
 });
