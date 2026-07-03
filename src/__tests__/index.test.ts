@@ -20,6 +20,7 @@ import {
   DEMO_FOOTER,
   SIGNUP_URL,
   UPGRADE_URL,
+  createSandboxServer,
 } from "../index.js";
 
 // ---------------------------------------------------------------------------
@@ -979,5 +980,108 @@ describe("keyed behavior unchanged", () => {
     expect(String(url)).toContain("/v1/prices/latest?by_code=BRENT_CRUDE_USD");
     expect(String(url)).not.toContain("/v1/demo/");
     expect(init.headers.Authorization).toBe("Bearer test-key-123");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tool registration metadata (Claude Connectors Directory requirements)
+// ---------------------------------------------------------------------------
+
+interface RegisteredToolInfo {
+  title?: string;
+  description?: string;
+  annotations?: {
+    readOnlyHint?: boolean;
+    destructiveHint?: boolean;
+    idempotentHint?: boolean;
+    openWorldHint?: boolean;
+  };
+}
+
+describe("tool registration metadata", () => {
+  const server = createSandboxServer();
+  const tools = (
+    server as unknown as {
+      _registeredTools: Record<string, RegisteredToolInfo>;
+    }
+  )._registeredTools;
+
+  const CREATE_TOOLS = [
+    "opa_create_price_alert",
+    "opa_create_price_subscription",
+  ];
+  const DELETE_TOOLS = ["opa_delete_price_alert", "opa_delete_subscription"];
+  const WRITE_TOOLS = new Set([...CREATE_TOOLS, ...DELETE_TOOLS]);
+
+  it("registers exactly 26 tools", () => {
+    expect(Object.keys(tools)).toHaveLength(26);
+  });
+
+  it("registers all four write tools (creates + deletes)", () => {
+    for (const name of WRITE_TOOLS) {
+      expect(tools[name], name).toBeDefined();
+    }
+  });
+
+  it("every tool has a human-readable title", () => {
+    for (const [name, tool] of Object.entries(tools)) {
+      expect(tool.title, `${name} title`).toBeTypeOf("string");
+      expect(tool.title!.length, `${name} title is empty`).toBeGreaterThan(0);
+      // Titles are human names ("Get Commodity Price"), not tool ids.
+      expect(tool.title, `${name} title looks like a tool id`).not.toMatch(
+        /^opa_|_/,
+      );
+    }
+  });
+
+  it("every tool has a description", () => {
+    for (const [name, tool] of Object.entries(tools)) {
+      expect(tool.description, `${name} description`).toBeTypeOf("string");
+      expect(
+        tool.description!.length,
+        `${name} description is empty`,
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it("every tool has annotations with openWorldHint: true (external API)", () => {
+    for (const [name, tool] of Object.entries(tools)) {
+      expect(tool.annotations, `${name} annotations`).toBeDefined();
+      expect(tool.annotations!.openWorldHint, `${name} openWorldHint`).toBe(
+        true,
+      );
+    }
+  });
+
+  it("all non-write tools are read-only", () => {
+    for (const [name, tool] of Object.entries(tools)) {
+      if (WRITE_TOOLS.has(name)) continue;
+      expect(tool.annotations, `${name} annotations`).toEqual({
+        readOnlyHint: true,
+        openWorldHint: true,
+      });
+    }
+  });
+
+  it("create tools are non-read-only, non-destructive, non-idempotent", () => {
+    for (const name of CREATE_TOOLS) {
+      expect(tools[name].annotations, `${name} annotations`).toEqual({
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: true,
+      });
+    }
+  });
+
+  it("delete tools are destructive and idempotent", () => {
+    for (const name of DELETE_TOOLS) {
+      expect(tools[name].annotations, `${name} annotations`).toEqual({
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
+      });
+    }
   });
 });

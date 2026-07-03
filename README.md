@@ -29,18 +29,18 @@ npx oilpriceapi-mcp
 
 The 10 most-polled commodities across our customer base:
 
-| Code | What it is | Typical agent use |
-| --- | --- | --- |
-| `BRENT_CRUDE_USD` | Brent crude (global) | market briefings, dashboards |
-| `WTI_USD` | WTI crude (US) | trading context, macro models |
-| `NATURAL_GAS_USD` | Henry Hub natural gas | energy analytics |
-| `DUTCH_TTF_EUR` | TTF gas (Europe) | European energy, LNG analysis |
-| `JKM_LNG_USD` | JKM LNG (Asia) | LNG trading & shipping |
-| `EU_CARBON_EUR` | EU ETS carbon allowances | CBAM, maritime compliance, ESG |
-| `DIESEL_USD` | Diesel (Gulf Coast) | fleet & fuel-surcharge math |
-| `JET_FUEL_USD` | Jet fuel | aviation ops |
-| `VLSFO_USD` | Marine bunker fuel | voyage costing |
-| `GOLD_USD` | Gold | macro & portfolio context |
+| Code              | What it is               | Typical agent use              |
+| ----------------- | ------------------------ | ------------------------------ |
+| `BRENT_CRUDE_USD` | Brent crude (global)     | market briefings, dashboards   |
+| `WTI_USD`         | WTI crude (US)           | trading context, macro models  |
+| `NATURAL_GAS_USD` | Henry Hub natural gas    | energy analytics               |
+| `DUTCH_TTF_EUR`   | TTF gas (Europe)         | European energy, LNG analysis  |
+| `JKM_LNG_USD`     | JKM LNG (Asia)           | LNG trading & shipping         |
+| `EU_CARBON_EUR`   | EU ETS carbon allowances | CBAM, maritime compliance, ESG |
+| `DIESEL_USD`      | Diesel (Gulf Coast)      | fleet & fuel-surcharge math    |
+| `JET_FUEL_USD`    | Jet fuel                 | aviation ops                   |
+| `VLSFO_USD`       | Marine bunker fuel       | voyage costing                 |
+| `GOLD_USD`        | Gold                     | macro & portfolio context      |
 
 ## Installation
 
@@ -275,18 +275,30 @@ OILPRICEAPI_KEY=your-key node build/index.js
 
 Same data, every stack:
 
-| Tool | Install |
-| --- | --- |
-| [Python SDK](https://github.com/OilpriceAPI/python-sdk) | `pip install oilpriceapi` |
-| [Node/TypeScript SDK](https://github.com/OilpriceAPI/oilpriceapi-node) | `npm install oilpriceapi` |
-| [PHP SDK](https://github.com/OilpriceAPI/oilpriceapi-php) | `composer require oilpriceapi/oilpriceapi` |
-| [Go SDK](https://github.com/OilpriceAPI/oilpriceapi-go) | `go get github.com/OilpriceAPI/oilpriceapi-go` |
-| [WordPress plugin](https://github.com/OilpriceAPI/oilpriceapi-wordpress-plugin) | no-code price widgets |
+| Tool                                                                            | Install                                        |
+| ------------------------------------------------------------------------------- | ---------------------------------------------- |
+| [Python SDK](https://github.com/OilpriceAPI/python-sdk)                         | `pip install oilpriceapi`                      |
+| [Node/TypeScript SDK](https://github.com/OilpriceAPI/oilpriceapi-node)          | `npm install oilpriceapi`                      |
+| [PHP SDK](https://github.com/OilpriceAPI/oilpriceapi-php)                       | `composer require oilpriceapi/oilpriceapi`     |
+| [Go SDK](https://github.com/OilpriceAPI/oilpriceapi-go)                         | `go get github.com/OilpriceAPI/oilpriceapi-go` |
+| [WordPress plugin](https://github.com/OilpriceAPI/oilpriceapi-wordpress-plugin) | no-code price widgets                          |
 
 ## Explore the API
 
 - 🧭 **Interactive explorer**: [api.oilpriceapi.com/swagger](https://api.oilpriceapi.com/swagger) — try every endpoint in the browser (demo mode, no key needed)
 - 📜 **OpenAPI spec**: [swagger.json](https://api.oilpriceapi.com/swagger.json)
+
+## Privacy Policy
+
+This MCP server runs locally on your machine and only communicates with the OilPriceAPI service:
+
+- **What is sent**: tool requests are translated into HTTPS calls to `api.oilpriceapi.com` (commodity codes, query parameters such as time period or state, and — for alert/subscription tools — the alert parameters you specify), authenticated with your API key. **No conversation content is transmitted** — only the structured tool inputs above.
+- **API key storage**: your key is stored locally in your MCP client's configuration (or the `OILPRICEAPI_KEY` environment variable). It is sent only to `api.oilpriceapi.com` as an Authorization header.
+- **Logging**: API requests are logged by OilPriceAPI as described in the [OilPriceAPI Privacy Policy](https://www.oilpriceapi.com/privacy).
+- **Third parties**: no data is shared with third parties beyond what that policy describes.
+- **Demo mode**: without an API key, price tools call the keyless demo endpoint on the same host; no key or account data is involved.
+
+Questions: [support@oilpriceapi.com](mailto:support@oilpriceapi.com)
 
 ## License
 
