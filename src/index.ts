@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * OilPriceAPI MCP Server v2.4.0
+ * OilPriceAPI MCP Server v2.4.2
  *
  * The energy commodity MCP server. Real-time oil, gas, and commodity prices
  * for Claude, Cursor, VS Code, and any MCP-compatible client.
@@ -47,7 +47,7 @@ import { z } from "zod";
 // API Configuration
 const API_BASE =
   process.env.OILPRICEAPI_BASE_URL || "https://api.oilpriceapi.com";
-export const USER_AGENT = "oilpriceapi-mcp/2.4.0";
+export const USER_AGENT = "oilpriceapi-mcp/2.4.2";
 
 /**
  * Get the API key from the environment. Read dynamically (not captured at
@@ -460,8 +460,39 @@ interface DrillingData {
 
 const server = new McpServer({
   name: "oilpriceapi",
-  version: "2.4.0",
+  version: "2.4.2",
 });
+
+// ---------------------------------------------------------------------------
+// Tool annotation presets (MCP ToolAnnotations behavior hints).
+//
+// - Read tools only fetch data from the external OilPriceAPI service:
+//   readOnlyHint (no environment changes) + openWorldHint (external API).
+// - Create tools add an alert/subscription on the user's account: not
+//   read-only, not destructive, not idempotent (repeat calls create
+//   duplicates).
+// - Delete tools remove an alert/subscription: destructive, but idempotent
+//   (deleting the same id again has no further effect).
+// ---------------------------------------------------------------------------
+
+export const READ_TOOL_ANNOTATIONS = {
+  readOnlyHint: true,
+  openWorldHint: true,
+} as const;
+
+export const CREATE_TOOL_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: true,
+} as const;
+
+export const DELETE_TOOL_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1362,15 +1393,20 @@ export function keylessTeaserResult(toolName: string) {
 // price-alert tools further below, for 21 tools total.
 // =========================================================================
 
-server.tool(
+server.registerTool(
   "opa_get_price",
-  "Get the current real-time spot price of an energy commodity. Use when the user asks about a single commodity's current price. Accepts natural language ('brent oil', 'diesel') or API codes ('WTI_USD'). Returns price, currency, 24h change, and timestamp. For multiple commodities at once, use opa_market_overview. For price trends, use opa_get_history.",
   {
-    commodity: z
-      .string()
-      .describe(
-        "Commodity name or code (e.g., 'brent oil', 'natural gas', 'WTI_USD', 'diesel')",
-      ),
+    title: "Get Commodity Price",
+    description:
+      "Get the current real-time spot price of an energy commodity. Use when the user asks about a single commodity's current price. Accepts natural language ('brent oil', 'diesel') or API codes ('WTI_USD'). Returns price, currency, 24h change, and timestamp. For multiple commodities at once, use opa_market_overview. For price trends, use opa_get_history.",
+    inputSchema: {
+      commodity: z
+        .string()
+        .describe(
+          "Commodity name or code (e.g., 'brent oil', 'natural gas', 'WTI_USD', 'diesel')",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
   },
   async ({ commodity }) => {
     // Keyless demo mode (#16): serve from /v1/demo/prices.
@@ -1395,16 +1431,21 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_market_overview",
-  "Get current prices for all tracked energy commodities in one call. Use when the user wants a broad market snapshot or asks about overall energy prices. Returns prices grouped by category (oil, gas, coal, refined products, metals, forex) with 24h changes. Supports filtering by category. For a single commodity, use opa_get_price instead.",
   {
-    category: z
-      .enum(["all", "oil", "gas", "coal", "refined", "metals", "forex"])
-      .optional()
-      .describe(
-        "Filter by commodity category (default: all). Options: oil, gas, coal, refined, metals, forex.",
-      ),
+    title: "Energy Market Overview",
+    description:
+      "Get current prices for all tracked energy commodities in one call. Use when the user wants a broad market snapshot or asks about overall energy prices. Returns prices grouped by category (oil, gas, coal, refined products, metals, forex) with 24h changes. Supports filtering by category. For a single commodity, use opa_get_price instead.",
+    inputSchema: {
+      category: z
+        .enum(["all", "oil", "gas", "coal", "refined", "metals", "forex"])
+        .optional()
+        .describe(
+          "Filter by commodity category (default: all). Options: oil, gas, coal, refined, metals, forex.",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
   },
   async ({ category = "all" }) => {
     // Keyless demo mode (#16): serve from /v1/demo/prices.
@@ -1526,17 +1567,22 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_compare_prices",
-  "Compare current prices between 2-5 commodities side by side. Use when the user asks to compare commodities (e.g., 'Brent vs WTI', 'US gas vs EU gas'). Returns each commodity's price with 24h changes, plus the spread if comparing two same-currency commodities. Accepts natural language or codes.",
   {
-    commodities: z
-      .array(z.string())
-      .min(2)
-      .max(5)
-      .describe(
-        "List of 2-5 commodity names or codes to compare (e.g., ['brent', 'wti'] or ['NATURAL_GAS_USD', 'DUTCH_TTF_EUR'])",
-      ),
+    title: "Compare Commodity Prices",
+    description:
+      "Compare current prices between 2-5 commodities side by side. Use when the user asks to compare commodities (e.g., 'Brent vs WTI', 'US gas vs EU gas'). Returns each commodity's price with 24h changes, plus the spread if comparing two same-currency commodities. Accepts natural language or codes.",
+    inputSchema: {
+      commodities: z
+        .array(z.string())
+        .min(2)
+        .max(5)
+        .describe(
+          "List of 2-5 commodity names or codes to compare (e.g., ['brent', 'wti'] or ['NATURAL_GAS_USD', 'DUTCH_TTF_EUR'])",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
   },
   async ({ commodities }) => {
     // Keyless demo mode (#16): compare within the demo set.
@@ -1598,10 +1644,15 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_list_commodities",
-  "List all available commodities that can be queried for prices. Use when the user asks what commodities are available, what codes to use, or when another tool returns a 'commodity not recognized' error. Returns the full catalog fetched live from the API, grouped by category. No parameters needed.",
-  {},
+  {
+    title: "List Available Commodities",
+    description:
+      "List all available commodities that can be queried for prices. Use when the user asks what commodities are available, what codes to use, or when another tool returns a 'commodity not recognized' error. Returns the full catalog fetched live from the API, grouped by category. No parameters needed.",
+    inputSchema: {},
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
   async () => {
     // Keyless demo mode (#16): list the demo commodity set.
     if (!getApiKey()) return demoListCommoditiesResult();
@@ -1695,17 +1746,22 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_get_history",
-  "Get historical price data for a commodity over a time period. Use when the user asks about price trends, historical prices, or how a commodity has performed over time. Returns high, low, average, change, and data point count. Periods: day (24h), week (7d), month (30d), year (365d).",
   {
-    commodity: z
-      .string()
-      .describe("Commodity name or code (e.g., 'brent', 'WTI_USD')"),
-    period: z
-      .enum(["day", "week", "month", "year"])
-      .default("month")
-      .describe("Time period: day, week, month, or year (default: month)"),
+    title: "Get Price History",
+    description:
+      "Get historical price data for a commodity over a time period. Use when the user asks about price trends, historical prices, or how a commodity has performed over time. Returns high, low, average, change, and data point count. Periods: day (24h), week (7d), month (30d), year (365d).",
+    inputSchema: {
+      commodity: z
+        .string()
+        .describe("Commodity name or code (e.g., 'brent', 'WTI_USD')"),
+      period: z
+        .enum(["day", "week", "month", "year"])
+        .default("month")
+        .describe("Time period: day, week, month, or year (default: month)"),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
   },
   async ({ commodity, period }) => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_history");
@@ -1762,16 +1818,21 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_get_futures",
-  "Get the latest front-month futures contract price for energy commodities. Use when the user asks about futures, forward prices, or contract prices. Supports crude oil (BZ/ice-brent = Brent, CL/ice-wti = WTI), ICE Gasoil (ice-gasoil), natural gas (natural-gas), European TTF gas (ttf-gas), LNG JKM (lng-jkm), EUA carbon (eua-carbon), and UK carbon (uk-carbon). For the full forward curve across all contract months, use opa_get_futures_curve instead.",
   {
-    contract: z
-      .enum(FUTURES_CONTRACTS)
-      .default("BZ")
-      .describe(
-        "Futures contract code or slug: BZ/ice-brent = Brent crude, CL/ice-wti = WTI crude, ice-gasoil (G/QS) = ICE Gasoil, natural-gas (NG) = Natural Gas, ttf-gas (TTF) = European TTF natural gas, lng-jkm (JKM) = LNG JKM (Asia), eua-carbon (EUA) = EU carbon allowance, uk-carbon (UKA) = UK carbon allowance (default: BZ)",
-      ),
+    title: "Get Futures Price",
+    description:
+      "Get the latest front-month futures contract price for energy commodities. Use when the user asks about futures, forward prices, or contract prices. Supports crude oil (BZ/ice-brent = Brent, CL/ice-wti = WTI), ICE Gasoil (ice-gasoil), natural gas (natural-gas), European TTF gas (ttf-gas), LNG JKM (lng-jkm), EUA carbon (eua-carbon), and UK carbon (uk-carbon). For the full forward curve across all contract months, use opa_get_futures_curve instead.",
+    inputSchema: {
+      contract: z
+        .enum(FUTURES_CONTRACTS)
+        .default("BZ")
+        .describe(
+          "Futures contract code or slug: BZ/ice-brent = Brent crude, CL/ice-wti = WTI crude, ice-gasoil (G/QS) = ICE Gasoil, natural-gas (NG) = Natural Gas, ttf-gas (TTF) = European TTF natural gas, lng-jkm (JKM) = LNG JKM (Asia), eua-carbon (EUA) = EU carbon allowance, uk-carbon (UKA) = UK carbon allowance (default: BZ)",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
   },
   async ({ contract }) => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_futures");
@@ -1805,16 +1866,21 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_get_futures_curve",
-  "Get the full futures forward curve showing prices across all contract months. Use when the user asks about the forward curve, contango/backwardation, or term structure. Supports crude oil (BZ/ice-brent = Brent, CL/ice-wti = WTI), ICE Gasoil (ice-gasoil), natural gas (natural-gas), European TTF gas (ttf-gas), LNG JKM (lng-jkm), EUA carbon (eua-carbon), and UK carbon (uk-carbon). Returns a table of contract months with settlement prices, plus market structure analysis.",
   {
-    contract: z
-      .enum(FUTURES_CONTRACTS)
-      .default("BZ")
-      .describe(
-        "Futures contract code or slug: BZ/ice-brent = Brent crude, CL/ice-wti = WTI crude, ice-gasoil (G/QS) = ICE Gasoil, natural-gas (NG) = Natural Gas, ttf-gas (TTF) = European TTF natural gas, lng-jkm (JKM) = LNG JKM (Asia), eua-carbon (EUA) = EU carbon allowance, uk-carbon (UKA) = UK carbon allowance (default: BZ)",
-      ),
+    title: "Get Futures Curve",
+    description:
+      "Get the full futures forward curve showing prices across all contract months. Use when the user asks about the forward curve, contango/backwardation, or term structure. Supports crude oil (BZ/ice-brent = Brent, CL/ice-wti = WTI), ICE Gasoil (ice-gasoil), natural gas (natural-gas), European TTF gas (ttf-gas), LNG JKM (lng-jkm), EUA carbon (eua-carbon), and UK carbon (uk-carbon). Returns a table of contract months with settlement prices, plus market structure analysis.",
+    inputSchema: {
+      contract: z
+        .enum(FUTURES_CONTRACTS)
+        .default("BZ")
+        .describe(
+          "Futures contract code or slug: BZ/ice-brent = Brent crude, CL/ice-wti = WTI crude, ice-gasoil (G/QS) = ICE Gasoil, natural-gas (NG) = Natural Gas, ttf-gas (TTF) = European TTF natural gas, lng-jkm (JKM) = LNG JKM (Asia), eua-carbon (EUA) = EU carbon allowance, uk-carbon (UKA) = UK carbon allowance (default: BZ)",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
   },
   async ({ contract }) => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_futures_curve");
@@ -1853,20 +1919,25 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_get_marine_fuels",
-  "Get latest marine fuel (bunker) prices across major shipping ports. Use when the user asks about bunker fuel, marine fuel, VLSFO, MGO, IFO380, or shipping fuel costs. Can filter by port (e.g., SINGAPORE, ROTTERDAM, HOUSTON) and/or fuel type (VLSFO, MGO, IFO380). Returns a table of port prices.",
   {
-    port: z
-      .string()
-      .optional()
-      .describe(
-        "Filter by port name (e.g., 'SINGAPORE', 'ROTTERDAM', 'HOUSTON')",
-      ),
-    fuel_type: z
-      .string()
-      .optional()
-      .describe("Filter by fuel type: VLSFO, MGO, or IFO380"),
+    title: "Get Marine Fuel Prices",
+    description:
+      "Get latest marine fuel (bunker) prices across major shipping ports. Use when the user asks about bunker fuel, marine fuel, VLSFO, MGO, IFO380, or shipping fuel costs. Can filter by port (e.g., SINGAPORE, ROTTERDAM, HOUSTON) and/or fuel type (VLSFO, MGO, IFO380). Returns a table of port prices.",
+    inputSchema: {
+      port: z
+        .string()
+        .optional()
+        .describe(
+          "Filter by port name (e.g., 'SINGAPORE', 'ROTTERDAM', 'HOUSTON')",
+        ),
+      fuel_type: z
+        .string()
+        .optional()
+        .describe("Filter by fuel type: VLSFO, MGO, or IFO380"),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
   },
   async ({ port, fuel_type }) => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_marine_fuels");
@@ -1905,10 +1976,15 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_get_rig_counts",
-  "Get the latest US oil and gas rig count data (Baker Hughes). Use when the user asks about drilling activity, rig counts, or oil field operations. Returns oil rigs, gas rigs, total count, and week-over-week change. No parameters needed.",
-  {},
+  {
+    title: "Get US Rig Counts",
+    description:
+      "Get the latest US oil and gas rig count data (Baker Hughes). Use when the user asks about drilling activity, rig counts, or oil field operations. Returns oil rigs, gas rigs, total count, and week-over-week change. No parameters needed.",
+    inputSchema: {},
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
   async () => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_rig_counts");
 
@@ -1938,10 +2014,15 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_get_drilling",
-  "Get drilling intelligence data including active wells, permits issued, and completions by region. Use when the user asks about drilling activity, well permits, or upstream operations. Returns totals and regional breakdown.",
-  {},
+  {
+    title: "Get Drilling Activity",
+    description:
+      "Get drilling intelligence data including active wells, permits issued, and completions by region. Use when the user asks about drilling activity, well permits, or upstream operations. Returns totals and regional breakdown.",
+    inputSchema: {},
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
   async () => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_drilling");
 
@@ -1982,15 +2063,20 @@ server.tool(
 // NEW TOOLS — Sprint 3
 // ---------------------------------------------------------------------------
 
-server.tool(
+server.registerTool(
   "opa_get_diesel_by_state",
-  "Get the current average retail diesel price for a US state. Use when the user asks about diesel prices in a specific state, diesel fuel costs by state, or state-level fuel prices. Accepts state names ('California') or 2-letter codes ('CA'). Returns the AAA-sourced state average diesel price. Covers all 50 states plus DC.",
   {
-    state: z
-      .string()
-      .describe(
-        "US state name or 2-letter code (e.g., 'California', 'CA', 'Texas', 'TX')",
-      ),
+    title: "Get Diesel Price by State",
+    description:
+      "Get the current average retail diesel price for a US state. Use when the user asks about diesel prices in a specific state, diesel fuel costs by state, or state-level fuel prices. Accepts state names ('California') or 2-letter codes ('CA'). Returns the AAA-sourced state average diesel price. Covers all 50 states plus DC.",
+    inputSchema: {
+      state: z
+        .string()
+        .describe(
+          "US state name or 2-letter code (e.g., 'California', 'CA', 'Texas', 'TX')",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
   },
   async ({ state }) => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_diesel_by_state");
@@ -2031,16 +2117,21 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_get_storage",
-  "Get oil storage and inventory levels for Cushing, Oklahoma (WTI delivery hub) and/or the US Strategic Petroleum Reserve (SPR). Use when the user asks about oil inventories, storage levels, Cushing stocks, or the SPR. Returns current inventory levels with changes.",
   {
-    facility: z
-      .enum(["cushing", "spr", "all"])
-      .default("all")
-      .describe(
-        "Storage facility: cushing (WTI delivery hub), spr (Strategic Petroleum Reserve), or all (default: all)",
-      ),
+    title: "Get Oil Storage Levels",
+    description:
+      "Get oil storage and inventory levels for Cushing, Oklahoma (WTI delivery hub) and/or the US Strategic Petroleum Reserve (SPR). Use when the user asks about oil inventories, storage levels, Cushing stocks, or the SPR. Returns current inventory levels with changes.",
+    inputSchema: {
+      facility: z
+        .enum(["cushing", "spr", "all"])
+        .default("all")
+        .describe(
+          "Storage facility: cushing (WTI delivery hub), spr (Strategic Petroleum Reserve), or all (default: all)",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
   },
   async ({ facility }) => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_storage");
@@ -2086,10 +2177,15 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_get_opec_production",
-  "Get the latest OPEC oil production data. Use when the user asks about OPEC output, production quotas, supply cuts, or OPEC+ compliance. Returns country-level production figures. Requires a paid plan with energy intelligence access.",
-  {},
+  {
+    title: "Get OPEC Production",
+    description:
+      "Get the latest OPEC oil production data. Use when the user asks about OPEC output, production quotas, supply cuts, or OPEC+ compliance. Returns country-level production figures. Requires a paid plan with energy intelligence access.",
+    inputSchema: {},
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
   async () => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_opec_production");
 
@@ -2111,10 +2207,15 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_get_forecasts",
-  "Get energy price forecasts from EIA Short-Term Energy Outlook (STEO) and other sources. Use when the user asks about price predictions, outlooks, or where oil/gas prices are heading. Returns forecast data for key commodities. Requires a paid plan with energy intelligence access.",
-  {},
+  {
+    title: "Get Price Forecasts",
+    description:
+      "Get energy price forecasts from EIA Short-Term Energy Outlook (STEO) and other sources. Use when the user asks about price predictions, outlooks, or where oil/gas prices are heading. Returns forecast data for key commodities. Requires a paid plan with energy intelligence access.",
+    inputSchema: {},
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
   async () => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_forecasts");
 
@@ -2141,16 +2242,21 @@ server.tool(
 // NEW TOOLS — Sprint 4 (EIA inventories, well permits, refining spreads)
 // ---------------------------------------------------------------------------
 
-server.tool(
+server.registerTool(
   "opa_get_oil_inventories",
-  "Get the latest EIA weekly petroleum inventory (stocks) data. Use when the user asks about oil inventories, crude stocks, weekly EIA stocks, inventory builds/draws, or product-level inventory levels. Returns the latest weekly figures; optionally a summary view or a breakdown by petroleum product. Requires a paid plan with energy intelligence access.",
   {
-    view: z
-      .enum(["latest", "summary", "by_product"])
-      .default("latest")
-      .describe(
-        "Which view to return: latest (most recent weekly snapshot), summary (headline totals + week-over-week change), or by_product (breakdown per petroleum product). Default: latest.",
-      ),
+    title: "Get EIA Oil Inventories",
+    description:
+      "Get the latest EIA weekly petroleum inventory (stocks) data. Use when the user asks about oil inventories, crude stocks, weekly EIA stocks, inventory builds/draws, or product-level inventory levels. Returns the latest weekly figures; optionally a summary view or a breakdown by petroleum product. Requires a paid plan with energy intelligence access.",
+    inputSchema: {
+      view: z
+        .enum(["latest", "summary", "by_product"])
+        .default("latest")
+        .describe(
+          "Which view to return: latest (most recent weekly snapshot), summary (headline totals + week-over-week change), or by_product (breakdown per petroleum product). Default: latest.",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
   },
   async ({ view }) => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_oil_inventories");
@@ -2180,22 +2286,27 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_get_well_permits",
-  "Get the latest US oil & gas well drilling permit data. Use when the user asks about well permits, new drilling permits, permitting activity, or upstream permit trends. Returns the latest permits; optionally filtered/aggregated by state or by operator. Requires a paid plan with energy intelligence access.",
   {
-    view: z
-      .enum(["latest", "by_state", "by_operator"])
-      .default("latest")
-      .describe(
-        "Which view to return: latest (most recent permits), by_state (counts aggregated per state), or by_operator (counts aggregated per operator). Default: latest.",
-      ),
-    state: z
-      .string()
-      .optional()
-      .describe(
-        "Optional US state name or 2-letter code to filter permits (e.g., 'Texas', 'TX'). Applies to the latest and by_state views.",
-      ),
+    title: "Get Well Permits",
+    description:
+      "Get the latest US oil & gas well drilling permit data. Use when the user asks about well permits, new drilling permits, permitting activity, or upstream permit trends. Returns the latest permits; optionally filtered/aggregated by state or by operator. Requires a paid plan with energy intelligence access.",
+    inputSchema: {
+      view: z
+        .enum(["latest", "by_state", "by_operator"])
+        .default("latest")
+        .describe(
+          "Which view to return: latest (most recent permits), by_state (counts aggregated per state), or by_operator (counts aggregated per operator). Default: latest.",
+        ),
+      state: z
+        .string()
+        .optional()
+        .describe(
+          "Optional US state name or 2-letter code to filter permits (e.g., 'Texas', 'TX'). Applies to the latest and by_state views.",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
   },
   async ({ view, state }) => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_well_permits");
@@ -2235,15 +2346,20 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_get_spread",
-  "Get refining and trading spreads: crack spreads (refining margin proxy), basis spreads (regional price differentials), and blending/transport margins. Use when the user asks about crack spreads, 3-2-1 crack, refining margins, basis differentials, or blend/transport margins. Requires a paid plan with energy intelligence access.",
   {
-    type: z
-      .enum(["crack", "basis", "margin"])
-      .describe(
-        "Spread type: crack (refining crack spread, e.g. 3-2-1), basis (regional/grade price differential), or margin (blending/transport margin).",
-      ),
+    title: "Get Refining & Trading Spreads",
+    description:
+      "Get refining and trading spreads: crack spreads (refining margin proxy), basis spreads (regional price differentials), and blending/transport margins. Use when the user asks about crack spreads, 3-2-1 crack, refining margins, basis differentials, or blend/transport margins. Requires a paid plan with energy intelligence access.",
+    inputSchema: {
+      type: z
+        .enum(["crack", "basis", "margin"])
+        .describe(
+          "Spread type: crack (refining crack spread, e.g. 3-2-1), basis (regional/grade price differential), or margin (blending/transport margin).",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
   },
   async ({ type }) => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_spread");
@@ -2307,46 +2423,51 @@ function formatAlertLine(a: AlertRecord): string {
   return `- **${a.name || label}** (id: \`${a.id}\`) — ${label} [${status}${triggers}${last}]`;
 }
 
-server.tool(
+server.registerTool(
   "opa_create_price_alert",
-  "Create a PERSISTENT price alert tied to the user's OilPriceAPI account. " +
-    "The alert engine continuously watches live prices and notifies the user (by " +
-    "email, plus webhook if a URL is given) when the commodity price crosses the " +
-    "threshold. Use when the user asks to be alerted/notified when a price goes " +
-    "above or below a level (e.g. 'tell me when Brent drops below $70'). " +
-    "REQUIRES an API key (OILPRICEAPI_KEY) — this writes to the user's account. " +
-    "Alerts persist until deleted; manage them with opa_list_price_alerts and " +
-    "opa_delete_price_alert.",
   {
-    commodity: z
-      .string()
-      .describe(
-        "Commodity name or code to watch (e.g., 'brent', 'natural gas', 'WTI_USD').",
-      ),
-    operator: z
-      .enum(ALERT_OPERATORS)
-      .describe(
-        "Threshold comparison: greater_than, less_than, equals, greater_than_or_equal, or less_than_or_equal. The alert fires when (current price) <operator> (threshold).",
-      ),
-    threshold: z
-      .number()
-      .positive()
-      .describe(
-        "The price threshold to compare against, in the commodity's native currency (e.g., 70 for $70/barrel).",
-      ),
-    name: z
-      .string()
-      .optional()
-      .describe(
-        "Optional human-readable label for the alert. If omitted, a descriptive name is generated.",
-      ),
-    notify: z
-      .string()
-      .url()
-      .optional()
-      .describe(
-        "Optional HTTPS webhook URL to POST to when the alert triggers (in addition to email). Must start with https://.",
-      ),
+    title: "Create Price Alert",
+    description:
+      "Create a PERSISTENT price alert tied to the user's OilPriceAPI account. " +
+      "The alert engine continuously watches live prices and notifies the user (by " +
+      "email, plus webhook if a URL is given) when the commodity price crosses the " +
+      "threshold. Use when the user asks to be alerted/notified when a price goes " +
+      "above or below a level (e.g. 'tell me when Brent drops below $70'). " +
+      "REQUIRES an API key (OILPRICEAPI_KEY) — this writes to the user's account. " +
+      "Alerts persist until deleted; manage them with opa_list_price_alerts and " +
+      "opa_delete_price_alert.",
+    inputSchema: {
+      commodity: z
+        .string()
+        .describe(
+          "Commodity name or code to watch (e.g., 'brent', 'natural gas', 'WTI_USD').",
+        ),
+      operator: z
+        .enum(ALERT_OPERATORS)
+        .describe(
+          "Threshold comparison: greater_than, less_than, equals, greater_than_or_equal, or less_than_or_equal. The alert fires when (current price) <operator> (threshold).",
+        ),
+      threshold: z
+        .number()
+        .positive()
+        .describe(
+          "The price threshold to compare against, in the commodity's native currency (e.g., 70 for $70/barrel).",
+        ),
+      name: z
+        .string()
+        .optional()
+        .describe(
+          "Optional human-readable label for the alert. If omitted, a descriptive name is generated.",
+        ),
+      notify: z
+        .string()
+        .url()
+        .optional()
+        .describe(
+          "Optional HTTPS webhook URL to POST to when the alert triggers (in addition to email). Must start with https://.",
+        ),
+    },
+    annotations: CREATE_TOOL_ANNOTATIONS,
   },
   async ({ commodity, operator, threshold, name, notify }) => {
     const keyErr = requireApiKey("opa_create_price_alert");
@@ -2395,13 +2516,18 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_list_price_alerts",
-  "List all PERSISTENT price alerts on the user's OilPriceAPI account. Use when " +
-    "the user asks what alerts they have set up, or to find an alert's id before " +
-    "deleting it. REQUIRES an API key (OILPRICEAPI_KEY) — alerts are account-scoped. " +
-    "No parameters needed.",
-  {},
+  {
+    title: "List Price Alerts",
+    description:
+      "List all PERSISTENT price alerts on the user's OilPriceAPI account. Use when " +
+      "the user asks what alerts they have set up, or to find an alert's id before " +
+      "deleting it. REQUIRES an API key (OILPRICEAPI_KEY) — alerts are account-scoped. " +
+      "No parameters needed.",
+    inputSchema: {},
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
   async () => {
     const keyErr = requireApiKey("opa_list_price_alerts");
     if (keyErr) return keyErr;
@@ -2428,18 +2554,23 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_delete_price_alert",
-  "Permanently delete a price alert from the user's OilPriceAPI account by id. " +
-    "Use when the user wants to remove/cancel/stop an existing alert. Get the id " +
-    "from opa_list_price_alerts first. This permanently removes the alert from the " +
-    "user's account. REQUIRES an API key (OILPRICEAPI_KEY).",
   {
-    id: z
-      .string()
-      .describe(
-        "The id of the alert to delete (a UUID, as returned by opa_list_price_alerts or opa_create_price_alert).",
-      ),
+    title: "Delete Price Alert",
+    description:
+      "Permanently delete a price alert from the user's OilPriceAPI account by id. " +
+      "Use when the user wants to remove/cancel/stop an existing alert. Get the id " +
+      "from opa_list_price_alerts first. This permanently removes the alert from the " +
+      "user's account. REQUIRES an API key (OILPRICEAPI_KEY).",
+    inputSchema: {
+      id: z
+        .string()
+        .describe(
+          "The id of the alert to delete (a UUID, as returned by opa_list_price_alerts or opa_create_price_alert).",
+        ),
+    },
+    annotations: DELETE_TOOL_ANNOTATIONS,
   },
   async ({ id }) => {
     const keyErr = requireApiKey("opa_delete_price_alert");
@@ -2465,21 +2596,26 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_get_alert_triggers",
-  "Get recent trigger activity for the user's price alerts — which alerts have " +
-    "fired, how many times, and when they last triggered. Use when the user asks " +
-    "whether any alerts have gone off or about recent alert activity. REQUIRES an " +
-    "API key (OILPRICEAPI_KEY). Note: the API tracks trigger history as per-alert " +
-    "counters (trigger_count / last_triggered_at) rather than a separate event " +
-    "feed, so this returns alerts that have triggered.",
   {
-    since: z
-      .string()
-      .optional()
-      .describe(
-        "Optional ISO 8601 date/time (e.g., '2026-06-01' or '2026-06-01T00:00:00Z'). Only alerts last triggered on or after this time are shown.",
-      ),
+    title: "Get Alert Triggers",
+    description:
+      "Get recent trigger activity for the user's price alerts — which alerts have " +
+      "fired, how many times, and when they last triggered. Use when the user asks " +
+      "whether any alerts have gone off or about recent alert activity. REQUIRES an " +
+      "API key (OILPRICEAPI_KEY). Note: the API tracks trigger history as per-alert " +
+      "counters (trigger_count / last_triggered_at) rather than a separate event " +
+      "feed, so this returns alerts that have triggered.",
+    inputSchema: {
+      since: z
+        .string()
+        .optional()
+        .describe(
+          "Optional ISO 8601 date/time (e.g., '2026-06-01' or '2026-06-01T00:00:00Z'). Only alerts last triggered on or after this time are shown.",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
   },
   async ({ since }) => {
     const keyErr = requireApiKey("opa_get_alert_triggers");
@@ -2637,33 +2773,38 @@ function formatWatchLine(w: WatchRecord): string {
   );
 }
 
-server.tool(
+server.registerTool(
   "opa_get_market_brief",
-  "Get a multi-commodity market brief: latest spot prices, 24h changes, " +
-    "1-month forecasts (for Brent/WTI/Natural Gas), and notable spreads — for " +
-    "several commodities in ONE call. Use when the user wants a market snapshot, " +
-    "morning brief, or an at-a-glance read across multiple commodities. Set " +
-    "`narrative: true` to also get a plain-English summary plus market context " +
-    "(active supply disruptions, key economic indicators). Accepts natural " +
-    "language ('brent', 'us gas') or API codes. REQUIRES an API key " +
-    "(OILPRICEAPI_KEY); counts as 1 request. Per-tier code limits apply (free: 3 " +
-    "codes). For a single price use opa_get_price; for ongoing recurring " +
-    "monitoring use opa_create_price_subscription.",
   {
-    codes: z
-      .array(z.string())
-      .min(1)
-      .describe(
-        "Commodity names or codes to include (e.g., ['brent', 'wti'] or " +
-          "['BRENT_CRUDE_USD', 'NATURAL_GAS_USD']). Free tier allows up to 3.",
-      ),
-    narrative: z
-      .boolean()
-      .optional()
-      .describe(
-        "If true, also include a plain-English summary + market context " +
-          "(disruptions, indicators). Default: false (structured data only).",
-      ),
+    title: "Multi-Commodity Market Brief",
+    description:
+      "Get a multi-commodity market brief: latest spot prices, 24h changes, " +
+      "1-month forecasts (for Brent/WTI/Natural Gas), and notable spreads — for " +
+      "several commodities in ONE call. Use when the user wants a market snapshot, " +
+      "morning brief, or an at-a-glance read across multiple commodities. Set " +
+      "`narrative: true` to also get a plain-English summary plus market context " +
+      "(active supply disruptions, key economic indicators). Accepts natural " +
+      "language ('brent', 'us gas') or API codes. REQUIRES an API key " +
+      "(OILPRICEAPI_KEY); counts as 1 request. Per-tier code limits apply (free: 3 " +
+      "codes). For a single price use opa_get_price; for ongoing recurring " +
+      "monitoring use opa_create_price_subscription.",
+    inputSchema: {
+      codes: z
+        .array(z.string())
+        .min(1)
+        .describe(
+          "Commodity names or codes to include (e.g., ['brent', 'wti'] or " +
+            "['BRENT_CRUDE_USD', 'NATURAL_GAS_USD']). Free tier allows up to 3.",
+        ),
+      narrative: z
+        .boolean()
+        .optional()
+        .describe(
+          "If true, also include a plain-English summary + market context " +
+            "(disruptions, indicators). Default: false (structured data only).",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
   },
   async ({ codes, narrative }) => {
     const keyErr = requireApiKey("opa_get_market_brief");
@@ -2765,42 +2906,47 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_create_price_subscription",
-  "Create a PERSISTENT, recurring price subscription (a 'watch') tied to the " +
-    "user's OilPriceAPI account. The API snapshots the watched commodities every " +
-    "`interval` and records an event each time — so the agent can come back later " +
-    "and poll for what changed via opa_get_subscription_events. Use when the user " +
-    "wants ONGOING monitoring of one or more commodities (e.g. 'keep watching " +
-    "Brent and WTI every hour'). This is different from a price alert: a watch " +
-    "ALWAYS emits an event every interval (a running log), whereas an alert only " +
-    "fires when a threshold is crossed. REQUIRES an API key (OILPRICEAPI_KEY) — " +
-    "this writes to the user's account. Events are POLLED, not pushed: there is " +
-    "no always-on connection. Manage watches with opa_list_subscriptions and " +
-    "opa_delete_subscription. Per-tier limits apply (free: 1 watch, 3 codes, 1h " +
-    "minimum interval); the API returns the exact limit if exceeded.",
   {
-    codes: z
-      .array(z.string())
-      .min(1)
-      .describe(
-        "Commodity names or codes to watch (e.g., ['brent', 'wti'] or " +
-          "['BRENT_CRUDE_USD']). Free tier allows up to 3 codes per watch.",
-      ),
-    interval: z
-      .string()
-      .describe(
-        "How often to snapshot: a friendly interval like '5m', '1h', '6h', " +
-          "'daily', or a bare number of seconds ('3600'). The minimum allowed " +
-          "interval depends on the plan (free: 1h). If below the floor the API " +
-          "returns the exact minimum.",
-      ),
-    name: z
-      .string()
-      .optional()
-      .describe(
-        "Optional human-readable label for the watch (e.g., 'Crude desk hourly').",
-      ),
+    title: "Create Price Subscription",
+    description:
+      "Create a PERSISTENT, recurring price subscription (a 'watch') tied to the " +
+      "user's OilPriceAPI account. The API snapshots the watched commodities every " +
+      "`interval` and records an event each time — so the agent can come back later " +
+      "and poll for what changed via opa_get_subscription_events. Use when the user " +
+      "wants ONGOING monitoring of one or more commodities (e.g. 'keep watching " +
+      "Brent and WTI every hour'). This is different from a price alert: a watch " +
+      "ALWAYS emits an event every interval (a running log), whereas an alert only " +
+      "fires when a threshold is crossed. REQUIRES an API key (OILPRICEAPI_KEY) — " +
+      "this writes to the user's account. Events are POLLED, not pushed: there is " +
+      "no always-on connection. Manage watches with opa_list_subscriptions and " +
+      "opa_delete_subscription. Per-tier limits apply (free: 1 watch, 3 codes, 1h " +
+      "minimum interval); the API returns the exact limit if exceeded.",
+    inputSchema: {
+      codes: z
+        .array(z.string())
+        .min(1)
+        .describe(
+          "Commodity names or codes to watch (e.g., ['brent', 'wti'] or " +
+            "['BRENT_CRUDE_USD']). Free tier allows up to 3 codes per watch.",
+        ),
+      interval: z
+        .string()
+        .describe(
+          "How often to snapshot: a friendly interval like '5m', '1h', '6h', " +
+            "'daily', or a bare number of seconds ('3600'). The minimum allowed " +
+            "interval depends on the plan (free: 1h). If below the floor the API " +
+            "returns the exact minimum.",
+        ),
+      name: z
+        .string()
+        .optional()
+        .describe(
+          "Optional human-readable label for the watch (e.g., 'Crude desk hourly').",
+        ),
+    },
+    annotations: CREATE_TOOL_ANNOTATIONS,
   },
   async ({ codes, interval, name }) => {
     const keyErr = requireApiKey("opa_create_price_subscription");
@@ -2871,14 +3017,19 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_list_subscriptions",
-  "List all PERSISTENT price subscriptions ('watches') on the user's " +
-    "OilPriceAPI account. Use when the user asks what they're monitoring, or to " +
-    "find a watch's id before deleting it. Each watch is a recurring, " +
-    "account-tied snapshot job. REQUIRES an API key (OILPRICEAPI_KEY). No " +
-    "parameters needed.",
-  {},
+  {
+    title: "List Price Subscriptions",
+    description:
+      "List all PERSISTENT price subscriptions ('watches') on the user's " +
+      "OilPriceAPI account. Use when the user asks what they're monitoring, or to " +
+      "find a watch's id before deleting it. Each watch is a recurring, " +
+      "account-tied snapshot job. REQUIRES an API key (OILPRICEAPI_KEY). No " +
+      "parameters needed.",
+    inputSchema: {},
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
   async () => {
     const keyErr = requireApiKey("opa_list_subscriptions");
     if (keyErr) return keyErr;
@@ -2906,20 +3057,25 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_delete_subscription",
-  "Permanently delete a price subscription ('watch') from the user's " +
-    "OilPriceAPI account by id. Use when the user wants to stop/cancel/remove an " +
-    "ongoing watch. Get the id from opa_list_subscriptions first. This " +
-    "permanently removes the recurring watch (and its event history) from the " +
-    "account. REQUIRES an API key (OILPRICEAPI_KEY).",
   {
-    id: z
-      .string()
-      .describe(
-        "The id of the subscription to delete (a UUID, as returned by " +
-          "opa_list_subscriptions or opa_create_price_subscription).",
-      ),
+    title: "Delete Price Subscription",
+    description:
+      "Permanently delete a price subscription ('watch') from the user's " +
+      "OilPriceAPI account by id. Use when the user wants to stop/cancel/remove an " +
+      "ongoing watch. Get the id from opa_list_subscriptions first. This " +
+      "permanently removes the recurring watch (and its event history) from the " +
+      "account. REQUIRES an API key (OILPRICEAPI_KEY).",
+    inputSchema: {
+      id: z
+        .string()
+        .describe(
+          "The id of the subscription to delete (a UUID, as returned by " +
+            "opa_list_subscriptions or opa_create_price_subscription).",
+        ),
+    },
+    annotations: DELETE_TOOL_ANNOTATIONS,
   },
   async ({ id }) => {
     const keyErr = requireApiKey("opa_delete_subscription");
@@ -2946,28 +3102,33 @@ server.tool(
   },
 );
 
-server.tool(
+server.registerTool(
   "opa_get_subscription_events",
-  "Poll for new subscription events — the recurring snapshots recorded by the " +
-    "user's watches. Use this to catch up on what changed since the last poll: " +
-    "pass the `since` cursor (the seq number) returned by the previous call to " +
-    "get only newer events. Events are POLLED, not pushed — there is no always-on " +
-    "connection, so call this periodically to stay current. Each event carries a " +
-    "price snapshot plus per-code deltas vs the prior snapshot. The returned " +
-    "`cursor` is what you pass as `since` next time. REQUIRES an API key " +
-    "(OILPRICEAPI_KEY). This poll does NOT count against the monthly request " +
-    "quota.",
   {
-    since: z
-      .number()
-      .int()
-      .nonnegative()
-      .optional()
-      .describe(
-        "Cursor: only return events with a seq greater than this. Use the " +
-          "`cursor` from the previous call. Omit (or 0) to get the earliest " +
-          "available events.",
-      ),
+    title: "Poll Subscription Events",
+    description:
+      "Poll for new subscription events — the recurring snapshots recorded by the " +
+      "user's watches. Use this to catch up on what changed since the last poll: " +
+      "pass the `since` cursor (the seq number) returned by the previous call to " +
+      "get only newer events. Events are POLLED, not pushed — there is no always-on " +
+      "connection, so call this periodically to stay current. Each event carries a " +
+      "price snapshot plus per-code deltas vs the prior snapshot. The returned " +
+      "`cursor` is what you pass as `since` next time. REQUIRES an API key " +
+      "(OILPRICEAPI_KEY). This poll does NOT count against the monthly request " +
+      "quota.",
+    inputSchema: {
+      since: z
+        .number()
+        .int()
+        .nonnegative()
+        .optional()
+        .describe(
+          "Cursor: only return events with a seq greater than this. Use the " +
+            "`cursor` from the previous call. Omit (or 0) to get the earliest " +
+            "available events.",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
   },
   async ({ since }) => {
     const keyErr = requireApiKey("opa_get_subscription_events");
@@ -3301,7 +3462,7 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("OilPriceAPI MCP Server v2.4.0 running on stdio");
+  console.error("OilPriceAPI MCP Server v2.4.2 running on stdio");
 }
 
 main().catch((error) => {
