@@ -1,13 +1,18 @@
 # OilPriceAPI MCP Server
 
-**The energy commodity MCP server.** Real-time oil, gas, and commodity prices for Claude, Cursor, VS Code, and any MCP-compatible client.
+> **Give your AI agent real-time oil, gas, LNG, carbon and fuel prices in under 60 seconds** — works in Claude Desktop, Claude Code, Cursor, VS Code, and any MCP client. No API key needed to try it.
 
 [![npm](https://img.shields.io/npm/v/oilpriceapi-mcp)](https://www.npmjs.com/package/oilpriceapi-mcp)
+[![Downloads](https://img.shields.io/npm/dm/oilpriceapi-mcp)](https://www.npmjs.com/package/oilpriceapi-mcp)
 [![license](https://img.shields.io/npm/l/oilpriceapi-mcp)](LICENSE)
+
+**[Get a Free API Key](https://www.oilpriceapi.com/auth/signup?utm_source=mcp-readme)** · **[Documentation](https://docs.oilpriceapi.com)** · **[API Explorer](https://api.oilpriceapi.com/swagger)** · **[Pricing](https://www.oilpriceapi.com/pricing?utm_source=mcp-readme)**
+
+Backed by [OilPriceAPI](https://oilpriceapi.com) — the commodity price API behind fintech dashboards, fleet & logistics tools, maritime compliance platforms and energy analytics products, serving **2M+ API requests every month**.
 
 ## Features
 
-- **21 Tools** — 17 read tools (spot prices, history, futures, marine fuels, rig counts, diesel by state, storage, OPEC production, forecasts, EIA oil inventories, well permits, refining spreads) plus 4 authenticated price-alert tools (create/list/delete persistent alerts + trigger activity)
+- **26 Tools** — 17 read tools (spot prices, history, futures, marine fuels, rig counts, diesel by state, storage, OPEC production, forecasts, EIA oil inventories, well permits, refining spreads) plus 4 authenticated price-alert tools (create/list/delete persistent alerts + trigger activity) and 5 agent tools (multi-commodity market briefs, persistent price watches)
 - **5 Resources** — subscribable price snapshots for Brent, WTI, Natural Gas, Diesel, and all commodities
 - **6 Prompts** — pre-built analyst templates (daily briefing, spread analysis, gas markets, commodity report, diesel costs, supply analysis)
 - **Natural language** — ask for "brent oil" or "natural gas", not codes
@@ -19,6 +24,23 @@
 ```bash
 npx oilpriceapi-mcp
 ```
+
+## What can your agent get?
+
+The 10 most-polled commodities across our customer base:
+
+| Code | What it is | Typical agent use |
+| --- | --- | --- |
+| `BRENT_CRUDE_USD` | Brent crude (global) | market briefings, dashboards |
+| `WTI_USD` | WTI crude (US) | trading context, macro models |
+| `NATURAL_GAS_USD` | Henry Hub natural gas | energy analytics |
+| `DUTCH_TTF_EUR` | TTF gas (Europe) | European energy, LNG analysis |
+| `JKM_LNG_USD` | JKM LNG (Asia) | LNG trading & shipping |
+| `EU_CARBON_EUR` | EU ETS carbon allowances | CBAM, maritime compliance, ESG |
+| `DIESEL_USD` | Diesel (Gulf Coast) | fleet & fuel-surcharge math |
+| `JET_FUEL_USD` | Jet fuel | aviation ops |
+| `VLSFO_USD` | Marine bunker fuel | voyage costing |
+| `GOLD_USD` | Gold | macro & portfolio context |
 
 ## Installation
 
@@ -248,6 +270,23 @@ OILPRICEAPI_KEY=your-key node build/index.js
 - All tool names now use `opa_` prefix (e.g., `get_commodity_price` -> `opa_get_price`)
 - Unrecognized commodity names now return an error with suggestions instead of silently defaulting to Brent
 - `list_commodities` now fetches live from the API (falls back to static list if unavailable)
+
+## The whole OilPriceAPI toolbox
+
+Same data, every stack:
+
+| Tool | Install |
+| --- | --- |
+| [Python SDK](https://github.com/OilpriceAPI/python-sdk) | `pip install oilpriceapi` |
+| [Node/TypeScript SDK](https://github.com/OilpriceAPI/oilpriceapi-node) | `npm install oilpriceapi` |
+| [PHP SDK](https://github.com/OilpriceAPI/oilpriceapi-php) | `composer require oilpriceapi/oilpriceapi` |
+| [Go SDK](https://github.com/OilpriceAPI/oilpriceapi-go) | `go get github.com/OilpriceAPI/oilpriceapi-go` |
+| [WordPress plugin](https://github.com/OilpriceAPI/oilpriceapi-wordpress-plugin) | no-code price widgets |
+
+## Explore the API
+
+- 🧭 **Interactive explorer**: [api.oilpriceapi.com/swagger](https://api.oilpriceapi.com/swagger) — try every endpoint in the browser (demo mode, no key needed)
+- 📜 **OpenAPI spec**: [swagger.json](https://api.oilpriceapi.com/swagger.json)
 
 ## License
 
