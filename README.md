@@ -12,7 +12,7 @@ Backed by [OilPriceAPI](https://oilpriceapi.com) — the commodity price API beh
 
 ## Features
 
-- **26 Tools** — 17 read tools (spot prices, history, futures, marine fuels, rig counts, diesel by state, storage, OPEC production, forecasts, EIA oil inventories, well permits, refining spreads) plus 4 authenticated price-alert tools (create/list/delete persistent alerts + trigger activity) and 5 agent tools (multi-commodity market briefs, persistent price watches)
+- **27 Tools** — 18 read tools (spot prices, history, futures, marine fuels, rig counts, diesel by state, storage, OPEC production, forecasts, EIA oil inventories, well permits, well production, refining spreads) plus 4 authenticated price-alert tools (create/list/delete persistent alerts + trigger activity) and 5 agent tools (multi-commodity market briefs, persistent price watches)
 - **5 Resources** — subscribable price snapshots for Brent, WTI, Natural Gas, Diesel, and all commodities
 - **6 Prompts** — pre-built analyst templates (daily briefing, spread analysis, gas markets, commodity report, diesel costs, supply analysis)
 - **Natural language** — ask for "brent oil" or "natural gas", not codes
@@ -156,25 +156,26 @@ npm install -g oilpriceapi-mcp
 
 All tools are prefixed with `opa_` to avoid name collisions when multiple MCP servers are loaded.
 
-| Tool                      | Description                                                       |
-| ------------------------- | ----------------------------------------------------------------- |
-| `opa_get_price`           | Current spot price for a single commodity                         |
-| `opa_market_overview`     | All commodity prices in one call, grouped by category             |
-| `opa_compare_prices`      | Side-by-side comparison of 2-5 commodities with spread            |
-| `opa_list_commodities`    | Full commodity catalog (fetched live from API)                    |
-| `opa_get_history`         | Historical prices with high/low/avg/change (day/week/month/year)  |
-| `opa_get_futures`         | Front-month futures (Brent BZ, WTI CL, ICE Gasoil, TTF, JKM, EUA) |
-| `opa_get_futures_curve`   | Full forward curve with contango/backwardation analysis           |
-| `opa_get_marine_fuels`    | Bunker fuel prices by port and fuel type (VLSFO/MGO/IFO380)       |
-| `opa_get_rig_counts`      | Baker Hughes US rig count with week-over-week change              |
-| `opa_get_drilling`        | Drilling intelligence: wells, permits, completions by region      |
-| `opa_get_diesel_by_state` | AAA retail diesel price for any US state (50 states + DC)         |
-| `opa_get_storage`         | Cushing and SPR oil storage/inventory levels                      |
-| `opa_get_opec_production` | OPEC country-level production data                                |
-| `opa_get_forecasts`       | EIA STEO energy price forecasts                                   |
-| `opa_get_oil_inventories` | EIA weekly petroleum stocks (latest/summary/by_product)           |
-| `opa_get_well_permits`    | US well drilling permits (latest/by_state/by_operator)            |
-| `opa_get_spread`          | Refining/trading spreads (crack, basis, margin)                   |
+| Tool                      | Description                                                                                     |
+| ------------------------- | ----------------------------------------------------------------------------------------------- |
+| `opa_get_price`           | Current spot price for a single commodity                                                       |
+| `opa_market_overview`     | All commodity prices in one call, grouped by category                                           |
+| `opa_compare_prices`      | Side-by-side comparison of 2-5 commodities with spread                                          |
+| `opa_list_commodities`    | Full commodity catalog (fetched live from API)                                                  |
+| `opa_get_history`         | Historical prices with high/low/avg/change (day/week/month/year)                                |
+| `opa_get_futures`         | Front-month futures (Brent BZ, WTI CL, ICE Gasoil, TTF, JKM, EUA)                               |
+| `opa_get_futures_curve`   | Full forward curve with contango/backwardation analysis                                         |
+| `opa_get_marine_fuels`    | Bunker fuel prices by port and fuel type (VLSFO/MGO/IFO380)                                     |
+| `opa_get_rig_counts`      | Baker Hughes US rig count with week-over-week change                                            |
+| `opa_get_drilling`        | Drilling snapshot: rig counts, frac spreads, 30-day permits, DUCs                               |
+| `opa_get_diesel_by_state` | AAA retail diesel price for any US state (50 states + DC)                                       |
+| `opa_get_storage`         | Cushing and SPR oil storage/inventory levels                                                    |
+| `opa_get_opec_production` | OPEC country-level production data                                                              |
+| `opa_get_forecasts`       | EIA STEO energy price forecasts                                                                 |
+| `opa_get_oil_inventories` | EIA weekly petroleum stocks (latest/summary/by_product)                                         |
+| `opa_get_well_permits`    | US well drilling permits (latest/by_state/by_operator)                                          |
+| `opa_get_well_production` | US well production — beta coverage (summary/states/state/well/top_producers/cycle_time/cohorts) |
+| `opa_get_spread`          | Refining/trading spreads (crack, basis, margin)                                                 |
 
 ### Price Alert Tools (authenticated)
 
@@ -299,6 +300,15 @@ This MCP server runs locally on your machine and only communicates with the OilP
 - **Demo mode**: without an API key, price tools call the keyless demo endpoint on the same host; no key or account data is involved.
 
 Questions: [support@oilpriceapi.com](mailto:support@oilpriceapi.com)
+
+## Pricing Boundary (HTTP 402)
+
+Where the free/paid line sits for this server (#10):
+
+- **Always open**: the MCP server itself (MIT), setup, docs, discovery (tool listing), and keyless demo mode for low-volume evaluation.
+- **Free API key**: live prices for 40+ commodities within the free tier's request limits.
+- **Behind the paywall**: high-volume usage and premium datasets (futures, energy intelligence, well permits/production, alerts at scale). When a request crosses that boundary the API returns a standard **HTTP 402/403/429 with the exact limit or feature gate in the body**, and this server surfaces that message plus an upgrade link — agents get a machine-readable stop, never a silent failure.
+- **x402 protocol**: per-request crypto micropayments via the [x402 protocol](https://www.x402.org/) are **not currently supported** — payment is by account plan (Stripe), authenticated with your API key.
 
 ## License
 

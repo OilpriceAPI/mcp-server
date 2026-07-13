@@ -21,6 +21,11 @@ import {
   SIGNUP_URL,
   UPGRADE_URL,
   createSandboxServer,
+  wellProductionEndpoint,
+  formatWellProduction,
+  formatDrillingData,
+  WELL_PRODUCTION_VIEWS,
+  WELL_PRODUCTION_BETA_NOTE,
 } from "../index.js";
 
 // ---------------------------------------------------------------------------
@@ -1013,8 +1018,8 @@ describe("tool registration metadata", () => {
   const DELETE_TOOLS = ["opa_delete_price_alert", "opa_delete_subscription"];
   const WRITE_TOOLS = new Set([...CREATE_TOOLS, ...DELETE_TOOLS]);
 
-  it("registers exactly 26 tools", () => {
-    expect(Object.keys(tools)).toHaveLength(26);
+  it("registers exactly 27 tools", () => {
+    expect(Object.keys(tools)).toHaveLength(27);
   });
 
   it("registers all four write tools (creates + deletes)", () => {
@@ -1083,5 +1088,427 @@ describe("tool registration metadata", () => {
         openWorldHint: true,
       });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #31 — well production tool (opa_get_well_production)
+// ---------------------------------------------------------------------------
+
+describe("wellProductionEndpoint (#31) - request mapping", () => {
+  it("maps every view to its /v1/well-production* endpoint", () => {
+    expect(wellProductionEndpoint("summary")).toEqual({
+      endpoint: "/v1/well-production",
+    });
+    expect(wellProductionEndpoint("states")).toEqual({
+      endpoint: "/v1/well-production/states",
+    });
+    expect(wellProductionEndpoint("state", { state: "TX" })).toEqual({
+      endpoint: "/v1/well-production/states/TX",
+    });
+    expect(
+      wellProductionEndpoint("well", { api_number: "42329447130000" }),
+    ).toEqual({
+      endpoint: "/v1/well-production/wells/42329447130000",
+    });
+    expect(wellProductionEndpoint("top_producers")).toEqual({
+      endpoint: "/v1/well-production/top-producers",
+    });
+    expect(wellProductionEndpoint("cycle_time")).toEqual({
+      endpoint: "/v1/well-production/cycle-time",
+    });
+    expect(wellProductionEndpoint("cohorts")).toEqual({
+      endpoint: "/v1/well-production/cycle-time/cohorts",
+    });
+  });
+
+  it("resolves full state names and applies the state filter to top_producers / cycle_time", () => {
+    expect(wellProductionEndpoint("state", { state: "new mexico" })).toEqual({
+      endpoint: "/v1/well-production/states/NM",
+    });
+    expect(wellProductionEndpoint("top_producers", { state: "Texas" })).toEqual(
+      { endpoint: "/v1/well-production/top-producers?state=TX" },
+    );
+    expect(wellProductionEndpoint("cycle_time", { state: "TX" })).toEqual({
+      endpoint: "/v1/well-production/cycle-time?state=TX",
+    });
+  });
+
+  it("rejects an unsupported state", () => {
+    const result = wellProductionEndpoint("state", { state: "Atlantis" });
+    expect(result).toHaveProperty("error");
+    expect((result as { error: string }).error).toContain("Atlantis");
+    expect((result as { error: string }).error).toContain(
+      "not a recognized US state",
+    );
+  });
+
+  it("requires a state for the state view", () => {
+    const result = wellProductionEndpoint("state");
+    expect(result).toHaveProperty("error");
+    expect((result as { error: string }).error).toContain("requires a state");
+  });
+
+  it("rejects an invalid API well number (must be 14 digits)", () => {
+    for (const bad of ["1234", "", "not-a-number", "4232944713000"]) {
+      const result = wellProductionEndpoint("well", { api_number: bad });
+      expect(result, `api_number '${bad}'`).toHaveProperty("error");
+      expect((result as { error: string }).error).toContain("14-digit");
+    }
+  });
+
+  it("normalizes dashed API numbers to digits", () => {
+    expect(
+      wellProductionEndpoint("well", { api_number: "42-329-44713-00-00" }),
+    ).toEqual({ endpoint: "/v1/well-production/wells/42329447130000" });
+  });
+});
+
+describe("formatWellProduction (#31) - formatting", () => {
+  it("formats the summary view with top states and flags an unreported national period", () => {
+    const text = formatWellProduction("summary", {
+      national: {
+        period: "2026-07",
+        oil_bbl: 0,
+        gas_mcf: 0,
+        water_bbl: 0,
+        boe: 0,
+        days_producing: null,
+        source: "market_reporting",
+      },
+      top_states: [
+        {
+          state: "TX",
+          period: "2026-04",
+          oil_bbl: 174743000,
+          oil_bpd: 5824767,
+          gas_mcf: 1164406000,
+          boe: 368810667,
+        },
+      ],
+    });
+
+    expect(text).toContain("US Well Production (summary)");
+    expect(text).toContain("Not yet reported for 2026-07");
+    expect(text).toContain("**TX** (2026-04)");
+    expect(text).toContain("174,743,000");
+    expect(text.length).toBeGreaterThan(0);
+  });
+
+  it("formats a state monthly history", () => {
+    const text = formatWellProduction("state", {
+      state: "TX",
+      period: { start: "2024-07-13", end: "2026-07-13" },
+      count: 1,
+      data: [
+        {
+          period: "2025-06",
+          oil_bbl: 172690000,
+          gas_mcf: 1110000000,
+          water_bbl: null,
+          boe: 357690000,
+          days_producing: null,
+          source: "eia_api",
+        },
+      ],
+    });
+
+    expect(text).toContain("**State**: TX");
+    expect(text).toContain("2024-07-13 → 2026-07-13");
+    expect(text).toContain("**2025-06**");
+    expect(text).toContain("[eia_api]");
+  });
+
+  it("formats a single-well history with well metadata", () => {
+    const text = formatWellProduction("well", {
+      api_number: "50029237980000",
+      operator: "Hilcorp Alaska, LLC",
+      well_name: "MILNE PT UNIT J-40",
+      state: "AK",
+      count: 1,
+      data: [
+        {
+          period: "2024-11",
+          oil_bbl: 27336,
+          gas_mcf: 9231,
+          water_bbl: 42395,
+          boe: 28875,
+          days_producing: 30,
+          source: "ak_aogcc",
+        },
+      ],
+    });
+
+    expect(text).toContain("MILNE PT UNIT J-40");
+    expect(text).toContain("Hilcorp Alaska, LLC");
+    expect(text).toContain("50029237980000");
+    expect(text).toContain("27,336");
+    expect(text).toContain("30 days");
+  });
+
+  it("formats top producers", () => {
+    const text = formatWellProduction("top_producers", {
+      state: "TX",
+      period: { start: "2025-07-01", end: "2026-07-13" },
+      count: 1,
+      producers: [
+        {
+          api_number: "42329447130000",
+          operator: "FIREBIRD ENERGY II LLC",
+          well_name: "MBE",
+          total_oil_bbl: 1004658,
+          total_gas_mcf: 1605878,
+          months_producing: 7,
+        },
+      ],
+    });
+
+    expect(text).toContain("FIREBIRD ENERGY II LLC");
+    expect(text).toContain("1,004,658");
+    expect(text).toContain("7 months");
+  });
+
+  it("renders cycle_time / cohorts stats as JSON", () => {
+    const text = formatWellProduction("cycle_time", {
+      well_count: 10000,
+      cycle_time_stats: { median_days: 400 },
+    });
+    expect(text).toContain('"median_days": 400');
+  });
+
+  it("ALWAYS appends the beta coverage caveat — never claims complete US well-level production", () => {
+    for (const view of WELL_PRODUCTION_VIEWS) {
+      const text = formatWellProduction(view, {});
+      expect(text, view).toContain(WELL_PRODUCTION_BETA_NOTE);
+      expect(text, view).toContain("NOT complete US well-level production");
+    }
+  });
+});
+
+describe("opa_get_well_production (#31) - negative paths via tool handler", () => {
+  const server = createSandboxServer();
+  const tools = (
+    server as unknown as {
+      _registeredTools: Record<
+        string,
+        {
+          handler: (
+            args: Record<string, unknown>,
+            extra: Record<string, unknown>,
+          ) => Promise<{
+            content: Array<{ type: string; text: string }>;
+            isError?: boolean;
+          }>;
+        }
+      >;
+    }
+  )._registeredTools;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("returns the keyless teaser when no API key is configured", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "");
+    vi.stubEnv("OIL_PRICE_API_KEY", "");
+
+    const result = await tools.opa_get_well_production.handler(
+      { view: "summary" },
+      {},
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("opa_get_well_production");
+    expect(result.content[0].text).toContain(SIGNUP_URL);
+    expect(result.content[0].text).not.toContain("Authentication failed");
+  });
+
+  it("surfaces the 402 entitlement gate with the upgrade link", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 402,
+        statusText: "Payment Required",
+        headers: { get: () => null },
+        text: async () =>
+          JSON.stringify({
+            message: "Well production requires the Pro plan",
+          }),
+      }),
+    );
+
+    // Calling the handler directly bypasses the SDK's error-to-result
+    // conversion, so the ApiGateError surfaces as a rejection here.
+    await expect(
+      tools.opa_get_well_production.handler({ view: "summary" }, {}),
+    ).rejects.toMatchObject({
+      name: "ApiGateError",
+      status: 402,
+      message: expect.stringContaining(UPGRADE_URL),
+    });
+  });
+
+  it("returns a coverage-aware error when a state has no data (API 404)", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        headers: { get: () => null },
+        text: async () =>
+          JSON.stringify({
+            error: {
+              code: "DATA_NOT_AVAILABLE",
+              message: "No production data for state: HI",
+            },
+          }),
+      }),
+    );
+
+    const result = await tools.opa_get_well_production.handler(
+      { view: "state", state: "HI" },
+      {},
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("HI");
+    expect(result.content[0].text).toContain("Beta coverage");
+  });
+
+  it("rejects an invalid API number without calling the API", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await tools.opa_get_well_production.handler(
+      { view: "well", api_number: "1234" },
+      {},
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("14-digit");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("returns a generic error result on API failure (non-gate)", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        headers: { get: () => null },
+        text: async () => "",
+      }),
+    );
+
+    const result = await tools.opa_get_well_production.handler(
+      { view: "cohorts" },
+      {},
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain(
+      "Well production data not available",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #31 — opa_get_drilling formatter matches the CURRENT /v1/drilling/latest
+// shape (the old total_wells/active_rigs shape is no longer served and made
+// every keyed call crash).
+// ---------------------------------------------------------------------------
+
+describe("formatDrillingData (#31) - current live shape", () => {
+  const LIVE_SHAPE = {
+    rig_counts: {
+      US_RIG_COUNT: 581,
+      CANADA_RIG_COUNT: 179,
+      INTERNATIONAL_RIG_COUNT: 1073,
+    },
+    frac_spread_count: 200,
+    well_permits: {
+      last_30d: 16423,
+      by_state: { UT: 15403, TX: 679 },
+    },
+    duc_wells_total: 2465,
+    deltas: { rig_counts: -3, well_permits: 15217 },
+    last_updated: "2026-07-13T00:05:27.388Z",
+  };
+
+  it("formats the current payload without throwing", () => {
+    const text = formatDrillingData(LIVE_SHAPE);
+
+    expect(text).toContain("Drilling Activity Snapshot");
+    expect(text).toContain("581");
+    expect(text).toContain("Frac Spread Count**: 200");
+    expect(text).toContain("16,423");
+    expect(text).toContain("**UT**: 15,403");
+    expect(text).toContain("DUC Wells");
+    expect(text).toContain("2,465");
+    expect(text).toContain("-3");
+    expect(text).toContain("2026-07-13");
+  });
+
+  it("tolerates missing optional sections", () => {
+    const text = formatDrillingData({});
+    expect(text).toContain("Drilling Activity Snapshot");
+    expect(text).toContain("oilpriceapi.com");
+  });
+
+  it("keyed drilling call formats the live shape end-to-end", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({ status: "success", data: LIVE_SHAPE }),
+      }),
+    );
+
+    const server = createSandboxServer();
+    const tools = (
+      server as unknown as {
+        _registeredTools: Record<
+          string,
+          {
+            handler: (
+              args: Record<string, unknown>,
+              extra: Record<string, unknown>,
+            ) => Promise<{
+              content: Array<{ type: string; text: string }>;
+              isError?: boolean;
+            }>;
+          }
+        >;
+      }
+    )._registeredTools;
+
+    const result = await tools.opa_get_drilling.handler({}, {});
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain("Rig Counts");
+    expect(result.content[0].text).toContain("Permits by State");
+
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("keylessTeaserResult covers opa_get_well_production (#31)", () => {
+  it("returns the well-production teaser with the beta caveat wording", () => {
+    const text = keylessTeaserResult("opa_get_well_production").content[0].text;
+    expect(text).toContain("opa_get_well_production");
+    expect(text).toContain("beta coverage");
+    expect(text).toContain(SIGNUP_URL);
   });
 });

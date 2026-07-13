@@ -17,11 +17,11 @@
  * limit/feature gate hit by the API plus an upgrade link (see ApiGateError in
  * makeApiRequest and alertHttpError for the authenticated tools).
  *
- * 26 tools total (opa_ prefixed):
+ * 27 tools total (opa_ prefixed):
  *
- * 17 read-only tools: prices, history, futures, marine fuels, rig counts,
+ * 18 read-only tools: prices, history, futures, marine fuels, rig counts,
  * drilling, diesel-by-state, storage, OPEC production, forecasts, EIA oil
- * inventories, well permits, refining spreads.
+ * inventories, well permits, well production, refining spreads.
  *
  * 4 authenticated price-alert tools (opa_*_price_alert / opa_get_alert_triggers):
  * create/list/delete persistent price alerts tied to the user's account and read
@@ -445,13 +445,19 @@ interface RigCountData {
   source?: string;
 }
 
+// Shape of GET /v1/drilling/latest as served by the current API (verified
+// live 2026-07-13). The pre-#31 shape (total_wells/active_rigs/
+// region_breakdown/date) is no longer what the endpoint returns.
 interface DrillingData {
-  total_wells: number;
-  active_rigs: number;
-  permits_issued?: number;
-  completions?: number;
-  region_breakdown?: Array<{ region: string; count: number }>;
-  date: string;
+  rig_counts?: Record<string, number>;
+  frac_spread_count?: number;
+  well_permits?: {
+    last_30d?: number;
+    by_state?: Record<string, number>;
+  };
+  duc_wells_total?: number;
+  deltas?: Record<string, number>;
+  last_updated?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1282,9 +1288,9 @@ const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
       example: "Oil Rigs: NNN · Gas Rigs: NNN · Total: NNN (±N vs prior week)",
     },
     opa_get_drilling: {
-      does: "Returns drilling intelligence: active wells, rigs, permits, and completions with a regional breakdown.",
+      does: "Returns a drilling activity snapshot: US/Canada/international rig counts, frac spread count, well permits (last 30 days, by state), and DUC well totals.",
       example:
-        "Total Wells: N,NNN · Active Rigs: NNN · Permits Issued: NNN · Completions: NNN",
+        "US Rigs: NNN · Frac Spreads: NNN · Permits (30d): N,NNN · DUC Wells: N,NNN",
     },
     opa_get_diesel_by_state: {
       does: "Returns the AAA average retail diesel price for any US state.",
@@ -1314,6 +1320,11 @@ const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
       does: "Returns US oil & gas well drilling permit data, filterable by state or operator.",
       example:
         "TX: NNN permits · NM: NNN permits · ... (latest week, by state/operator)",
+    },
+    opa_get_well_production: {
+      does: "Returns US oil & gas well production data (beta coverage): national/state monthly summaries, per-state history, per-well history by API number, top producers, and drill-to-production cycle times.",
+      example:
+        "TX (YYYY-MM): NNN,NNN,NNN bbl oil · N,NNN,NNN,NNN mcf gas · NNN,NNN,NNN boe",
     },
     opa_get_spread: {
       does: "Returns refining and trading spreads: crack spreads, basis differentials, and blending/transport margins.",
@@ -1389,8 +1400,8 @@ export function keylessTeaserResult(toolName: string) {
 }
 
 // =========================================================================
-// READ TOOLS (17 — opa_ prefixed to avoid collisions). Plus 4 authenticated
-// price-alert tools further below, for 21 tools total.
+// READ TOOLS (18 — opa_ prefixed to avoid collisions). Plus 4 authenticated
+// price-alert tools further below, for 22 tools total.
 // =========================================================================
 
 server.registerTool(
@@ -2014,12 +2025,68 @@ server.registerTool(
   },
 );
 
+/**
+ * Format the CURRENT live /v1/drilling/latest payload (#31). The old
+ * formatter assumed a total_wells/active_rigs/region_breakdown shape the API
+ * no longer serves, so every keyed call crashed on
+ * `data.total_wells.toLocaleString()`. Exported for tests.
+ */
+export function formatDrillingData(data: DrillingData): string {
+  let text = `# Drilling Activity Snapshot\n\n`;
+
+  if (data.rig_counts && Object.keys(data.rig_counts).length > 0) {
+    text += `## Rig Counts\n`;
+    for (const [key, value] of Object.entries(data.rig_counts)) {
+      const label = key
+        .replace(/_/g, " ")
+        .toLowerCase()
+        .replace(/\b\w/g, (c) => c.toUpperCase())
+        .replace(/^Us /, "US ");
+      text += `- **${label}**: ${value.toLocaleString()}\n`;
+    }
+    text += `\n`;
+  }
+
+  if (data.frac_spread_count !== undefined) {
+    text += `- **Frac Spread Count**: ${data.frac_spread_count.toLocaleString()}\n`;
+  }
+  if (data.duc_wells_total !== undefined) {
+    text += `- **DUC Wells (drilled, uncompleted)**: ${data.duc_wells_total.toLocaleString()}\n`;
+  }
+
+  const permits = data.well_permits;
+  if (permits?.last_30d !== undefined) {
+    text += `- **Well Permits (last 30 days)**: ${permits.last_30d.toLocaleString()}\n`;
+  }
+  if (permits?.by_state && Object.keys(permits.by_state).length > 0) {
+    text += `\n## Permits by State (last 30 days)\n`;
+    for (const [state, count] of Object.entries(permits.by_state)) {
+      text += `- **${state}**: ${count.toLocaleString()}\n`;
+    }
+  }
+
+  if (data.deltas && Object.keys(data.deltas).length > 0) {
+    text += `\n## Week-over-Week Changes\n`;
+    for (const [key, value] of Object.entries(data.deltas)) {
+      const sign = value >= 0 ? "+" : "";
+      text += `- **${key.replace(/_/g, " ")}**: ${sign}${value.toLocaleString()}\n`;
+    }
+  }
+
+  if (data.last_updated) {
+    text += `\n- **Last Updated**: ${data.last_updated}\n`;
+  }
+
+  text += `\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
+  return text;
+}
+
 server.registerTool(
   "opa_get_drilling",
   {
     title: "Get Drilling Activity",
     description:
-      "Get drilling intelligence data including active wells, permits issued, and completions by region. Use when the user asks about drilling activity, well permits, or upstream operations. Returns totals and regional breakdown.",
+      "Get a drilling activity snapshot: US, Canada, and international rig counts, frac spread count, well permits issued in the last 30 days (with a by-state breakdown), and DUC (drilled-uncompleted) well totals. Use when the user asks about drilling activity, rigs vs frac spreads, or upstream operations. Requires a paid plan with energy intelligence access.",
     inputSchema: {},
     annotations: READ_TOOL_ANNOTATIONS,
   },
@@ -2032,30 +2099,11 @@ server.registerTool(
 
     if (!response || response.status !== "success") {
       return errorResult(
-        "Drilling intelligence data not available. This requires a paid plan with energy intelligence access.",
+        "Drilling activity data not available. This requires a paid plan with energy intelligence access.",
       );
     }
 
-    const data = response.data;
-    let text = `# Drilling Intelligence\n\n`;
-    text += `- **Total Wells**: ${data.total_wells.toLocaleString()}\n`;
-    text += `- **Active Rigs**: ${data.active_rigs.toLocaleString()}\n`;
-    if (data.permits_issued !== undefined)
-      text += `- **Permits Issued**: ${data.permits_issued.toLocaleString()}\n`;
-    if (data.completions !== undefined)
-      text += `- **Completions**: ${data.completions.toLocaleString()}\n`;
-    text += `- **Date**: ${data.date}\n`;
-
-    if (data.region_breakdown?.length) {
-      text += `\n## By Region\n`;
-      for (const r of data.region_breakdown) {
-        text += `- **${r.region}**: ${r.count}\n`;
-      }
-    }
-
-    text += `\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
-
-    return textResult(text);
+    return textResult(formatDrillingData(response.data));
   },
 );
 
@@ -2343,6 +2391,290 @@ server.registerTool(
     text += "\n_Data from [OilPriceAPI](https://oilpriceapi.com)_";
 
     return textResult(text);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Well production (#31) — /v1/well-production*
+//
+// BETA COVERAGE: monthly state-level production (EIA + selected state
+// regulators) plus well-level histories for selected states only. This is
+// NOT complete US well-level production — descriptions and output say so.
+// ---------------------------------------------------------------------------
+
+export const WELL_PRODUCTION_VIEWS = [
+  "summary",
+  "states",
+  "state",
+  "well",
+  "top_producers",
+  "cycle_time",
+  "cohorts",
+] as const;
+
+export type WellProductionView = (typeof WELL_PRODUCTION_VIEWS)[number];
+
+export const WELL_PRODUCTION_BETA_NOTE =
+  "_Beta coverage: monthly state-level production (EIA + selected state regulators) and well-level histories for selected states only — NOT complete US well-level production. Data from [OilPriceAPI](https://oilpriceapi.com)_";
+
+interface WellProductionMonth {
+  period?: string;
+  oil_bbl?: number | null;
+  oil_bpd?: number | null;
+  gas_mcf?: number | null;
+  water_bbl?: number | null;
+  boe?: number | null;
+  days_producing?: number | null;
+  source?: string;
+  state?: string;
+}
+
+interface WellProductionSummaryData {
+  national?: WellProductionMonth;
+  top_states?: WellProductionMonth[];
+}
+
+interface WellProductionStatesData {
+  period?: string;
+  count?: number;
+  states?: WellProductionMonth[];
+}
+
+interface WellProductionSeriesData {
+  state?: string;
+  api_number?: string;
+  operator?: string;
+  well_name?: string;
+  period?: { start?: string; end?: string };
+  count?: number;
+  data?: WellProductionMonth[];
+}
+
+interface WellProductionTopProducersData {
+  state?: string;
+  period?: { start?: string; end?: string };
+  count?: number;
+  producers?: Array<{
+    api_number?: string;
+    operator?: string;
+    well_name?: string;
+    total_oil_bbl?: number;
+    total_gas_mcf?: number;
+    months_producing?: number;
+  }>;
+}
+
+/**
+ * Map a well-production view + options to the API endpoint (#31).
+ * Returns { endpoint } or { error } with an actionable message.
+ * Exported for tests.
+ */
+export function wellProductionEndpoint(
+  view: WellProductionView,
+  opts: { state?: string; api_number?: string } = {},
+): { endpoint: string } | { error: string } {
+  const resolveState = (): { code: string } | { error: string } => {
+    const code = resolveStateCode(opts.state!);
+    if (!code) {
+      return {
+        error: `'${opts.state}' is not a recognized US state. Use a full state name (e.g., 'Texas') or 2-letter code (e.g., 'TX').`,
+      };
+    }
+    return { code };
+  };
+
+  switch (view) {
+    case "summary":
+      return { endpoint: "/v1/well-production" };
+    case "states":
+      return { endpoint: "/v1/well-production/states" };
+    case "state": {
+      if (!opts.state) {
+        return {
+          error:
+            "The 'state' view requires a state parameter (e.g., state: 'TX').",
+        };
+      }
+      const resolved = resolveState();
+      if ("error" in resolved) return resolved;
+      return { endpoint: `/v1/well-production/states/${resolved.code}` };
+    }
+    case "well": {
+      const api = (opts.api_number ?? "").replace(/[^0-9]/g, "");
+      if (api.length !== 14) {
+        return {
+          error:
+            "The 'well' view requires a 14-digit API well number (api_number), e.g. '42329447130000'. Use the top_producers or cycle_time views to discover API numbers.",
+        };
+      }
+      return { endpoint: `/v1/well-production/wells/${api}` };
+    }
+    case "top_producers":
+    case "cycle_time": {
+      const base =
+        view === "top_producers"
+          ? "/v1/well-production/top-producers"
+          : "/v1/well-production/cycle-time";
+      if (opts.state) {
+        const resolved = resolveState();
+        if ("error" in resolved) return resolved;
+        return { endpoint: `${base}?state=${resolved.code}` };
+      }
+      return { endpoint: base };
+    }
+    case "cohorts":
+      return { endpoint: "/v1/well-production/cycle-time/cohorts" };
+  }
+}
+
+function formatProductionMonthLine(m: WellProductionMonth): string {
+  const parts: string[] = [];
+  if (typeof m.oil_bbl === "number")
+    parts.push(`oil ${m.oil_bbl.toLocaleString()} bbl`);
+  if (typeof m.oil_bpd === "number")
+    parts.push(`(${m.oil_bpd.toLocaleString()} b/d)`);
+  if (typeof m.gas_mcf === "number")
+    parts.push(`gas ${m.gas_mcf.toLocaleString()} mcf`);
+  if (typeof m.water_bbl === "number")
+    parts.push(`water ${m.water_bbl.toLocaleString()} bbl`);
+  if (typeof m.boe === "number") parts.push(`${m.boe.toLocaleString()} boe`);
+  if (typeof m.days_producing === "number")
+    parts.push(`${m.days_producing} days`);
+  if (m.source) parts.push(`[${m.source}]`);
+  return parts.join(" · ") || "(no data)";
+}
+
+/**
+ * Format a well-production API payload for the given view (#31).
+ * Always ends with the beta coverage note. Exported for tests.
+ */
+export function formatWellProduction(
+  view: WellProductionView,
+  data: Record<string, unknown>,
+): string {
+  let text = `# US Well Production (${view})\n\n`;
+
+  if (view === "summary") {
+    const d = data as WellProductionSummaryData;
+    if (d.national) {
+      const n = d.national;
+      const reported =
+        (typeof n.oil_bbl === "number" && n.oil_bbl > 0) ||
+        (typeof n.gas_mcf === "number" && n.gas_mcf > 0);
+      text += `## National (${n.period ?? "latest"})\n`;
+      text += reported
+        ? `- ${formatProductionMonthLine(n)}\n`
+        : `- Not yet reported for ${n.period ?? "the current period"} (national figures lag; see top states below).\n`;
+      text += `\n`;
+    }
+    if (d.top_states?.length) {
+      text += `## Top Producing States\n`;
+      for (const s of d.top_states) {
+        text += `- **${s.state}** (${s.period}): ${formatProductionMonthLine(s)}\n`;
+      }
+    }
+  } else if (view === "states") {
+    const d = data as WellProductionStatesData;
+    text += `Period ${d.period ?? "latest"} — ${d.count ?? d.states?.length ?? 0} states reporting.\n\n`;
+    for (const s of d.states ?? []) {
+      text += `- **${s.state}**: ${formatProductionMonthLine(s)}\n`;
+    }
+  } else if (view === "state" || view === "well") {
+    const d = data as WellProductionSeriesData;
+    if (view === "well") {
+      text += `**Well**: ${d.well_name ?? "n/a"} · **Operator**: ${d.operator ?? "n/a"} · **API #**: ${d.api_number ?? "n/a"} · **State**: ${d.state ?? "n/a"}\n\n`;
+    } else {
+      text += `**State**: ${d.state ?? "n/a"}`;
+      if (d.period?.start || d.period?.end) {
+        text += ` · **Window**: ${d.period?.start ?? "?"} → ${d.period?.end ?? "?"}`;
+      }
+      text += `\n\n`;
+    }
+    text += `## Monthly Production (${d.count ?? d.data?.length ?? 0} months)\n`;
+    for (const m of d.data ?? []) {
+      text += `- **${m.period}**: ${formatProductionMonthLine(m)}\n`;
+    }
+  } else if (view === "top_producers") {
+    const d = data as WellProductionTopProducersData;
+    if (d.state) text += `**State**: ${d.state}\n`;
+    if (d.period?.start || d.period?.end) {
+      text += `**Window**: ${d.period?.start ?? "?"} → ${d.period?.end ?? "?"}\n`;
+    }
+    text += `\n## Top Producers (${d.count ?? d.producers?.length ?? 0})\n`;
+    for (const p of d.producers ?? []) {
+      const parts: string[] = [];
+      if (typeof p.total_oil_bbl === "number")
+        parts.push(`oil ${p.total_oil_bbl.toLocaleString()} bbl`);
+      if (typeof p.total_gas_mcf === "number")
+        parts.push(`gas ${p.total_gas_mcf.toLocaleString()} mcf`);
+      if (typeof p.months_producing === "number")
+        parts.push(`${p.months_producing} months`);
+      text += `- **${p.well_name ?? p.api_number}** — ${p.operator ?? "unknown operator"} (API ${p.api_number}): ${parts.join(" · ")}\n`;
+    }
+  } else {
+    // cycle_time / cohorts — nested stats objects; render as JSON.
+    text += "```json\n" + JSON.stringify(data, null, 2) + "\n```\n";
+  }
+
+  text += `\n${WELL_PRODUCTION_BETA_NOTE}`;
+  return text;
+}
+
+server.registerTool(
+  "opa_get_well_production",
+  {
+    title: "Get Well Production",
+    description:
+      "Get US oil & gas well production data (BETA coverage: monthly state-level production from EIA + selected state regulators, and well-level histories for selected states only — NOT complete US well-level production). Views: summary (national + top states), states (all reporting states, latest month), state (monthly history for one state), well (monthly history for one well by 14-digit API number), top_producers (highest-output wells, optionally by state), cycle_time (permit-to-production cycle time stats, optionally by state), cohorts (cycle times by spud quarter). Use when the user asks about oil/gas production volumes by state or well, top producing wells, or drill-to-production cycle times. Requires a paid plan with energy intelligence access.",
+    inputSchema: {
+      view: z
+        .enum(WELL_PRODUCTION_VIEWS)
+        .default("summary")
+        .describe(
+          "Which view to return: summary (national + top states), states (all reporting states), state (one state's monthly history — requires 'state'), well (one well's monthly history — requires 'api_number'), top_producers, cycle_time, or cohorts. Default: summary.",
+        ),
+      state: z
+        .string()
+        .optional()
+        .describe(
+          "US state name or 2-letter code (e.g., 'Texas', 'TX'). Required for the state view; optional filter for top_producers and cycle_time.",
+        ),
+      api_number: z
+        .string()
+        .optional()
+        .describe(
+          "14-digit API well number (e.g., '42329447130000'). Required for the well view.",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ view, state, api_number }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_well_production");
+
+    const mapped = wellProductionEndpoint(view, { state, api_number });
+    if ("error" in mapped) return errorResult(mapped.error);
+
+    const response = await makeApiRequest<ApiResponse<Record<string, unknown>>>(
+      mapped.endpoint,
+    );
+
+    if (!response || response.status !== "success") {
+      if (view === "state") {
+        return errorResult(
+          `No well production data available for '${state}'. Beta coverage is limited to states reporting via EIA or selected state regulators — try the states view to see which states currently report. This also requires a paid plan with energy intelligence access.`,
+        );
+      }
+      if (view === "well") {
+        return errorResult(
+          `No production history found for API number '${api_number}'. Well-level coverage is beta and limited to selected states — the number may be valid but outside current coverage. This also requires a paid plan with energy intelligence access.`,
+        );
+      }
+      return errorResult(
+        "Well production data not available. This requires a paid plan with energy intelligence access.",
+      );
+    }
+
+    return textResult(formatWellProduction(view, response.data));
   },
 );
 
