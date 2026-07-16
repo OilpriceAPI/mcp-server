@@ -51,11 +51,26 @@ export const MCP_VERSION = "2.4.2";
 export const CLIENT_MARKER = `oilpriceapi-mcp/${MCP_VERSION}`;
 export const USER_AGENT = CLIENT_MARKER;
 
+function configuredClientMarker(): string {
+  const marker = process.env.OILPRICEAPI_CLIENT_MARKER?.trim();
+  return marker || CLIENT_MARKER;
+}
+
+function configuredClientVersion(marker: string): string {
+  const version = process.env.OILPRICEAPI_CLIENT_VERSION?.trim();
+  if (version) return version;
+
+  const match = marker.match(/\/v?([^/]+)$/);
+  return match?.[1] || MCP_VERSION;
+}
+
 export function clientAttributionHeaders(): Record<string, string> {
+  const marker = configuredClientMarker();
+
   return {
     "User-Agent": USER_AGENT,
-    "X-Api-Client": CLIENT_MARKER,
-    "X-Client-Version": MCP_VERSION,
+    "X-Api-Client": marker,
+    "X-Client-Version": configuredClientVersion(marker),
   };
 }
 
