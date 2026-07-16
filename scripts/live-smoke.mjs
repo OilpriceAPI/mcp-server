@@ -109,13 +109,40 @@ function rateLimitGuard(status, label) {
   }
 }
 
+// Sentinel thrown when a plan-gated endpoint answers 402/403 because the CI
+// key lacks the entitlement (e.g. energy intelligence for well production /
+// drilling). That is the documented paywall behavior — the MCP tools surface
+// it with an upgrade link — NOT a contract regression, so callers SKIP.
+class PlanGated extends Error {
+  constructor(label, status) {
+    super(`plan-gated (HTTP ${status}): ${label}`);
+    this.name = "PlanGated";
+  }
+}
+
+// Throw PlanGated when a premium endpoint answers 402/403 so the per-check
+// try/catch can SKIP instead of failing. Only use on endpoints where the
+// shared CI key may legitimately lack the entitlement.
+function planGateGuard(status, label) {
+  if (status === 402 || status === 403) {
+    throw new PlanGated(label, status);
+  }
+}
+
 // Centralised per-check error handling. Returns the new failure count: a 429
-// (RateLimited) is logged as a tolerated SKIP and does NOT increment failures;
-// any other error is a real failure and increments.
+// (RateLimited) or an entitlement 402/403 (PlanGated) is logged as a
+// tolerated SKIP and does NOT increment failures; any other error is a real
+// failure and increments.
 function handleCheckError(err, failures) {
   if (err instanceof RateLimited) {
     console.log(
       `SKIP (rate-limited (shared CI key), skipping live assertion): ${err.message}`,
+    );
+    return failures;
+  }
+  if (err instanceof PlanGated) {
+    console.log(
+      `SKIP (plan-gated, CI key lacks the entitlement — tolerated): ${err.message}`,
     );
     return failures;
   }
@@ -273,7 +300,71 @@ async function main() {
     }
   }
 
-  // 5. WRITE round-trip (opt-in) — create -> poll events -> delete.
+  await sleep(RATE_LIMIT_MS);
+
+  // 5. Well production summary — GET /v1/well-production (#31)
+  // What opa_get_well_production (summary view) builds. Require 200 + a
+  // non-empty top_states array with numeric production figures.
+  // TOLERANT of 402/403: well production is a plan-gated dataset and the
+  // shared CI key may not carry the energy-intelligence entitlement. A gate
+  // response is the documented paywall behavior (the MCP tool surfaces it
+  // with an upgrade link), NOT a contract regression — SKIP, don't fail.
+  try {
+    const { status, body } = await getJson("/v1/well-production");
+    rateLimitGuard(status, "GET /v1/well-production");
+    planGateGuard(status, "GET /v1/well-production");
+    assert(status === 200, `well-production expected 200, got ${status}`);
+    const data = body && body.data;
+    assert(
+      data && Array.isArray(data.top_states) && data.top_states.length > 0,
+      `well-production missing data.top_states[]: ${JSON.stringify(body).slice(0, 300)}`,
+    );
+    const top = data.top_states[0];
+    assert(
+      typeof top.state === "string" &&
+        typeof top.oil_bbl === "number" &&
+        Number.isFinite(top.oil_bbl),
+      "well-production top state missing state/oil_bbl",
+    );
+    console.log(
+      `PASS: GET /v1/well-production -> 200, top state ${top.state} @ ${top.oil_bbl} bbl (${top.period})`,
+    );
+  } catch (err) {
+    failures = handleCheckError(err, failures);
+    if (!(err instanceof RateLimited) && !(err instanceof PlanGated)) {
+      console.error(`FAIL (well-production): ${err.message}`);
+    }
+  }
+
+  await sleep(RATE_LIMIT_MS);
+
+  // 6. Drilling snapshot — GET /v1/drilling/latest (#31)
+  // The endpoint's CURRENT shape is { rig_counts: {...}, frac_spread_count,
+  // well_permits: {...}, duc_wells_total, ... } — the old
+  // total_wells/active_rigs shape is gone, and the pre-#31 formatter crashed
+  // on it. This check pins the new contract.
+  // Also TOLERANT of 402/403 — drilling is plan-gated like well production.
+  try {
+    const { status, body } = await getJson("/v1/drilling/latest");
+    rateLimitGuard(status, "GET /v1/drilling/latest");
+    planGateGuard(status, "GET /v1/drilling/latest");
+    assert(status === 200, `drilling expected 200, got ${status}`);
+    const data = body && body.data;
+    assert(
+      data && data.rig_counts && typeof data.rig_counts === "object",
+      `drilling missing data.rig_counts: ${JSON.stringify(body).slice(0, 300)}`,
+    );
+    console.log(
+      `PASS: GET /v1/drilling/latest -> 200, rig_counts keys: ${Object.keys(data.rig_counts).join(", ")}`,
+    );
+  } catch (err) {
+    failures = handleCheckError(err, failures);
+    if (!(err instanceof RateLimited) && !(err instanceof PlanGated)) {
+      console.error(`FAIL (drilling): ${err.message}`);
+    }
+  }
+
+  // 7. WRITE round-trip (opt-in) — create -> poll events -> delete.
   // Guarded behind SMOKE_WRITE_SUBSCRIPTIONS=1 so the default run never writes
   // to prod. When enabled, the created watch is ALWAYS deleted in the same run
   // (even if a mid-step assertion fails) so prod is not littered.

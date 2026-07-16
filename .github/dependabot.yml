@@ -1,0 +1,19 @@
+# Keep npm deps and GitHub Actions current. Weekly batches to keep PR noise
+# low; dev-dep vulnerabilities (vite/vitest chain) get picked up here instead
+# of waiting for a manual `npm audit`.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      dev-dependencies:
+        dependency-type: "development"
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 3
