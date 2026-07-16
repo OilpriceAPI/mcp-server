@@ -47,7 +47,17 @@ import { z } from "zod";
 // API Configuration
 const API_BASE =
   process.env.OILPRICEAPI_BASE_URL || "https://api.oilpriceapi.com";
-export const USER_AGENT = "oilpriceapi-mcp/2.4.2";
+export const MCP_VERSION = "2.4.2";
+export const CLIENT_MARKER = `oilpriceapi-mcp/${MCP_VERSION}`;
+export const USER_AGENT = CLIENT_MARKER;
+
+export function clientAttributionHeaders(): Record<string, string> {
+  return {
+    "User-Agent": USER_AGENT,
+    "X-Api-Client": CLIENT_MARKER,
+    "X-Client-Version": MCP_VERSION,
+  };
+}
 
 /**
  * Get the API key from the environment. Read dynamically (not captured at
@@ -704,7 +714,7 @@ export async function makeApiRequest<T>(
   fetchFn: typeof fetch = fetch,
 ): Promise<T | null> {
   const headers: Record<string, string> = {
-    "User-Agent": USER_AGENT,
+    ...clientAttributionHeaders(),
     Accept: "application/json",
   };
 
@@ -811,7 +821,7 @@ export async function makeAuthRequest(
   const { method = "GET", body, headers: extraHeaders } = options;
 
   const headers: Record<string, string> = {
-    "User-Agent": USER_AGENT,
+    ...clientAttributionHeaders(),
     Accept: "application/json",
     // The API accepts the customer API key as a bearer token.
     Authorization: `Bearer ${getApiKey()}`,
@@ -1008,7 +1018,7 @@ export async function fetchDemoPrices(
 ): Promise<DemoPrice[] | null> {
   try {
     const response = await fetchFn(`${API_BASE}/v1/demo/prices`, {
-      headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
+      headers: { ...clientAttributionHeaders(), Accept: "application/json" },
     });
     if (!response.ok) return null;
     const payload = (await response.json()) as ApiResponse<{

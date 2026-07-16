@@ -21,6 +21,8 @@ import {
   SIGNUP_URL,
   UPGRADE_URL,
   createSandboxServer,
+  CLIENT_MARKER,
+  MCP_VERSION,
 } from "../index.js";
 
 // ---------------------------------------------------------------------------
@@ -590,6 +592,8 @@ describe("makeAuthRequest - request shaping", () => {
     expect(init.headers["Content-Type"]).toBe("application/json");
     expect(init.headers["X-OPA-Source"]).toBe("mcp");
     expect(init.headers["X-OPA-Tool"]).toBe("opa_create_price_subscription");
+    expect(init.headers["X-Api-Client"]).toBe(CLIENT_MARKER);
+    expect(init.headers["X-Client-Version"]).toBe(MCP_VERSION);
     expect(JSON.parse(init.body)).toEqual({
       codes: ["BRENT_CRUDE_USD"],
       interval_seconds: 3600,
@@ -705,6 +709,8 @@ describe("demo mode (#16) - fetchDemoPrices", () => {
     const [url, init] = mockFetch.mock.calls[0];
     expect(String(url)).toContain("/v1/demo/prices");
     expect(init.headers.Authorization).toBeUndefined();
+    expect(init.headers["X-Api-Client"]).toBe(CLIENT_MARKER);
+    expect(init.headers["X-Client-Version"]).toBe(MCP_VERSION);
   });
 
   it("returns null when the demo endpoint is unreachable", async () => {
@@ -980,6 +986,8 @@ describe("keyed behavior unchanged", () => {
     expect(String(url)).toContain("/v1/prices/latest?by_code=BRENT_CRUDE_USD");
     expect(String(url)).not.toContain("/v1/demo/");
     expect(init.headers.Authorization).toBe("Bearer test-key-123");
+    expect(init.headers["X-Api-Client"]).toBe(CLIENT_MARKER);
+    expect(init.headers["X-Client-Version"]).toBe(MCP_VERSION);
   });
 });
 
