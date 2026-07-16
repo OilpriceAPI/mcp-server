@@ -1,17 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.OilpriceAPI/mcp-server",
-  "description": "Real-time oil, gas & commodity prices. 26 tools: spot, history, futures, alerts, market briefs.",
+  "description": "Real-time oil, gas & commodity data. 27 tools: spot, futures, drilling, wells, alerts.",
   "repository": {
     "url": "https://github.com/OilpriceAPI/mcp-server",
     "source": "github"
   },
-  "version": "2.4.2",
+  "version": "2.5.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "oilpriceapi-mcp",
-      "version": "2.4.2",
+      "version": "2.5.0",
       "transport": {
         "type": "stdio"
       },

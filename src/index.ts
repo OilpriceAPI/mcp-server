@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * OilPriceAPI MCP Server v2.4.2
+ * OilPriceAPI MCP Server v2.5.0
  *
  * The energy commodity MCP server. Real-time oil, gas, and commodity prices
  * for Claude, Cursor, VS Code, and any MCP-compatible client.
@@ -47,7 +47,7 @@ import { z } from "zod";
 // API Configuration
 const API_BASE =
   process.env.OILPRICEAPI_BASE_URL || "https://api.oilpriceapi.com";
-export const MCP_VERSION = "2.4.2";
+export const MCP_VERSION = "2.5.0";
 export const CLIENT_MARKER = `oilpriceapi-mcp/${MCP_VERSION}`;
 export const USER_AGENT = CLIENT_MARKER;
 
@@ -491,7 +491,7 @@ interface DrillingData {
 
 const server = new McpServer({
   name: "oilpriceapi",
-  version: "2.4.2",
+  version: "2.5.0",
 });
 
 // ---------------------------------------------------------------------------
@@ -3819,7 +3819,7 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("OilPriceAPI MCP Server v2.4.2 running on stdio");
+  console.error("OilPriceAPI MCP Server v2.5.0 running on stdio");
 }
 
 main().catch((error) => {
