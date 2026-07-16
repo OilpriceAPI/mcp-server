@@ -989,6 +989,26 @@ describe("keyed behavior unchanged", () => {
     expect(init.headers["X-Api-Client"]).toBe(CLIENT_MARKER);
     expect(init.headers["X-Client-Version"]).toBe(MCP_VERSION);
   });
+
+  it("allows wrapper integrations to override the explicit client marker", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    vi.stubEnv("OILPRICEAPI_CLIENT_MARKER", "oilpriceapi-gemini/1.0.0");
+
+    const mockPayload = { status: "success", data: { price: 85.0 } };
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => mockPayload,
+      headers: { get: () => null },
+    });
+
+    await makeApiRequest("/v1/prices/latest", mockFetch as typeof fetch);
+
+    const [, init] = mockFetch.mock.calls[0];
+    expect(init.headers["User-Agent"]).toBe(CLIENT_MARKER);
+    expect(init.headers["X-Api-Client"]).toBe("oilpriceapi-gemini/1.0.0");
+    expect(init.headers["X-Client-Version"]).toBe("1.0.0");
+  });
 });
 
 // ---------------------------------------------------------------------------
