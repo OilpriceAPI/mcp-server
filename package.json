@@ -1,6 +1,6 @@
 {
   "name": "oilpriceapi-mcp",
-  "version": "2.4.2",
+  "version": "2.5.0",
   "mcpName": "io.github.OilpriceAPI/mcp-server",
   "description": "The energy commodity MCP server. Real-time oil, gas, and commodity prices for Claude, Cursor, and any MCP client.",
   "type": "module",
