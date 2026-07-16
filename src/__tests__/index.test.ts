@@ -26,6 +26,8 @@ import {
   formatDrillingData,
   WELL_PRODUCTION_VIEWS,
   WELL_PRODUCTION_BETA_NOTE,
+  CLIENT_MARKER,
+  MCP_VERSION,
 } from "../index.js";
 
 // ---------------------------------------------------------------------------
@@ -595,6 +597,8 @@ describe("makeAuthRequest - request shaping", () => {
     expect(init.headers["Content-Type"]).toBe("application/json");
     expect(init.headers["X-OPA-Source"]).toBe("mcp");
     expect(init.headers["X-OPA-Tool"]).toBe("opa_create_price_subscription");
+    expect(init.headers["X-Api-Client"]).toBe(CLIENT_MARKER);
+    expect(init.headers["X-Client-Version"]).toBe(MCP_VERSION);
     expect(JSON.parse(init.body)).toEqual({
       codes: ["BRENT_CRUDE_USD"],
       interval_seconds: 3600,
@@ -710,6 +714,8 @@ describe("demo mode (#16) - fetchDemoPrices", () => {
     const [url, init] = mockFetch.mock.calls[0];
     expect(String(url)).toContain("/v1/demo/prices");
     expect(init.headers.Authorization).toBeUndefined();
+    expect(init.headers["X-Api-Client"]).toBe(CLIENT_MARKER);
+    expect(init.headers["X-Client-Version"]).toBe(MCP_VERSION);
   });
 
   it("returns null when the demo endpoint is unreachable", async () => {
@@ -985,6 +991,28 @@ describe("keyed behavior unchanged", () => {
     expect(String(url)).toContain("/v1/prices/latest?by_code=BRENT_CRUDE_USD");
     expect(String(url)).not.toContain("/v1/demo/");
     expect(init.headers.Authorization).toBe("Bearer test-key-123");
+    expect(init.headers["X-Api-Client"]).toBe(CLIENT_MARKER);
+    expect(init.headers["X-Client-Version"]).toBe(MCP_VERSION);
+  });
+
+  it("allows wrapper integrations to override the explicit client marker", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    vi.stubEnv("OILPRICEAPI_CLIENT_MARKER", "oilpriceapi-gemini/1.0.0");
+
+    const mockPayload = { status: "success", data: { price: 85.0 } };
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => mockPayload,
+      headers: { get: () => null },
+    });
+
+    await makeApiRequest("/v1/prices/latest", mockFetch as typeof fetch);
+
+    const [, init] = mockFetch.mock.calls[0];
+    expect(init.headers["User-Agent"]).toBe(CLIENT_MARKER);
+    expect(init.headers["X-Api-Client"]).toBe("oilpriceapi-gemini/1.0.0");
+    expect(init.headers["X-Client-Version"]).toBe("1.0.0");
   });
 });
 
