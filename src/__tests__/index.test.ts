@@ -26,6 +26,11 @@ import {
   formatDrillingData,
   WELL_PRODUCTION_VIEWS,
   WELL_PRODUCTION_BETA_NOTE,
+  resolveCarrierSlug,
+  fuelSurchargeEndpoint,
+  formatFuelSurcharge,
+  FUEL_SURCHARGE_CARRIER_ALIASES,
+  FUEL_SURCHARGE_PROVENANCE_NOTE,
   CLIENT_MARKER,
   MCP_VERSION,
 } from "../index.js";
@@ -1046,8 +1051,8 @@ describe("tool registration metadata", () => {
   const DELETE_TOOLS = ["opa_delete_price_alert", "opa_delete_subscription"];
   const WRITE_TOOLS = new Set([...CREATE_TOOLS, ...DELETE_TOOLS]);
 
-  it("registers exactly 27 tools", () => {
-    expect(Object.keys(tools)).toHaveLength(27);
+  it("registers exactly 28 tools", () => {
+    expect(Object.keys(tools)).toHaveLength(28);
   });
 
   it("registers all four write tools (creates + deletes)", () => {
@@ -1537,6 +1542,293 @@ describe("keylessTeaserResult covers opa_get_well_production (#31)", () => {
     const text = keylessTeaserResult("opa_get_well_production").content[0].text;
     expect(text).toContain("opa_get_well_production");
     expect(text).toContain("beta coverage");
+    expect(text).toContain(SIGNUP_URL);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #43 — LTL carrier fuel surcharge (opa_get_fuel_surcharge)
+// ---------------------------------------------------------------------------
+
+describe("resolveCarrierSlug (#43)", () => {
+  it("maps common carrier names and abbreviations to slugs", () => {
+    expect(resolveCarrierSlug("ODFL")).toBe("odfl");
+    expect(resolveCarrierSlug("Old Dominion")).toBe("odfl");
+    expect(resolveCarrierSlug("old dominion freight line")).toBe("odfl");
+    expect(resolveCarrierSlug("Saia")).toBe("saia");
+    expect(resolveCarrierSlug("Estes Express")).toBe("estes");
+    expect(resolveCarrierSlug("FedEx Freight")).toBe("fedex-freight");
+    expect(resolveCarrierSlug("fedex")).toBe("fedex-freight");
+    expect(resolveCarrierSlug("XPO")).toBe("xpo");
+    expect(resolveCarrierSlug("ArcBest")).toBe("abf");
+    expect(resolveCarrierSlug("R+L Carriers")).toBe("rl-carriers");
+    expect(resolveCarrierSlug("TForce Freight")).toBe("tforce");
+    expect(resolveCarrierSlug("SEFL")).toBe("southeastern");
+  });
+
+  it("slugifies unknown carriers instead of rejecting them", () => {
+    expect(resolveCarrierSlug("Dayton Freight")).toBe("dayton-freight");
+    expect(resolveCarrierSlug("  A. Duie Pyle  ")).toBe("a-duie-pyle");
+  });
+
+  it("every alias value is already a canonical slug (aliases don't chain)", () => {
+    for (const slug of Object.values(FUEL_SURCHARGE_CARRIER_ALIASES)) {
+      expect(resolveCarrierSlug(slug)).toBe(slug);
+    }
+  });
+});
+
+describe("fuelSurchargeEndpoint (#43) - request mapping", () => {
+  it("maps no carrier to the all-carriers list endpoint", () => {
+    expect(fuelSurchargeEndpoint()).toBe("/v1/fuel-surcharge");
+    expect(fuelSurchargeEndpoint(undefined)).toBe("/v1/fuel-surcharge");
+    expect(fuelSurchargeEndpoint("   ")).toBe("/v1/fuel-surcharge");
+  });
+
+  it("maps a carrier to its /latest endpoint via the slug resolver", () => {
+    expect(fuelSurchargeEndpoint("ODFL")).toBe(
+      "/v1/fuel-surcharge/odfl/latest",
+    );
+    expect(fuelSurchargeEndpoint("FedEx Freight")).toBe(
+      "/v1/fuel-surcharge/fedex-freight/latest",
+    );
+  });
+});
+
+// Contract fixture from oilpriceapi-api#4772 (shared API contract).
+const FUEL_SURCHARGE_CONTRACT_ENTRY = {
+  carrier: "odfl",
+  carrier_name: "Old Dominion Freight Line",
+  mode: "ltl",
+  surcharge_percent: 33.9,
+  effective_date: "2026-07-13",
+  doe_diesel_price: 3.756,
+  diesel_band: { min: 3.7, max: 3.79 },
+  source: "https://www.odfl.com/us/en/resources/fuel-surcharge.html",
+  retrieved_at: "2026-07-15T12:00:00Z",
+};
+
+describe("formatFuelSurcharge (#43) - formatting", () => {
+  it("formats the all-carriers list payload from the #4772 contract", () => {
+    const text = formatFuelSurcharge({
+      carriers: [FUEL_SURCHARGE_CONTRACT_ENTRY],
+    });
+
+    expect(text).toContain("LTL Carrier Fuel Surcharges (1 carriers)");
+    expect(text).toContain("Old Dominion Freight Line");
+    expect(text).toContain("`odfl`");
+    expect(text).toContain("33.9%");
+    expect(text).toContain("effective 2026-07-13");
+    expect(text).toContain("$3.70–$3.79/gal");
+    expect(text).toContain("DOE diesel: $3.756/gal");
+    expect(text).toContain(
+      "https://www.odfl.com/us/en/resources/fuel-surcharge.html",
+    );
+    expect(text).toContain("retrieved 2026-07-15T12:00:00Z");
+    expect(text).toContain(FUEL_SURCHARGE_PROVENANCE_NOTE);
+  });
+
+  it("formats a single-carrier /latest payload (same shape, no carriers[])", () => {
+    const text = formatFuelSurcharge(FUEL_SURCHARGE_CONTRACT_ENTRY);
+
+    expect(text).toContain("# Fuel Surcharge — Old Dominion Freight Line");
+    expect(text).toContain("33.9%");
+    expect(text).toContain(FUEL_SURCHARGE_PROVENANCE_NOTE);
+  });
+
+  it("tolerates missing optional fields without throwing or fabricating", () => {
+    const text = formatFuelSurcharge({
+      carriers: [{ carrier: "saia" }],
+    });
+
+    expect(text).toContain("saia");
+    expect(text).toContain("(surcharge not reported)");
+    expect(text).not.toContain("NaN");
+    expect(text).not.toContain("undefined");
+    expect(text).toContain(FUEL_SURCHARGE_PROVENANCE_NOTE);
+  });
+
+  it("keeps serving stale values with their TRUE retrieved_at (honest staleness)", () => {
+    // The contract mandates: stale carrier fetch => last value with its real
+    // effective_date/retrieved_at, never faked freshness. The formatter must
+    // surface whatever timestamps the API reports, unmodified.
+    const stale = {
+      ...FUEL_SURCHARGE_CONTRACT_ENTRY,
+      effective_date: "2026-05-04",
+      retrieved_at: "2026-05-06T12:00:00Z",
+    };
+    const text = formatFuelSurcharge({ carriers: [stale] });
+    expect(text).toContain("effective 2026-05-04");
+    expect(text).toContain("retrieved 2026-05-06T12:00:00Z");
+  });
+});
+
+describe("opa_get_fuel_surcharge (#43) - tool handler paths", () => {
+  const server = createSandboxServer();
+  const tools = (
+    server as unknown as {
+      _registeredTools: Record<
+        string,
+        {
+          handler: (
+            args: Record<string, unknown>,
+            extra: Record<string, unknown>,
+          ) => Promise<{
+            content: Array<{ type: string; text: string }>;
+            isError?: boolean;
+          }>;
+        }
+      >;
+    }
+  )._registeredTools;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("returns the keyless teaser when no API key is configured", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "");
+    vi.stubEnv("OIL_PRICE_API_KEY", "");
+
+    const result = await tools.opa_get_fuel_surcharge.handler({}, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("opa_get_fuel_surcharge");
+    expect(result.content[0].text).toContain(SIGNUP_URL);
+    expect(result.content[0].text).not.toContain("Authentication failed");
+  });
+
+  it("keyed all-carriers call formats the contract shape end-to-end", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({
+        status: "success",
+        data: { carriers: [FUEL_SURCHARGE_CONTRACT_ENTRY] },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await tools.opa_get_fuel_surcharge.handler({}, {});
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain("Old Dominion Freight Line");
+    expect(result.content[0].text).toContain("33.9%");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(String(fetchSpy.mock.calls[0][0])).toContain("/v1/fuel-surcharge");
+  });
+
+  it("keyed single-carrier call hits the /{carrier}/latest endpoint", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({
+        status: "success",
+        data: FUEL_SURCHARGE_CONTRACT_ENTRY,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await tools.opa_get_fuel_surcharge.handler(
+      { carrier: "Old Dominion" },
+      {},
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain(
+      "# Fuel Surcharge — Old Dominion Freight Line",
+    );
+    expect(String(fetchSpy.mock.calls[0][0])).toContain(
+      "/v1/fuel-surcharge/odfl/latest",
+    );
+  });
+
+  it("returns a clear 'not yet available' error when the endpoint 404s (not yet deployed) — never a crash, never fabricated data", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        headers: { get: () => null },
+        text: async () => JSON.stringify({ error: "Not found" }),
+      }),
+    );
+
+    const result = await tools.opa_get_fuel_surcharge.handler({}, {});
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain(
+      "Fuel surcharge data is not yet available",
+    );
+    // Never fabricate a surcharge value on the unavailable path.
+    expect(result.content[0].text).not.toMatch(/\d+\.\d+%/);
+  });
+
+  it("returns a carrier-aware error on 404 for a specific carrier", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        headers: { get: () => null },
+        text: async () =>
+          JSON.stringify({ error: "Unknown carrier: dayton-freight" }),
+      }),
+    );
+
+    const result = await tools.opa_get_fuel_surcharge.handler(
+      { carrier: "Dayton Freight" },
+      {},
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Dayton Freight");
+    expect(result.content[0].text).toContain("without a carrier");
+  });
+
+  it("surfaces the 402 entitlement gate with the upgrade link", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 402,
+        statusText: "Payment Required",
+        headers: { get: () => null },
+        text: async () =>
+          JSON.stringify({
+            message: "Fuel surcharge data requires a paid plan",
+          }),
+      }),
+    );
+
+    // Calling the handler directly bypasses the SDK's error-to-result
+    // conversion, so the ApiGateError surfaces as a rejection here.
+    await expect(
+      tools.opa_get_fuel_surcharge.handler({}, {}),
+    ).rejects.toMatchObject({
+      name: "ApiGateError",
+      status: 402,
+      message: expect.stringContaining(UPGRADE_URL),
+    });
+  });
+});
+
+describe("keylessTeaserResult covers opa_get_fuel_surcharge (#43)", () => {
+  it("returns the fuel-surcharge teaser with LTL + DOE wording", () => {
+    const text = keylessTeaserResult("opa_get_fuel_surcharge").content[0].text;
+    expect(text).toContain("opa_get_fuel_surcharge");
+    expect(text).toContain("LTL");
+    expect(text).toContain("DOE");
     expect(text).toContain(SIGNUP_URL);
   });
 });

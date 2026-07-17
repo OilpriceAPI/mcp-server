@@ -364,6 +364,48 @@ async function main() {
     }
   }
 
+  await sleep(RATE_LIMIT_MS);
+
+  // 6b. LTL fuel surcharge — GET /v1/fuel-surcharge (#43)
+  // What opa_get_fuel_surcharge (all-carriers view) builds. The endpoint
+  // ships in a parallel API sprint (oilpriceapi-api#4767/#4772), so a 404 is
+  // the documented not-yet-deployed state — the MCP tool returns a clear
+  // "not yet available" message for it — and is a SKIP, not a failure. Once
+  // deployed, this check requires 200 + data.carriers[] with a numeric
+  // surcharge_percent. Also TOLERANT of 402/403 (plan-gated dataset).
+  try {
+    const { status, body } = await getJson("/v1/fuel-surcharge");
+    rateLimitGuard(status, "GET /v1/fuel-surcharge");
+    planGateGuard(status, "GET /v1/fuel-surcharge");
+    if (status === 404) {
+      console.log(
+        "SKIP: GET /v1/fuel-surcharge -> 404 — endpoint not yet deployed (oilpriceapi-api#4772); the MCP tool reports 'not yet available' for this state.",
+      );
+    } else {
+      assert(status === 200, `fuel-surcharge expected 200/404, got ${status}`);
+      const carriers = body && body.data && body.data.carriers;
+      assert(
+        Array.isArray(carriers) && carriers.length > 0,
+        `fuel-surcharge missing data.carriers[]: ${JSON.stringify(body).slice(0, 300)}`,
+      );
+      const first = carriers[0];
+      assert(
+        typeof first.carrier === "string" &&
+          typeof first.surcharge_percent === "number" &&
+          Number.isFinite(first.surcharge_percent),
+        "fuel-surcharge first carrier missing carrier/surcharge_percent",
+      );
+      console.log(
+        `PASS: GET /v1/fuel-surcharge -> 200, ${carriers.length} carrier(s), ${first.carrier} @ ${first.surcharge_percent}%`,
+      );
+    }
+  } catch (err) {
+    failures = handleCheckError(err, failures);
+    if (!(err instanceof RateLimited) && !(err instanceof PlanGated)) {
+      console.error(`FAIL (fuel-surcharge): ${err.message}`);
+    }
+  }
+
   // 7. WRITE round-trip (opt-in) — create -> poll events -> delete.
   // Guarded behind SMOKE_WRITE_SUBSCRIPTIONS=1 so the default run never writes
   // to prod. When enabled, the created watch is ALWAYS deleted in the same run

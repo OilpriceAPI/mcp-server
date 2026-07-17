@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * OilPriceAPI MCP Server v2.5.0
+ * OilPriceAPI MCP Server v2.6.0
  *
  * The energy commodity MCP server. Real-time oil, gas, and commodity prices
  * for Claude, Cursor, VS Code, and any MCP-compatible client.
@@ -17,11 +17,12 @@
  * limit/feature gate hit by the API plus an upgrade link (see ApiGateError in
  * makeApiRequest and alertHttpError for the authenticated tools).
  *
- * 27 tools total (opa_ prefixed):
+ * 28 tools total (opa_ prefixed):
  *
- * 18 read-only tools: prices, history, futures, marine fuels, rig counts,
- * drilling, diesel-by-state, storage, OPEC production, forecasts, EIA oil
- * inventories, well permits, well production, refining spreads.
+ * 19 read-only tools: prices, history, futures, marine fuels, rig counts,
+ * drilling, diesel-by-state, LTL carrier fuel surcharges, storage, OPEC
+ * production, forecasts, EIA oil inventories, well permits, well production,
+ * refining spreads.
  *
  * 4 authenticated price-alert tools (opa_*_price_alert / opa_get_alert_triggers):
  * create/list/delete persistent price alerts tied to the user's account and read
@@ -47,7 +48,7 @@ import { z } from "zod";
 // API Configuration
 const API_BASE =
   process.env.OILPRICEAPI_BASE_URL || "https://api.oilpriceapi.com";
-export const MCP_VERSION = "2.5.0";
+export const MCP_VERSION = "2.6.0";
 export const CLIENT_MARKER = `oilpriceapi-mcp/${MCP_VERSION}`;
 export const USER_AGENT = CLIENT_MARKER;
 
@@ -491,7 +492,7 @@ interface DrillingData {
 
 const server = new McpServer({
   name: "oilpriceapi",
-  version: "2.5.0",
+  version: "2.6.0",
 });
 
 // ---------------------------------------------------------------------------
@@ -1321,6 +1322,11 @@ const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
       does: "Returns the AAA average retail diesel price for any US state.",
       example: "Diesel Price — TX: $X.XXX/gallon (24h change ±$0.0XX)",
     },
+    opa_get_fuel_surcharge: {
+      does: "Returns the fuel surcharge percentage each major LTL freight carrier (ODFL, Saia, Estes, FedEx Freight, XPO, ABF, ...) currently publishes, with the effective date, the matched DOE/EIA on-highway diesel price band, the underlying DOE diesel price, and source + retrieval provenance.",
+      example:
+        "Old Dominion Freight Line (odfl): XX.X% — effective YYYY-MM-DD · diesel band $X.XX–$X.XX · DOE diesel $X.XXX/gal",
+    },
     opa_get_storage: {
       does: "Returns oil storage/inventory levels for Cushing, Oklahoma and the US Strategic Petroleum Reserve.",
       example:
@@ -1425,8 +1431,8 @@ export function keylessTeaserResult(toolName: string) {
 }
 
 // =========================================================================
-// READ TOOLS (18 — opa_ prefixed to avoid collisions). Plus 4 authenticated
-// price-alert tools further below, for 22 tools total.
+// READ TOOLS (19 — opa_ prefixed to avoid collisions). Plus 4 authenticated
+// price-alert tools further below, for 23 tools total.
 // =========================================================================
 
 server.registerTool(
@@ -2187,6 +2193,189 @@ server.registerTool(
     text += `\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
 
     return textResult(text);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// LTL carrier fuel surcharge (#43) — /v1/fuel-surcharge*
+//
+// Each major LTL freight carrier publishes a weekly fuel-surcharge % tied to
+// the DOE/EIA on-highway diesel index. These tools surface the carrier's own
+// PUBLISHED schedule value — not a computed estimate — with source +
+// retrieved_at provenance (collect freely, claim nothing: we track what the
+// carrier publishes and cite where/when we got it).
+//
+// NOTE: the /v1/fuel-surcharge endpoints ship in a parallel API sprint
+// (oilpriceapi-api#4767/#4772). Until they deploy, the API answers 404 and
+// this tool returns a clear "not yet available" message — never a crash,
+// never fabricated data.
+// ---------------------------------------------------------------------------
+
+/**
+ * Common LTL carrier names/abbreviations → API carrier slug. Anything not in
+ * the map is slugified (lowercased, non-alphanumerics → hyphens) and passed
+ * through; an unknown slug gets a clean not-covered error from the API (404),
+ * which the tool turns into an actionable message.
+ */
+export const FUEL_SURCHARGE_CARRIER_ALIASES: Record<string, string> = {
+  odfl: "odfl",
+  "old dominion": "odfl",
+  "old dominion freight": "odfl",
+  "old dominion freight line": "odfl",
+  saia: "saia",
+  "saia ltl freight": "saia",
+  estes: "estes",
+  "estes express": "estes",
+  "estes express lines": "estes",
+  fedex: "fedex-freight",
+  "fedex freight": "fedex-freight",
+  xpo: "xpo",
+  "xpo logistics": "xpo",
+  abf: "abf",
+  "abf freight": "abf",
+  arcbest: "abf",
+  "r+l": "rl-carriers",
+  "r+l carriers": "rl-carriers",
+  rl: "rl-carriers",
+  "rl carriers": "rl-carriers",
+  averitt: "averitt",
+  "averitt express": "averitt",
+  tforce: "tforce",
+  "tforce freight": "tforce",
+  "t-force": "tforce",
+  southeastern: "southeastern",
+  "southeastern freight": "southeastern",
+  "southeastern freight lines": "southeastern",
+  sefl: "southeastern",
+};
+
+/**
+ * Resolve a carrier name/abbreviation to the API carrier slug (#43).
+ * Exported for tests.
+ */
+export function resolveCarrierSlug(input: string): string {
+  const normalized = input.toLowerCase().trim();
+  const alias = FUEL_SURCHARGE_CARRIER_ALIASES[normalized];
+  if (alias) return alias;
+  // Slugify pass-through: "FedEx Freight" -> "fedex-freight".
+  return normalized.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Map an optional carrier to the fuel-surcharge endpoint (#43).
+ * Exported for tests.
+ */
+export function fuelSurchargeEndpoint(carrier?: string): string {
+  const slug = carrier?.trim() ? resolveCarrierSlug(carrier) : "";
+  return slug ? `/v1/fuel-surcharge/${slug}/latest` : "/v1/fuel-surcharge";
+}
+
+interface FuelSurchargeEntry {
+  carrier?: string;
+  carrier_name?: string;
+  mode?: string;
+  surcharge_percent?: number | null;
+  effective_date?: string;
+  doe_diesel_price?: number | null;
+  diesel_band?: { min?: number | null; max?: number | null } | null;
+  source?: string;
+  retrieved_at?: string;
+}
+
+interface FuelSurchargeListData {
+  carriers?: FuelSurchargeEntry[];
+}
+
+export const FUEL_SURCHARGE_PROVENANCE_NOTE =
+  "_Each percentage is the fuel surcharge the carrier itself publishes (matched to the DOE/EIA on-highway diesel index) — tracked from the carrier's public schedule with source + retrieval time, not a computed estimate. Data from [OilPriceAPI](https://oilpriceapi.com)_";
+
+function formatFuelSurchargeEntry(e: FuelSurchargeEntry): string {
+  const name = e.carrier_name || e.carrier || "Unknown carrier";
+  const slugPart = e.carrier
+    ? ` (\`${e.carrier}\`${e.mode ? `, ${e.mode.toUpperCase()}` : ""})`
+    : "";
+  let text = `- **${name}**${slugPart}: `;
+  text +=
+    typeof e.surcharge_percent === "number"
+      ? `**${e.surcharge_percent.toFixed(1)}%**`
+      : "(surcharge not reported)";
+  if (e.effective_date) text += ` — effective ${e.effective_date}`;
+  const details: string[] = [];
+  const band = e.diesel_band;
+  if (band && (typeof band.min === "number" || typeof band.max === "number")) {
+    const min = typeof band.min === "number" ? `$${band.min.toFixed(2)}` : "?";
+    const max = typeof band.max === "number" ? `$${band.max.toFixed(2)}` : "?";
+    details.push(`Diesel band: ${min}–${max}/gal`);
+  }
+  if (typeof e.doe_diesel_price === "number") {
+    details.push(`DOE diesel: $${e.doe_diesel_price.toFixed(3)}/gal`);
+  }
+  if (e.source) {
+    details.push(
+      `Source: ${e.source}${e.retrieved_at ? ` (retrieved ${e.retrieved_at})` : ""}`,
+    );
+  } else if (e.retrieved_at) {
+    details.push(`Retrieved: ${e.retrieved_at}`);
+  }
+  for (const d of details) text += `\n  - ${d}`;
+  return text;
+}
+
+/**
+ * Format a fuel-surcharge API payload (#43): either the all-carriers list
+ * ({ carriers: [...] }) or a single-carrier object (same entry shape).
+ * Always ends with the provenance note. Exported for tests.
+ */
+export function formatFuelSurcharge(data: Record<string, unknown>): string {
+  const list = data as FuelSurchargeListData;
+  let text: string;
+  if (Array.isArray(list.carriers)) {
+    text = `# LTL Carrier Fuel Surcharges (${list.carriers.length} carriers)\n\n`;
+    text += list.carriers.map(formatFuelSurchargeEntry).join("\n");
+  } else {
+    const entry = data as FuelSurchargeEntry;
+    text = `# Fuel Surcharge — ${entry.carrier_name || entry.carrier || "Carrier"}\n\n`;
+    text += formatFuelSurchargeEntry(entry);
+  }
+  text += `\n\n${FUEL_SURCHARGE_PROVENANCE_NOTE}`;
+  return text;
+}
+
+server.registerTool(
+  "opa_get_fuel_surcharge",
+  {
+    title: "Get LTL Carrier Fuel Surcharge",
+    description:
+      "Get the current published fuel surcharge percentage for major LTL freight carriers — ODFL (Old Dominion), Saia, Estes, FedEx Freight, XPO, ABF/ArcBest, R+L Carriers, Averitt, TForce Freight, Southeastern Freight Lines. Each carrier publishes a weekly fuel surcharge % tied to the DOE/EIA on-highway diesel index; this returns the carrier's own published value (not an estimate) with effective date, the matched diesel price band, the underlying DOE diesel price, and source + retrieved_at provenance. Use when the user asks about fuel surcharges, LTL freight fuel costs, carrier surcharge schedules, freight quoting/auditing, TMS or logistics rate calculations, or shipping cost pass-throughs. Omit 'carrier' to list all covered carriers with their latest %; pass a carrier name or code for one carrier. For the raw DOE diesel price itself use opa_get_price ('diesel') or opa_get_diesel_by_state.",
+    inputSchema: {
+      carrier: z
+        .string()
+        .optional()
+        .describe(
+          "Optional carrier name or code (e.g., 'ODFL', 'Old Dominion', 'Saia', 'Estes', 'FedEx Freight', 'XPO', 'ABF', 'R+L', 'Averitt', 'TForce', 'Southeastern'). Omit to list all covered carriers.",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ carrier }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_fuel_surcharge");
+
+    const endpoint = fuelSurchargeEndpoint(carrier);
+    const response =
+      await makeApiRequest<ApiResponse<Record<string, unknown>>>(endpoint);
+
+    if (!response || response.status !== "success") {
+      if (carrier?.trim()) {
+        return errorResult(
+          `No fuel surcharge data available for '${carrier}'. Either this carrier is not covered yet, or the fuel-surcharge dataset is not yet available. Call opa_get_fuel_surcharge without a carrier to list covered carriers. Covered-at-launch targets include ODFL, Saia, Estes, FedEx Freight, XPO, and ABF.`,
+        );
+      }
+      return errorResult(
+        "Fuel surcharge data is not yet available — the /v1/fuel-surcharge dataset may not be deployed yet. No surcharge value can be reported (this tool never estimates or fabricates one). Try again later, or see https://oilpriceapi.com for dataset availability.",
+      );
+    }
+
+    return textResult(formatFuelSurcharge(response.data));
   },
 );
 
@@ -3819,7 +4008,7 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("OilPriceAPI MCP Server v2.5.0 running on stdio");
+  console.error("OilPriceAPI MCP Server v2.6.0 running on stdio");
 }
 
 main().catch((error) => {
