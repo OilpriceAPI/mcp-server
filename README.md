@@ -12,7 +12,7 @@ Backed by [OilPriceAPI](https://oilpriceapi.com) — the commodity price API beh
 
 ## Features
 
-- **28 Tools** — 19 read tools (spot prices, history, futures, marine fuels, rig counts, diesel by state, LTL carrier fuel surcharges, storage, OPEC production, forecasts, EIA oil inventories, well permits, well production, refining spreads) plus 4 authenticated price-alert tools (create/list/delete persistent alerts + trigger activity) and 5 agent tools (multi-commodity market briefs, persistent price watches)
+- **28 Tools** — 19 read tools (spot prices, history, futures, marine fuels, rig counts, diesel by state, LTL and parcel fuel surcharges, storage, OPEC production, forecasts, EIA oil inventories, well permits, well production, refining spreads) plus 4 authenticated price-alert tools (create/list/delete persistent alerts + trigger activity) and 5 agent tools (multi-commodity market briefs, persistent price watches)
 - **5 Resources** — subscribable price snapshots for Brent, WTI, Natural Gas, Diesel, and all commodities
 - **6 Prompts** — pre-built analyst templates (daily briefing, spread analysis, gas markets, commodity report, diesel costs, supply analysis)
 - **Natural language** — ask for "brent oil" or "natural gas", not codes
@@ -169,7 +169,7 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_get_rig_counts`      | Baker Hughes US rig count with week-over-week change                                            |
 | `opa_get_drilling`        | Drilling snapshot: rig counts, frac spreads, 30-day permits, DUCs                               |
 | `opa_get_diesel_by_state` | AAA retail diesel price for any US state (50 states + DC)                                       |
-| `opa_get_fuel_surcharge`  | Published LTL carrier fuel surcharge % (ODFL, Saia, Estes, FedEx Freight, XPO, ABF, ...) tied to the DOE diesel index |
+| `opa_get_fuel_surcharge`  | LTL and parcel carrier fuel surcharge percentages with effective dates and source provenance     |
 | `opa_get_storage`         | Cushing and SPR oil storage/inventory levels                                                    |
 | `opa_get_opec_production` | OPEC country-level production data                                                              |
 | `opa_get_forecasts`       | EIA STEO energy price forecasts                                                                 |
@@ -217,6 +217,7 @@ The market brief gives a multi-commodity snapshot in one call. Subscriptions ("w
 "What were the latest EIA crude oil inventories?"
 "How many well permits were issued in Texas?"
 "What's the current 3-2-1 crack spread?"
+"What's the UPS ground fuel surcharge?"
 "Show me the ICE Gasoil futures curve"
 ```
 
@@ -294,7 +295,7 @@ Same data, every stack:
 
 This MCP server runs locally on your machine and only communicates with the OilPriceAPI service:
 
-- **What is sent**: tool requests are translated into HTTPS calls to `api.oilpriceapi.com` (commodity codes, query parameters such as time period or state, and — for alert/subscription tools — the alert parameters you specify), authenticated with your API key. **No conversation content is transmitted** — only the structured tool inputs above.
+- **What is sent**: tool requests are translated into HTTPS calls to `api.oilpriceapi.com` (commodity codes, query parameters such as time period or state, carrier slugs and service-level inputs for fuel surcharges, and — for alert/subscription tools — the alert parameters you specify), authenticated with your API key. **No conversation content is transmitted** — only the structured tool inputs above.
 - **API key storage**: your key is stored locally in your MCP client's configuration (or the `OILPRICEAPI_KEY` environment variable). It is sent only to `api.oilpriceapi.com` as an Authorization header.
 - **Logging**: API requests are logged by OilPriceAPI as described in the [OilPriceAPI Privacy Policy](https://www.oilpriceapi.com/privacy).
 - **Third parties**: no data is shared with third parties beyond what that policy describes.

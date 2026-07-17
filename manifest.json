@@ -3,9 +3,9 @@
   "manifest_version": "0.2",
   "name": "oilpriceapi",
   "display_name": "OilPriceAPI — Oil, Gas & Commodity Prices",
-  "version": "2.4.2",
-  "description": "Real-time oil, gas & commodity prices. 26 tools: spot, history, futures, alerts, market briefs.",
-  "long_description": "The energy commodity MCP server. Live spot prices for Brent, WTI, natural gas, diesel, gasoline and 70+ commodities, plus historical data, futures curves, refining spreads, rig counts, OPEC production, price alerts and multi-commodity market briefs. Works instantly in demo mode (no API key) with a limited commodity set; a free API key from oilpriceapi.com unlocks everything.",
+  "version": "2.6.0",
+  "description": "Real-time oil, gas & commodity prices. 28 tools: spot, history, futures, fuel surcharges, alerts, market briefs.",
+  "long_description": "The energy commodity MCP server. Live spot prices for Brent, WTI, natural gas, diesel, gasoline and 70+ commodities, plus historical data, futures curves, refining spreads, carrier fuel surcharges, rig counts, OPEC production, price alerts and multi-commodity market briefs. Works instantly in demo mode (no API key) with a limited commodity set; a free API key from oilpriceapi.com unlocks everything.",
   "author": {
     "name": "OilPriceAPI",
     "email": "support@oilpriceapi.com",
