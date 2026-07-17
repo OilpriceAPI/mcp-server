@@ -2371,7 +2371,7 @@ server.registerTool(
         );
       }
       return errorResult(
-        "Fuel surcharge data is not yet available — the /v1/fuel-surcharge dataset may not be deployed yet, or may require a paid plan. No surcharge value can be reported (this tool never estimates or fabricates one). Try again later, or see https://oilpriceapi.com for dataset availability.",
+        "Fuel surcharge data is not yet available — the /v1/fuel-surcharge dataset may not be deployed yet. No surcharge value can be reported (this tool never estimates or fabricates one). Try again later, or see https://oilpriceapi.com for dataset availability.",
       );
     }
 
