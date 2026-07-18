@@ -3,8 +3,8 @@
 /**
  * OilPriceAPI MCP Server v2.6.0
  *
- * The energy commodity MCP server. Real-time oil, gas, and commodity prices
- * for Claude, Cursor, VS Code, and any MCP-compatible client.
+ * Source-timestamped oil, gas, and related energy data for Claude, Cursor,
+ * VS Code, and any MCP-compatible client.
  *
  * KEYLESS DEMO MODE (#16): when no OILPRICEAPI_KEY is configured, the four
  * price-read tools (opa_get_price, opa_compare_prices, opa_list_commodities,
@@ -17,12 +17,12 @@
  * limit/feature gate hit by the API plus an upgrade link (see ApiGateError in
  * makeApiRequest and alertHttpError for the authenticated tools).
  *
- * 28 tools total (opa_ prefixed):
+ * 29 tools total (opa_ prefixed):
  *
- * 19 read-only tools: prices, history, futures, marine fuels, rig counts,
- * drilling, diesel-by-state, LTL and parcel fuel surcharges, storage, OPEC
- * production, forecasts, EIA oil inventories, well permits, well production,
- * refining spreads.
+ * 20 read-only tools: reviewed product facts, prices, history, futures, marine
+ * fuels, rig counts, drilling, diesel-by-state, LTL and parcel fuel
+ * surcharges, storage, OPEC production, forecasts, EIA oil inventories, well
+ * permits, well production, and refining spreads.
  *
  * 4 authenticated price-alert tools (opa_*_price_alert / opa_get_alert_triggers):
  * create/list/delete persistent price alerts tied to the user's account and read
@@ -44,6 +44,16 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { PRODUCT_FACTS_URI, ProductFactsProvider } from "./productFacts.js";
+
+export {
+  PINNED_PRODUCT_FACTS,
+  PINNED_PRODUCT_FACTS_CHECKSUM,
+  PRODUCT_FACTS_URI,
+  ProductFactsContractError,
+  ProductFactsProvider,
+  validateAndSanitizeProductFacts,
+} from "./productFacts.js";
 
 // API Configuration
 const API_BASE =
@@ -91,7 +101,7 @@ export const UPGRADE_URL =
   "https://oilpriceapi.com/pricing?utm_source=mcp-limit";
 
 // Footer appended to EVERY demo-mode (keyless) response.
-export const DEMO_FOOTER = `⚠ Demo data (limited commodity set). Get a free API key for 40+ commodities: ${SIGNUP_URL}`;
+export const DEMO_FOOTER = `⚠ Demo data (limited commodity set). Get a free API key for the broader account-enabled catalog: ${SIGNUP_URL}`;
 
 // ---------------------------------------------------------------------------
 // Natural language to commodity code mapping
@@ -590,7 +600,9 @@ export function resolveCarrierSlug(input: string): string {
   return normalizeFuelSurchargeSlug(input) ?? "";
 }
 
-function normalizeFuelSurchargeServiceLevel(input?: string): string | undefined {
+function normalizeFuelSurchargeServiceLevel(
+  input?: string,
+): string | undefined {
   const normalized = input?.trim().toLowerCase();
   if (!normalized) return undefined;
 
@@ -712,7 +724,8 @@ function formatFuelSurchargeBand(
   const min = fuelSurchargeNumber(band.min);
   const max = fuelSurchargeNumber(band.max);
   if (min === null && max === null) return null;
-  if (min !== null && max !== null) return `$${min.toFixed(2)}-$${max.toFixed(2)} DOE band`;
+  if (min !== null && max !== null)
+    return `$${min.toFixed(2)}-$${max.toFixed(2)} DOE band`;
   if (min !== null) return `$${min.toFixed(2)}+ DOE band`;
   return `up to $${max!.toFixed(2)} DOE band`;
 }
@@ -721,7 +734,9 @@ function formatFuelSurchargeLine(rate: FuelSurchargeRate): string {
   const label = rate.service_level
     ? `${rate.service_level}`
     : fuelSurchargeCarrierLabel(rate);
-  const parts = [`**${label}**: ${formatFuelSurchargePercent(rate.surcharge_percent)}`];
+  const parts = [
+    `**${label}**: ${formatFuelSurchargePercent(rate.surcharge_percent)}`,
+  ];
 
   if (rate.effective_date) parts.push(`effective ${rate.effective_date}`);
 
@@ -819,9 +834,27 @@ export function formatFuelSurchargeData(
 // Create server instance
 // ---------------------------------------------------------------------------
 
-const server = new McpServer({
-  name: "oilpriceapi",
-  version: MCP_VERSION,
+export const SERVER_INSTRUCTIONS =
+  "Use opa_get_product_facts or the oilpriceapi://product-facts resource " +
+  "for questions about OilPriceAPI product scope, offers, pricing links, " +
+  "freshness, catalog access, authentication, installation, or data rights. " +
+  "Do not infer a universal refresh cadence, catalog count, entitlement, " +
+  "redistribution right, or execution-feed latency.";
+
+const server = new McpServer(
+  {
+    name: "oilpriceapi",
+    version: MCP_VERSION,
+  },
+  {
+    instructions: SERVER_INSTRUCTIONS,
+  },
+);
+
+export const productFactsProvider = new ProductFactsProvider({
+  url: API_BASE + "/product-facts.json",
+  fetchImpl: (input, init) => fetch(input, init),
+  requestHeaders: clientAttributionHeaders(),
 });
 
 // ---------------------------------------------------------------------------
@@ -1514,7 +1547,7 @@ export async function demoListCommoditiesResult(fetchFn: typeof fetch = fetch) {
   if (!prices) return demoUnreachableResult();
 
   const sections = [
-    `# Available Commodities — Demo Mode (${prices.length} of 40+)\n`,
+    `# Available Commodities — Demo Mode (${prices.length})\n`,
     "No API key is configured, so only the keyless demo commodity set is available:\n",
   ];
   for (const p of prices) {
@@ -1754,22 +1787,43 @@ export function keylessTeaserResult(toolName: string) {
   }
   lines.push(
     "",
-    `Get a free API key (40+ commodities, current prices in demo; more on paid plans): ${SIGNUP_URL}`,
+    `Get a free API key for the broader account-enabled catalog; dataset access varies by plan and entitlement: ${SIGNUP_URL}`,
   );
   return errorResult(lines.join("\n"));
 }
 
 // =========================================================================
-// READ TOOLS (19 - opa_ prefixed to avoid collisions). Plus 4 authenticated
-// price-alert tools further below, for 23 tools total.
+// READ TOOLS (opa_ prefixed to avoid collisions)
 // =========================================================================
+
+server.registerTool(
+  "opa_get_product_facts",
+  {
+    title: "Get OilPriceAPI Product Facts",
+    description:
+      "Get the reviewed, versioned OilPriceAPI product contract for product scope, evaluation offer, pricing URL, freshness policy, catalog and entitlement wording, authentication, canonical first request, keyless demo, and data-rights boundaries. Use this instead of model memory or package prose for questions about OilPriceAPI itself. No API key or paid-data entitlement is required.",
+    inputSchema: {},
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async () => {
+    try {
+      return textResult(
+        JSON.stringify(await productFactsProvider.get(), null, 2),
+      );
+    } catch {
+      return errorResult(
+        "OilPriceAPI product facts are unavailable. Check the canonical contract at https://api.oilpriceapi.com/product-facts.json.",
+      );
+    }
+  },
+);
 
 server.registerTool(
   "opa_get_price",
   {
     title: "Get Commodity Price",
     description:
-      "Get the current real-time spot price of an energy commodity. Use when the user asks about a single commodity's current price. Accepts natural language ('brent oil', 'diesel') or API codes ('WTI_USD'). Returns price, currency, 24h change, and timestamp. For multiple commodities at once, use opa_market_overview. For price trends, use opa_get_history.",
+      "Get the latest available, source-timestamped value for an energy commodity. Use when the user asks about a single commodity's latest price. Accepts natural language ('brent oil', 'diesel') or API codes ('WTI_USD'). Returns price, currency, available change fields, and timestamp. For multiple commodities at once, use opa_market_overview. For price trends, use opa_get_history.",
     inputSchema: {
       commodity: z
         .string()
@@ -2110,7 +2164,7 @@ server.registerTool(
     sections.push("");
 
     sections.push(
-      "_Note: This is a partial list (API was unreachable). The full catalog has 70+ commodities. Try again later for the complete list._",
+      "_Note: This is a partial list because the catalog endpoint was unreachable. Dataset access varies by plan and account entitlement; try again for the account-enabled list._",
     );
 
     return textResult(sections.join("\n"));
@@ -3154,8 +3208,8 @@ server.registerTool(
 //
 // These wrap the existing /v1/alerts engine. They create and manage
 // PERSISTENT alerts tied to the user's OilPriceAPI account, and require an
-// API key. The alert engine continuously evaluates the user's alerts against
-// live prices and notifies them (email and/or webhook) when conditions are met.
+// API key. The alert engine evaluates eligible source updates against the
+// user's conditions and notifies them when conditions are met.
 // =========================================================================
 
 interface AlertRecord {
@@ -3196,7 +3250,7 @@ server.registerTool(
     title: "Create Price Alert",
     description:
       "Create a PERSISTENT price alert tied to the user's OilPriceAPI account. " +
-      "The alert engine continuously watches live prices and notifies the user (by " +
+      "The alert engine evaluates eligible source updates and notifies the user (by " +
       "email, plus webhook if a URL is given) when the commodity price crosses the " +
       "threshold. Use when the user asks to be alerted/notified when a price goes " +
       "above or below a level (e.g. 'tell me when Brent drops below $70'). " +
@@ -3959,8 +4013,46 @@ server.registerTool(
 );
 
 // =========================================================================
-// RESOURCES — subscribable price snapshots + dynamic template
+// RESOURCES — reviewed product contract + price snapshots
 // =========================================================================
+
+server.registerResource(
+  "product-facts",
+  PRODUCT_FACTS_URI,
+  {
+    title: "OilPriceAPI Reviewed Product Facts",
+    description:
+      "Versioned OilPriceAPI offer, freshness, catalog, authentication, integration, and data-rights contract. No API key required.",
+    mimeType: "application/json",
+  },
+  async () => {
+    try {
+      const result = await productFactsProvider.get();
+      return {
+        contents: [
+          {
+            uri: PRODUCT_FACTS_URI,
+            mimeType: "application/json",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch {
+      return {
+        contents: [
+          {
+            uri: PRODUCT_FACTS_URI,
+            mimeType: "application/json",
+            text: JSON.stringify({
+              error: "OilPriceAPI product facts are unavailable.",
+              canonicalUrl: "https://api.oilpriceapi.com/product-facts.json",
+            }),
+          },
+        ],
+      };
+    }
+  },
+);
 
 server.resource(
   "price-brent",
@@ -4223,7 +4315,7 @@ async function main() {
       "OilPriceAPI MCP: no OILPRICEAPI_KEY set — running in DEMO MODE. " +
         "Price tools serve a limited live commodity set from the keyless demo " +
         "endpoint; most other tools are limited. " +
-        `Get a free API key for 40+ commodities: ${SIGNUP_URL}`,
+        `Get a free API key for the broader account-enabled catalog: ${SIGNUP_URL}`,
     );
   }
 

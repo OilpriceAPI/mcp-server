@@ -26,6 +26,8 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+      - run: npm run smoke:product-facts
+      - run: npm pack --dry-run
 
   live:
     name: Live API smoke test

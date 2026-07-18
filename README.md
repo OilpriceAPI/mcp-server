@@ -1,6 +1,6 @@
 # OilPriceAPI MCP Server
 
-> **Give your AI agent real-time oil, gas, LNG, carbon and fuel prices in under 60 seconds** — works in Claude Desktop, Claude Code, Cursor, VS Code, and any MCP client. No API key needed to try it.
+> Give compatible AI clients source-timestamped oil, gas, LNG, carbon, fuel, and related energy data through MCP. No API key is needed to try the limited demo.
 
 [![npm](https://img.shields.io/npm/v/oilpriceapi-mcp)](https://www.npmjs.com/package/oilpriceapi-mcp)
 [![Downloads](https://img.shields.io/npm/dm/oilpriceapi-mcp)](https://www.npmjs.com/package/oilpriceapi-mcp)
@@ -8,15 +8,16 @@
 
 **[Get a Free API Key](https://www.oilpriceapi.com/auth/signup?utm_source=mcp-readme)** · **[Documentation](https://docs.oilpriceapi.com)** · **[API Explorer](https://api.oilpriceapi.com/swagger)** · **[Pricing](https://www.oilpriceapi.com/pricing?utm_source=mcp-readme)**
 
-Backed by [OilPriceAPI](https://oilpriceapi.com) — the commodity price API behind fintech dashboards, fleet & logistics tools, maritime compliance platforms and energy analytics products, serving **2M+ API requests every month**.
+Backed by [OilPriceAPI](https://oilpriceapi.com), a normalized REST API for energy dashboards, fleet and logistics tools, maritime workflows, and market research.
 
 ## Features
 
-- **28 Tools** — 19 read tools (spot prices, history, futures, marine fuels, rig counts, diesel by state, LTL and parcel fuel surcharges, storage, OPEC production, forecasts, EIA oil inventories, well permits, well production, refining spreads) plus 4 authenticated price-alert tools (create/list/delete persistent alerts + trigger activity) and 5 agent tools (multi-commodity market briefs, persistent price watches)
-- **5 Resources** — subscribable price snapshots for Brent, WTI, Natural Gas, Diesel, and all commodities
-- **6 Prompts** — pre-built analyst templates (daily briefing, spread analysis, gas markets, commodity report, diesel costs, supply analysis)
+- **Reviewed product facts** — a keyless read-only tool and stable resource for offer, freshness, authentication, catalog, entitlement, and data-rights questions
+- **Data and workflow tools** — latest values, history, futures, marine fuels, fuel surcharges, energy intelligence, alerts, market briefs, and persistent watches
+- **Resources** — the reviewed product contract plus subscribable price snapshots
+- **Prompts** — analyst templates for briefings, spread analysis, gas markets, diesel costs, and supply analysis
 - **Natural language** — ask for "brent oil" or "natural gas", not codes
-- **70+ commodities** — oil, gas, coal, refined products, metals, forex, bunker fuels, state diesel
+- **Broad catalog** — oil, gas, coal, refined products, metals, forex, bunker fuels, state diesel, and selected energy-intelligence datasets; access varies by plan and account
 - **Smart errors** — unrecognized commodities get suggestions, not silent fallbacks
 
 ## Quick Start
@@ -27,7 +28,7 @@ npx oilpriceapi-mcp
 
 ## What can your agent get?
 
-The 10 most-polled commodities across our customer base:
+Example commodity codes:
 
 | Code              | What it is               | Typical agent use              |
 | ----------------- | ------------------------ | ------------------------------ |
@@ -46,7 +47,7 @@ The 10 most-polled commodities across our customer base:
 
 ### Try it without an API key
 
-The server works out of the box in **keyless demo mode** — just omit `OILPRICEAPI_KEY` from the configs below. The price tools (`opa_get_price`, `opa_compare_prices`, `opa_list_commodities`, `opa_market_overview`) serve **live prices** for a limited demo commodity set (Brent, WTI, diesel, gasoline, natural gas, gold, heating oil, EUR/USD, GBP/USD), and every other tool explains what it does and what its output looks like. Demo responses are marked with a footer. When you're ready for 40+ commodities, history, futures, and alerts, [get a free API key](https://oilpriceapi.com/auth/signup?utm_source=mcp-demo) and add it to your config.
+The server works out of the box in **keyless demo mode** — just omit `OILPRICEAPI_KEY` from the configs below. The price tools (`opa_get_price`, `opa_compare_prices`, `opa_list_commodities`, `opa_market_overview`) serve latest available values for a limited demo commodity set, and every other data tool explains its account requirements. Demo responses are marked with a footer. For the broader account-enabled catalog, history, futures, and alerts, [get a free API key](https://oilpriceapi.com/auth/signup?utm_source=mcp-demo) and add it to your config.
 
 ### Claude Desktop
 
@@ -147,10 +148,10 @@ npm install -g oilpriceapi-mcp
 
 ## Environment Variables
 
-| Variable               | Required | Description                                                                                                                                                                                                                          |
-| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OILPRICEAPI_KEY`      | No       | API key from [oilpriceapi.com/signup](https://www.oilpriceapi.com/signup?utm_source=npm&utm_medium=mcp&utm_campaign=readme). Free tier: 200 requests/month. Without it the server runs in keyless demo mode (limited commodity set). |
-| `OILPRICEAPI_BASE_URL` | No       | Override API base URL (for staging/testing). Default: `https://api.oilpriceapi.com`                                                                                                                                                  |
+| Variable               | Required | Description                                                                                                                                                                                                                                                                                            |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `OILPRICEAPI_KEY`      | No       | API key from [oilpriceapi.com/signup](https://www.oilpriceapi.com/signup?utm_source=npm&utm_medium=mcp&utm_campaign=readme). After the core trial, the Free plan includes 200 requests/month. Dataset access and limits vary by plan and entitlement. Without a key, the server uses the limited demo. |
+| `OILPRICEAPI_BASE_URL` | No       | Override API base URL (for staging/testing). Default: `https://api.oilpriceapi.com`                                                                                                                                                                                                                    |
 
 ## Tools
 
@@ -158,6 +159,7 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 
 | Tool                      | Description                                                                                     |
 | ------------------------- | ----------------------------------------------------------------------------------------------- |
+| `opa_get_product_facts`   | Reviewed product, offer, freshness, auth, integration, entitlement, and data-rights contract    |
 | `opa_get_price`           | Current spot price for a single commodity                                                       |
 | `opa_market_overview`     | All commodity prices in one call, grouped by category                                           |
 | `opa_compare_prices`      | Side-by-side comparison of 2-5 commodities with spread                                          |
@@ -169,7 +171,7 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_get_rig_counts`      | Baker Hughes US rig count with week-over-week change                                            |
 | `opa_get_drilling`        | Drilling snapshot: rig counts, frac spreads, 30-day permits, DUCs                               |
 | `opa_get_diesel_by_state` | AAA retail diesel price for any US state (50 states + DC)                                       |
-| `opa_get_fuel_surcharge`  | LTL and parcel carrier fuel surcharge percentages with effective dates and source provenance     |
+| `opa_get_fuel_surcharge`  | LTL and parcel carrier fuel surcharge percentages with effective dates and source provenance    |
 | `opa_get_storage`         | Cushing and SPR oil storage/inventory levels                                                    |
 | `opa_get_opec_production` | OPEC country-level production data                                                              |
 | `opa_get_forecasts`       | EIA STEO energy price forecasts                                                                 |
@@ -180,7 +182,7 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 
 ### Price Alert Tools (authenticated)
 
-These tools create and manage **persistent** price alerts tied to your OilPriceAPI account, so they **require an API key** (`OILPRICEAPI_KEY`). The alert engine continuously watches live prices and notifies you (by email, plus webhook if you provide one) when a condition is met.
+These tools create and manage **persistent** price alerts tied to your OilPriceAPI account, so they **require an API key** (`OILPRICEAPI_KEY`). The alert engine evaluates eligible source updates and notifies you (by email, plus webhook if you provide one) when a condition is met.
 
 | Tool                     | Description                                                                  |
 | ------------------------ | ---------------------------------------------------------------------------- |
@@ -225,13 +227,18 @@ The market brief gives a multi-commodity snapshot in one call. Subscriptions ("w
 
 Subscribable price data (JSON):
 
-| Resource    | URI                   | Description                      |
-| ----------- | --------------------- | -------------------------------- |
-| Brent Crude | `price://brent`       | Global benchmark crude oil price |
-| WTI Crude   | `price://wti`         | US benchmark crude oil price     |
-| Natural Gas | `price://natural-gas` | US Henry Hub natural gas price   |
-| Diesel      | `price://diesel`      | US national average diesel price |
-| All Prices  | `price://all`         | All tracked commodity prices     |
+| Resource      | URI                           | Description                                 |
+| ------------- | ----------------------------- | ------------------------------------------- |
+| Product Facts | `oilpriceapi://product-facts` | Reviewed, versioned public product contract |
+| Brent Crude   | `price://brent`               | Global benchmark crude oil price            |
+| WTI Crude     | `price://wti`                 | US benchmark crude oil price                |
+| Natural Gas   | `price://natural-gas`         | US Henry Hub natural gas price              |
+| Diesel        | `price://diesel`              | US national average diesel price            |
+| All Prices    | `price://all`                 | All tracked commodity prices                |
+
+### Product Facts and Model Knowledge
+
+`opa_get_product_facts` and `oilpriceapi://product-facts` improve accuracy for a connected MCP session. They do not retrain a model or update its general knowledge. The server prefers the canonical keyless contract, uses a bounded cache, and labels any checksum-verified package fallback with source and warning metadata.
 
 ## Prompts
 
@@ -308,7 +315,7 @@ Questions: [support@oilpriceapi.com](mailto:support@oilpriceapi.com)
 Where the free/paid line sits for this server (#10):
 
 - **Always open**: the MCP server itself (MIT), setup, docs, discovery (tool listing), and keyless demo mode for low-volume evaluation.
-- **Free API key**: live prices for 40+ commodities within the free tier's request limits.
+- **Free API key**: the core trial includes 10,000 requests over 7 days with no credit card; afterward the Free plan includes 200 requests per month. Dataset access varies by plan and entitlement.
 - **Behind the paywall**: high-volume usage and premium datasets (futures, energy intelligence, well permits/production, alerts at scale). When a request crosses that boundary the API returns a standard **HTTP 402/403/429 with the exact limit or feature gate in the body**, and this server surfaces that message plus an upgrade link — agents get a machine-readable stop, never a silent failure.
 - **x402 protocol**: per-request crypto micropayments via the [x402 protocol](https://www.x402.org/) are **not currently supported** — payment is by account plan (Stripe), authenticated with your API key.
 

@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "1.0.0",
+  "contractVersion": "2026-07-18",
+  "reviewedAt": "2026-07-18",
+  "reviewOwner": "OilPriceAPI product and data-rights review",
+  "schemaUrl": "https://api.oilpriceapi.com/schemas/product-facts-v1.schema.json",
+  "canonicalUrl": "https://api.oilpriceapi.com/product-facts.json",
+  "product": {
+    "name": "OilPriceAPI",
+    "website": "https://www.oilpriceapi.com",
+    "apiBaseUrl": "https://api.oilpriceapi.com",
+    "documentationUrl": "https://docs.oilpriceapi.com",
+    "description": "Source-timestamped oil, gas, refined-product, futures, and related energy data delivered through a normalized REST API."
+  },
+  "offer": {
+    "trialScope": "Core commodity API",
+    "creditCardRequiredForTrial": false,
+    "pricingUrl": "https://www.oilpriceapi.com/pricing",
+    "qualification": "Dataset access and limits vary by plan, source, and account entitlement.",
+    "trialDays": 7,
+    "trialRequests": 10000,
+    "freeRequestsPerMonth": 200
+  },
+  "catalog": {
+    "publicWording": "A broad catalog spanning crude oil, natural gas, refined products, futures, marine fuels, carbon markets, metals, forex, and selected energy-intelligence datasets.",
+    "exactCountPublished": false,
+    "catalogUrl": "https://www.oilpriceapi.com/commodities"
+  },
+  "freshness": {
+    "publicWording": "Latest available values include source timestamps; refresh cadence varies by source, market hours, dataset, and plan.",
+    "fixedSitewideCadence": null
+  },
+  "dataRights": {
+    "publicWording": "OilPriceAPI sells API access, normalization, monitoring, and delivery. Standard plans do not grant ownership of underlying source data or unrestricted raw-data redistribution rights.",
+    "policyUrl": "https://www.oilpriceapi.com/legal/data-usage"
+  },
+  "developer": {
+    "authenticationHeader": "Authorization: Token YOUR_API_KEY",
+    "environmentVariable": "OILPRICEAPI_KEY",
+    "firstRequestMethod": "GET",
+    "firstRequestPath": "/v1/prices/latest?by_code=BRENT_CRUDE_USD",
+    "firstRequestUrl": "https://api.oilpriceapi.com/v1/prices/latest?by_code=BRENT_CRUDE_USD",
+    "demoRequestUrl": "https://api.oilpriceapi.com/v1/demo/prices"
+  }
+}
