@@ -24,6 +24,7 @@ jobs:
         with:
           node-version: "22"
       - run: npm ci
+      - run: npm run verify:release-metadata
       - run: npm test
       - run: npm run build
       - run: npm run smoke:product-facts

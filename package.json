@@ -16,7 +16,8 @@
     "test:live": "node scripts/live-smoke.mjs",
     "smoke:product-facts": "node scripts/product-facts-smoke.mjs",
     "test:product-facts": "npm run build && npm run smoke:product-facts",
-    "prepublishOnly": "npm run build"
+    "verify:release-metadata": "node scripts/verify-release-metadata.mjs",
+    "prepublishOnly": "npm run verify:release-metadata && npm run build"
   },
   "files": [
     "build"
