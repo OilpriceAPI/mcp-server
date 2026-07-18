@@ -30,6 +30,9 @@ import {
   WELL_PRODUCTION_BETA_NOTE,
   CLIENT_MARKER,
   MCP_VERSION,
+  PRODUCT_FACTS_URI,
+  SERVER_INSTRUCTIONS,
+  productFactsProvider,
 } from "../index.js";
 
 // ---------------------------------------------------------------------------
@@ -744,9 +747,7 @@ describe("demo mode (#16) - demoPriceResult", () => {
       text.endsWith(DEMO_FOOTER),
       "demo response must END with the footer",
     ).toBe(true);
-    expect(text).toContain(
-      "⚠ Demo data (limited commodity set). Get a free API key for 40+ commodities: https://oilpriceapi.com/auth/signup?utm_source=mcp-demo",
-    );
+    expect(text).toContain(DEMO_FOOTER);
   });
 
   it("lists available demo commodities when the requested one is not in the demo set", async () => {
@@ -1049,8 +1050,9 @@ describe("tool registration metadata", () => {
   const DELETE_TOOLS = ["opa_delete_price_alert", "opa_delete_subscription"];
   const WRITE_TOOLS = new Set([...CREATE_TOOLS, ...DELETE_TOOLS]);
 
-  it("registers exactly 28 tools", () => {
-    expect(Object.keys(tools)).toHaveLength(28);
+  it("registers exactly 29 tools", () => {
+    expect(Object.keys(tools)).toHaveLength(29);
+    expect(tools.opa_get_product_facts).toBeDefined();
   });
 
   it("registers all four write tools (creates + deletes)", () => {
@@ -1119,6 +1121,82 @@ describe("tool registration metadata", () => {
         openWorldHint: true,
       });
     }
+  });
+});
+
+describe("reviewed product-facts discovery", () => {
+  const server = createSandboxServer();
+  const internals = server as unknown as {
+    _registeredTools: Record<
+      string,
+      {
+        handler: (
+          args: Record<string, unknown>,
+          extra: Record<string, unknown>,
+        ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+      }
+    >;
+    _registeredResources: Record<
+      string,
+      {
+        readCallback: (
+          uri: URL,
+          extra: Record<string, unknown>,
+        ) => Promise<{ contents: Array<{ uri: string; text?: string }> }>;
+      }
+    >;
+  };
+
+  it("directs product and rights questions to the reviewed contract", () => {
+    expect(SERVER_INSTRUCTIONS).toContain("opa_get_product_facts");
+    expect(SERVER_INSTRUCTIONS).toContain(PRODUCT_FACTS_URI);
+    expect(SERVER_INSTRUCTIONS).toContain("data rights");
+  });
+
+  it("registers a keyless read-only tool backed by the reviewed contract", async () => {
+    productFactsProvider.clearCache();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("offline");
+      }),
+    );
+
+    const tool = internals._registeredTools.opa_get_product_facts;
+    const result = await tool.handler({}, {});
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.facts.contractVersion).toBe("2026-07-18");
+    expect(payload.facts.developer.authenticationHeader).toBe(
+      "Authorization: Token YOUR_API_KEY",
+    );
+    expect(payload.delivery.source).toBe("pinned");
+    expect(JSON.stringify(payload)).not.toMatch(/opa_live_|customerId|planId/);
+
+    vi.unstubAllGlobals();
+  });
+
+  it("registers the product-facts resource at its stable URI", async () => {
+    productFactsProvider.clearCache();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("offline");
+      }),
+    );
+
+    const resource = internals._registeredResources[PRODUCT_FACTS_URI];
+    expect(resource).toBeDefined();
+    const result = await resource.readCallback(new URL(PRODUCT_FACTS_URI), {});
+    const payload = JSON.parse(result.contents[0].text || "{}");
+
+    expect(result.contents[0].uri).toBe(PRODUCT_FACTS_URI);
+    expect(payload.facts.schemaVersion).toBe("1.0.0");
+    expect(payload.delivery.warning).toContain(
+      "checksum-verified package contract",
+    );
+
+    vi.unstubAllGlobals();
   });
 });
 
