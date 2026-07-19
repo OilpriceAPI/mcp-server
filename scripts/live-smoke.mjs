@@ -29,7 +29,8 @@
  *
  * The key belongs to a dedicated synthetic smoke identity. A quota preflight
  * warns before 80% usage and refuses to start if the remaining allowance cannot
- * complete the run. Calls are spaced >=1.1s apart; any 429 is a failed gate.
+ * complete the run. Calls are spaced >=1.1s apart; a transient 429 is retried
+ * once using Retry-After before the check fails.
  */
 
 const API_BASE =
@@ -37,6 +38,7 @@ const API_BASE =
 const KEY = process.env.OILPRICEAPI_TEST_KEY;
 const SLUG = "ice-brent";
 const RATE_LIMIT_MS = 1100; // > 1 req/sec
+const RATE_LIMIT_RETRIES = 1;
 // Opt-in: exercise the WRITE round-trip (create -> events -> delete) against
 // prod. Off by default so the standard CI run only reads.
 const WRITE_SUBSCRIPTIONS = process.env.SMOKE_WRITE_SUBSCRIPTIONS === "1";
@@ -75,11 +77,34 @@ async function request(path, { method = "GET", body, headers = {} } = {}) {
       parsed = text;
     }
   }
-  return { status: res.status, body: parsed };
+  return {
+    status: res.status,
+    body: parsed,
+    retryAfterMs: retryAfterMs(res.headers.get("retry-after")),
+  };
+}
+
+function retryAfterMs(value) {
+  if (!value) return RATE_LIMIT_MS;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp)
+    ? Math.max(timestamp - Date.now(), RATE_LIMIT_MS)
+    : RATE_LIMIT_MS;
 }
 
 async function getJson(path) {
-  return request(path);
+  for (let attempt = 0; ; attempt += 1) {
+    const response = await request(path);
+    if (response.status !== 429 || attempt >= RATE_LIMIT_RETRIES) {
+      return response;
+    }
+    console.warn(
+      `WARN: HTTP 429 for ${path}; retrying once after ${response.retryAfterMs}ms`,
+    );
+    await sleep(response.retryAfterMs);
+  }
 }
 
 function assert(cond, msg) {
