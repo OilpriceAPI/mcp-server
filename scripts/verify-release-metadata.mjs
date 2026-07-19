@@ -14,6 +14,10 @@ const [packageJson, packageLock, server, manifest] = await Promise.all([
   readJson("server.json"),
   readJson("manifest.json"),
 ]);
+const source = await readFile(
+  new URL("../src/index.ts", import.meta.url),
+  "utf8",
+);
 
 const expected = packageJson.version;
 const versions = new Map([
@@ -31,6 +35,13 @@ if (mismatches.length > 0) {
     .join(", ");
   throw new Error(
     `Release metadata must match package.json=${expected}: ${details}`,
+  );
+}
+
+const sourceVersion = source.match(/export const MCP_VERSION = "([^"]+)"/)?.[1];
+if (sourceVersion !== expected) {
+  throw new Error(
+    `src/index.ts MCP_VERSION=${sourceVersion ?? "missing"} must match package.json=${expected}.`,
   );
 }
 

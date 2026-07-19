@@ -6,12 +6,12 @@
     "url": "https://github.com/OilpriceAPI/mcp-server",
     "source": "github"
   },
-  "version": "2.6.1",
+  "version": "3.0.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "oilpriceapi-mcp",
-      "version": "2.6.1",
+      "version": "3.0.0",
       "transport": {
         "type": "stdio"
       },
@@ -22,6 +22,27 @@
           "format": "string",
           "isSecret": true,
           "name": "OILPRICEAPI_KEY"
+        },
+        {
+          "description": "Tool scope: read (default) or write (explicit mutation opt-in).",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "OILPRICEAPI_MCP_SCOPE"
+        },
+        {
+          "description": "Tool profile: all, core, market, or automation.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "OILPRICEAPI_MCP_PROFILE"
+        },
+        {
+          "description": "Comma-separated category allowlist (core, market, automation) that overrides the profile.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "OILPRICEAPI_MCP_CATEGORIES"
         }
       ]
     }

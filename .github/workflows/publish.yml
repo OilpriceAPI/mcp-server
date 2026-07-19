@@ -39,6 +39,9 @@ jobs:
       - name: Smoke packaged product-facts discovery
         run: npm run smoke:product-facts
 
+      - name: Smoke packed CLI, capability, scope, and protocol contracts
+        run: npm run smoke:package
+
       # Authentication via OIDC Trusted Publishing (configured on npmjs.com for
       # repo OilpriceAPI/mcp-server, workflow publish.yml, no environment).
       # No NODE_AUTH_TOKEN needed; OIDC also satisfies the package 2FA requirement

@@ -28,6 +28,7 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run smoke:product-facts
+      - run: npm run smoke:package
       - run: npm pack --dry-run
 
   live:

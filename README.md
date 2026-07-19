@@ -26,6 +26,24 @@ Backed by [OilPriceAPI](https://oilpriceapi.com), a normalized REST API for ener
 npx oilpriceapi-mcp
 ```
 
+The default scope is **read-only**. Account mutations are not listed and direct
+mutation calls are rejected unless write scope is explicitly enabled:
+
+```bash
+npx oilpriceapi-mcp --scope write
+```
+
+Inspect the package without opening an MCP stdio session:
+
+```bash
+npx oilpriceapi-mcp --version
+npx oilpriceapi-mcp --list-tools
+npx oilpriceapi-mcp --list-tools --json --profile core
+npx oilpriceapi-mcp doctor --demo
+npx oilpriceapi-mcp doctor
+npx oilpriceapi-mcp --capabilities --json
+```
+
 ## What can your agent get?
 
 Example commodity codes:
@@ -148,10 +166,54 @@ npm install -g oilpriceapi-mcp
 
 ## Environment Variables
 
-| Variable               | Required | Description                                                                                                                                                                                                                                                                                            |
-| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OILPRICEAPI_KEY`      | No       | API key from [oilpriceapi.com/signup](https://www.oilpriceapi.com/signup?utm_source=npm&utm_medium=mcp&utm_campaign=readme). After the core trial, the Free plan includes 200 requests/month. Dataset access and limits vary by plan and entitlement. Without a key, the server uses the limited demo. |
-| `OILPRICEAPI_BASE_URL` | No       | Override API base URL (for staging/testing). Default: `https://api.oilpriceapi.com`                                                                                                                                                                                                                    |
+| Variable                     | Required | Description                                                                                                                                                                                                                                                                                            |
+| ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `OILPRICEAPI_KEY`            | No       | API key from [oilpriceapi.com/signup](https://www.oilpriceapi.com/signup?utm_source=npm&utm_medium=mcp&utm_campaign=readme). After the core trial, the Free plan includes 200 requests/month. Dataset access and limits vary by plan and entitlement. Without a key, the server uses the limited demo. |
+| `OILPRICEAPI_BASE_URL`       | No       | Override API base URL (for staging/testing). Default: `https://api.oilpriceapi.com`                                                                                                                                                                                                                    |
+| `OILPRICEAPI_MCP_SCOPE`      | No       | `read` (default) hides and blocks create/delete tools. Set `write` only when account mutations are intended.                                                                                                                                                                                           |
+| `OILPRICEAPI_MCP_PROFILE`    | No       | Stable inventory profile: `all` (default), `core`, `market`, or `automation`.                                                                                                                                                                                                                          |
+| `OILPRICEAPI_MCP_CATEGORIES` | No       | Comma-separated category allowlist (`core`, `market`, `automation`). Overrides the selected profile.                                                                                                                                                                                                   |
+
+## Tool Scope and Profiles
+
+`read` scope includes all non-mutating tools, including alert history,
+subscription listing, and subscription event polling. The four create/delete
+tools require `--scope write` or `OILPRICEAPI_MCP_SCOPE=write`. Unknown scope,
+profile, or category values fail closed before stdio starts.
+
+Profiles reduce tool overload without replacing first-class MCP actions:
+
+| Profile      | Included categories      |
+| ------------ | ------------------------ |
+| `all`        | core, market, automation |
+| `core`       | core                     |
+| `market`     | core, market             |
+| `automation` | core, automation         |
+
+For example, a read-only price and product-facts server can use:
+
+```json
+{
+  "command": "npx",
+  "args": ["-y", "oilpriceapi-mcp", "--scope", "read", "--profile", "core"]
+}
+```
+
+## Doctor and Capability Contract
+
+`doctor` checks the Node runtime, package entry point, API reachability, key
+validity, current plan, and reported feature gates. `doctor --demo` performs a
+bounded keyless request. Failures distinguish missing configuration, 401, 402,
+403, 429, timeout, DNS/TLS, and upstream 5xx responses. The API key is never
+printed.
+
+Every package includes `build/capabilities.json`. It is generated from the same
+SDK registry used by `tools/list` and records the package/version/source commit,
+minimum Node version, scopes, profiles, exact inventories, per-tool annotations,
+key/entitlement requirements, resources, commands, and support URLs. Website and
+docs consumers should pin a package version, validate `schemaVersion` and
+`sourceCommit`, and update the artifact only through an explicit dependency
+upgrade. They should not scrape CLI prose or hard-code tool counts.
 
 ## Tools
 
@@ -274,6 +336,14 @@ npm run build
 npm test
 OILPRICEAPI_KEY=your-key node build/index.js
 ```
+
+## Breaking Changes in v3.0.0
+
+- The default tool scope is now read-only. Create/delete alert and subscription
+  tools require explicit `--scope write` or `OILPRICEAPI_MCP_SCOPE=write`.
+- Invalid scope/profile/category configuration now fails before MCP stdio starts.
+- Use `--list-tools --json` or `--capabilities --json` instead of relying on a
+  hard-coded inventory.
 
 ## Breaking Changes in v2.0.0
 
