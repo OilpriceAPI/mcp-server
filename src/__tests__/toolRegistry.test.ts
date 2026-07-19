@@ -91,6 +91,12 @@ describe("MCP tool scope and profiles", () => {
       }),
     ).toThrow(/Unknown MCP tool category/i);
   });
+
+  it("fails fast when MCP SDK registration internals are incompatible", () => {
+    expect(() => getRegisteredToolEntries({} as never)).toThrow(
+      /Incompatible MCP SDK/i,
+    );
+  });
 });
 
 describe("generated MCP capability manifest", () => {

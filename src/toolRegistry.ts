@@ -93,6 +93,10 @@ interface McpServerInternals {
   _registeredResources: Record<string, RegisteredResourceInternal>;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export interface ToolConfiguration {
   scope: ToolScope;
   profile: ToolProfile;
@@ -191,7 +195,16 @@ export function resolveToolConfiguration(
 }
 
 function serverInternals(server: McpServer): McpServerInternals {
-  return server as unknown as McpServerInternals;
+  const candidate = server as unknown as Partial<McpServerInternals>;
+  if (
+    !isRecord(candidate._registeredTools) ||
+    !isRecord(candidate._registeredResources)
+  ) {
+    throw new Error(
+      "Incompatible MCP SDK: expected registered tool and resource maps are unavailable.",
+    );
+  }
+  return candidate as McpServerInternals;
 }
 
 export function getRegisteredToolEntries(

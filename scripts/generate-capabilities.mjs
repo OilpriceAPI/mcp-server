@@ -12,7 +12,11 @@ const output = new URL("../build/capabilities.json", import.meta.url);
 const { stdout, stderr } = await execFileAsync(
   process.execPath,
   [entryPoint.pathname, "--capabilities", "--json"],
-  { cwd: root, encoding: "utf8" },
+  {
+    cwd: root,
+    encoding: "utf8",
+    env: { ...process.env, NODE_NO_WARNINGS: "1" },
+  },
 );
 if (stderr.trim()) {
   throw new Error(`Capability generation wrote to stderr: ${stderr.trim()}`);

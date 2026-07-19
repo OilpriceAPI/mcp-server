@@ -36,6 +36,13 @@
           "format": "string",
           "isSecret": false,
           "name": "OILPRICEAPI_MCP_PROFILE"
+        },
+        {
+          "description": "Comma-separated category allowlist (core, market, automation) that overrides the profile.",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "OILPRICEAPI_MCP_CATEGORIES"
         }
       ]
     }
