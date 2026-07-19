@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * OilPriceAPI MCP Server v2.6.0
+ * OilPriceAPI MCP Server v3.0.0
  *
  * Source-timestamped oil, gas, and related energy data for Claude, Cursor,
  * VS Code, and any MCP-compatible client.
@@ -43,8 +43,18 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { readFileSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { runDoctor, type DoctorReport } from "./doctor.js";
 import { PRODUCT_FACTS_URI, ProductFactsProvider } from "./productFacts.js";
+import {
+  applyToolConfiguration,
+  buildCapabilityManifest,
+  resolveToolConfiguration,
+  type CapabilityBuildMetadata,
+  type ToolConfiguration,
+} from "./toolRegistry.js";
 
 export {
   PINNED_PRODUCT_FACTS,
@@ -58,7 +68,7 @@ export {
 // API Configuration
 const API_BASE =
   process.env.OILPRICEAPI_BASE_URL || "https://api.oilpriceapi.com";
-export const MCP_VERSION = "2.6.0";
+export const MCP_VERSION = "3.0.0";
 export const CLIENT_MARKER = `oilpriceapi-mcp/${MCP_VERSION}`;
 export const USER_AGENT = CLIENT_MARKER;
 
@@ -4302,13 +4312,192 @@ server.prompt(
   }),
 );
 
-// Smithery sandbox export for server scanning
-export function createSandboxServer() {
+const DEFAULT_TOOL_CONFIGURATION = resolveToolConfiguration({
+  argv: [],
+  env: {},
+});
+applyToolConfiguration(server, DEFAULT_TOOL_CONFIGURATION);
+
+// Smithery sandbox export for server scanning. Reset to the safe default for
+// every caller unless a test/integration explicitly requests another scope.
+export function createSandboxServer(configuration?: ToolConfiguration) {
+  applyToolConfiguration(server, configuration ?? DEFAULT_TOOL_CONFIGURATION);
   return server;
 }
 
+interface PackageJsonMetadata {
+  name: string;
+  version: string;
+  engines?: { node?: string };
+  repository?: { url?: string };
+}
+
+interface GeneratedBuildMetadata {
+  sourceCommit?: string;
+  generatedAt?: string;
+}
+
+function loadCapabilityBuildMetadata(): CapabilityBuildMetadata {
+  const packageJson = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  ) as PackageJsonMetadata;
+  let generated: GeneratedBuildMetadata = {};
+  try {
+    generated = JSON.parse(
+      readFileSync(new URL("./build-metadata.json", import.meta.url), "utf8"),
+    ) as GeneratedBuildMetadata;
+  } catch {
+    // Source imports do not have build metadata yet. The all-zero commit keeps
+    // local inspection schema-valid without claiming a source revision.
+  }
+
+  return {
+    name: packageJson.name,
+    version: packageJson.version,
+    minimumNodeVersion: packageJson.engines?.node || ">=18.0.0",
+    repository:
+      packageJson.repository?.url ||
+      "https://github.com/OilpriceAPI/mcp-server",
+    sourceCommit:
+      generated.sourceCommit || "0000000000000000000000000000000000000000",
+    generatedAt: generated.generatedAt || "1970-01-01T00:00:00.000Z",
+  };
+}
+
+function hasFlag(argv: string[], flag: string): boolean {
+  return argv.includes(flag);
+}
+
+function formatDoctor(report: DoctorReport): string {
+  const lines = [`OilPriceAPI MCP doctor (${report.mode})`];
+  for (const check of report.checks) {
+    lines.push(`${check.status.toUpperCase()} ${check.id}: ${check.message}`);
+    if (check.recovery) lines.push(`  Recovery: ${check.recovery}`);
+  }
+  if (report.account) {
+    lines.push(`Plan: ${report.account.plan}`);
+    const locked = Object.entries(report.account.features)
+      .filter(([, enabled]) => !enabled)
+      .map(([name]) => name)
+      .sort();
+    lines.push(
+      locked.length > 0
+        ? `Locked features: ${locked.join(", ")}`
+        : "Locked features: none reported",
+    );
+  }
+  lines.push(report.ok ? "Doctor result: PASS" : "Doctor result: FAIL");
+  return lines.join("\n");
+}
+
+function directExecution(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return (
+      realpathSync(process.argv[1]) ===
+      realpathSync(fileURLToPath(import.meta.url))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function validateCliArguments(argv: string[]): void {
+  const optionsWithValues = new Set(["--scope", "--profile", "--categories"]);
+  const standalone = new Set([
+    "--version",
+    "--list-tools",
+    "--capabilities",
+    "--json",
+    "--demo",
+    "doctor",
+  ]);
+  for (let index = 0; index < argv.length; index++) {
+    const value = argv[index];
+    if (
+      standalone.has(value) ||
+      [...optionsWithValues].some((name) => value.startsWith(`${name}=`))
+    ) {
+      continue;
+    }
+    if (optionsWithValues.has(value)) {
+      index += 1;
+      continue;
+    }
+    throw new Error(
+      `Unknown argument '${value}'. Run --list-tools or doctor --demo for diagnostics.`,
+    );
+  }
+}
+
 // Main entry point
-async function main() {
+export async function main(argv = process.argv.slice(2)): Promise<void> {
+  validateCliArguments(argv);
+  const configuration = resolveToolConfiguration({ argv, env: process.env });
+  const enabledTools = applyToolConfiguration(server, configuration);
+  const metadata = loadCapabilityBuildMetadata();
+
+  if (hasFlag(argv, "--version")) {
+    process.stdout.write(`${metadata.name} ${metadata.version}\n`);
+    return;
+  }
+
+  if (hasFlag(argv, "--capabilities")) {
+    const manifest = buildCapabilityManifest(server, metadata);
+    process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
+    return;
+  }
+
+  if (hasFlag(argv, "--list-tools")) {
+    const manifest = buildCapabilityManifest(server, metadata);
+    const enabled = new Set(enabledTools);
+    const tools = manifest.tools.filter((tool) => enabled.has(tool.name));
+    if (hasFlag(argv, "--json")) {
+      process.stdout.write(
+        `${JSON.stringify(
+          {
+            scope: configuration.scope,
+            profile: configuration.profile,
+            categories: configuration.categories,
+            tools,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    } else {
+      process.stdout.write(
+        [
+          `OilPriceAPI MCP tools (scope=${configuration.scope}, profile=${configuration.profile}, count=${tools.length})`,
+          ...tools.map(
+            (tool) =>
+              `${tool.name}\t${tool.access}\t${tool.category}\t${tool.title}`,
+          ),
+        ].join("\n") + "\n",
+      );
+    }
+    return;
+  }
+
+  if (argv.includes("doctor")) {
+    const report = await runDoctor({
+      baseUrl: API_BASE,
+      apiKey: getApiKey(),
+      demo: hasFlag(argv, "--demo"),
+      entryPoint: fileURLToPath(import.meta.url),
+    });
+    process.stdout.write(
+      hasFlag(argv, "--json")
+        ? `${JSON.stringify(report, null, 2)}\n`
+        : `${formatDoctor(report)}\n`,
+    );
+    if (!report.ok) process.exitCode = 1;
+    return;
+  }
+
+  console.error(
+    `OilPriceAPI MCP: scope=${configuration.scope} profile=${configuration.profile} tools=${enabledTools.length}/29`,
+  );
   if (!getApiKey()) {
     // stderr only — stdout is the MCP protocol channel.
     console.error(
@@ -4324,7 +4513,12 @@ async function main() {
   console.error(`OilPriceAPI MCP Server v${MCP_VERSION} running on stdio`);
 }
 
-main().catch((error) => {
-  console.error("Fatal error:", error);
-  process.exit(1);
-});
+if (directExecution()) {
+  main().catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : "Unknown failure";
+    const key = getApiKey();
+    const redacted = key ? message.split(key).join("[REDACTED]") : message;
+    console.error(`OilPriceAPI MCP failed: ${redacted}`);
+    process.exitCode = 1;
+  });
+}
