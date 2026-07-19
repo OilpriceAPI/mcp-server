@@ -19,6 +19,24 @@ const temporary = await mkdtemp(join(tmpdir(), "oilpriceapi-mcp-package-"));
 const installRoot = join(temporary, "install");
 let server;
 
+function parsePackedPackage(output) {
+  const parsed = JSON.parse(output);
+  const candidates = Array.isArray(parsed) ? parsed : Object.values(parsed);
+  if (candidates.length !== 1) {
+    throw new Error(
+      `npm pack returned ${candidates.length} package records; expected exactly one.`,
+    );
+  }
+  const [packedPackage] = candidates;
+  if (
+    typeof packedPackage?.filename !== "string" ||
+    !Array.isArray(packedPackage.files)
+  ) {
+    throw new Error("npm pack returned an unsupported JSON record shape.");
+  }
+  return packedPackage;
+}
+
 function run(entryPoint, args, env = {}) {
   return execFileAsync(process.execPath, [entryPoint, ...args], {
     cwd: installRoot,
@@ -97,11 +115,11 @@ try {
     ["pack", "--json", "--pack-destination", temporary],
     { cwd: root, encoding: "utf8" },
   );
-  const packed = JSON.parse(packOutput);
-  if (packed[0].files.some((file) => file.path.includes("/__tests__/"))) {
+  const packed = parsePackedPackage(packOutput);
+  if (packed.files.some((file) => file.path.includes("/__tests__/"))) {
     throw new Error("The npm tarball contains compiled test artifacts.");
   }
-  const tarball = join(temporary, packed[0].filename);
+  const tarball = join(temporary, packed.filename);
   await execFileAsync(
     "npm",
     [
