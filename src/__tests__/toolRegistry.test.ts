@@ -144,4 +144,39 @@ describe("generated MCP capability manifest", () => {
     expect(serialized).toContain("OILPRICEAPI_KEY");
     delete process.env.OILPRICEAPI_KEY;
   });
+
+  it("accepts omitted optional metadata and preserves it as absent", () => {
+    const manifest = buildCapabilityManifest(
+      createSandboxServer(),
+      BUILD_METADATA,
+    );
+    const sparse = structuredClone(manifest);
+    sparse.tools[0].annotations = {};
+    delete sparse.resources[0].title;
+    delete sparse.resources[0].description;
+    delete sparse.resources[0].mimeType;
+
+    expect(validateCapabilityManifest(sparse)).toEqual(sparse);
+  });
+
+  it("reports a structured issue for invalid capability metadata", () => {
+    const manifest = buildCapabilityManifest(
+      createSandboxServer(),
+      BUILD_METADATA,
+    );
+    const invalid = structuredClone(manifest);
+    invalid.package.repository = "not-a-url";
+
+    try {
+      validateCapabilityManifest(invalid);
+      throw new Error("expected manifest validation to fail");
+    } catch (error) {
+      expect(error).toMatchObject({ name: "ZodError" });
+      expect((error as { issues: unknown[] }).issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: ["package", "repository"] }),
+        ]),
+      );
+    }
+  });
 });
