@@ -118,6 +118,125 @@ describe("wellLookupEndpoint (#57)", () => {
   });
 });
 
+describe("well discovery truth gates (#57)", () => {
+  const server = createSandboxServer();
+  const tools = (
+    server as unknown as {
+      _registeredTools: Record<
+        string,
+        {
+          handler: (
+            args: Record<string, unknown>,
+            extra: Record<string, unknown>,
+          ) => Promise<{
+            content: Array<{ type: string; text: string }>;
+            isError?: boolean;
+          }>;
+        }
+      >;
+    }
+  )._registeredTools;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("blocks permit results when state health needs attention", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({
+        status: "success",
+        data: {
+          state: {
+            state_code: "TX",
+            status: "attention",
+            recommended_use:
+              "Do not use until future-dated records are remediated.",
+          },
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await tools.opa_search_well_permits.handler(
+      { state: "TX", page: 1, per_page: 25 },
+      {},
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("state-health gate");
+    expect(result.content[0].text).toContain("attention");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(String(fetchSpy.mock.calls[0][0])).toContain(
+      "/v1/ei/well-permits/states/TX",
+    );
+  });
+
+  it("combines a promoted lifecycle with exact monthly production", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          status: "success",
+          data: {
+            api_number: "42329447130000",
+            operator: "Example Energy",
+            production_evidence: { status: "positive_production" },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          status: "success",
+          data: {
+            api_number: "42329447130000",
+            count: 1,
+            data: [{ period: "2026-06", oil_bbl: 1200 }],
+          },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await tools.opa_lookup_well.handler(
+      { api_number: "42-329-44713-00-00" },
+      {},
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain("promoted lifecycle");
+    expect(result.content[0].text).toContain('"monthly_production"');
+    expect(result.content[0].text).toContain('"oil_bbl": 1200');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns explicit keyless teasers for all new well tools", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "");
+    vi.stubEnv("OIL_PRICE_API_KEY", "");
+
+    for (const [name, args] of [
+      ["opa_search_well_permits", { state: "TX", page: 1, per_page: 25 }],
+      ["opa_lookup_well", { api_number: "42329447130000" }],
+      ["opa_get_well_activity", { days: 30 }],
+    ] as const) {
+      const result = await tools[name].handler(args, {});
+      expect(result.isError, name).toBe(true);
+      expect(result.content[0].text, name).toContain(name);
+      expect(result.content[0].text, name).toContain(SIGNUP_URL);
+    }
+  });
+});
+
 // ---------------------------------------------------------------------------
 // resolveCommodityCode
 // ---------------------------------------------------------------------------
