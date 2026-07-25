@@ -17,9 +17,9 @@
  * limit/feature gate hit by the API plus an upgrade link (see ApiGateError in
  * makeApiRequest and alertHttpError for the authenticated tools).
  *
- * 29 tools total (opa_ prefixed):
+ * 32 tools total (opa_ prefixed):
  *
- * 20 read-only tools: reviewed product facts, prices, history, futures, marine
+ * 23 read-only tools: reviewed product facts, prices, history, futures, marine
  * fuels, rig counts, drilling, diesel-by-state, LTL and parcel fuel
  * surcharges, storage, OPEC production, forecasts, EIA oil inventories, well
  * permits, well production, and refining spreads.
@@ -48,6 +48,10 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { runDoctor, type DoctorReport } from "./doctor.js";
 import { PRODUCT_FACTS_URI, ProductFactsProvider } from "./productFacts.js";
+import {
+  currentToolAttributionHeaders,
+  withToolTelemetry,
+} from "./telemetry.js";
 import {
   applyToolConfiguration,
   buildCapabilityManifest,
@@ -861,6 +865,21 @@ const server = new McpServer(
   },
 );
 
+// Instrument every registered tool in one place so new tools cannot silently
+// bypass attribution or privacy-safe hit/miss telemetry.
+const rawRegisterTool = server.registerTool.bind(server);
+server.registerTool = ((
+  name: string,
+  config: unknown,
+  callback: (args: unknown, extra: unknown) => unknown,
+) =>
+  rawRegisterTool(
+    name,
+    config as never,
+    ((args: unknown, extra: unknown) =>
+      withToolTelemetry(name, args, () => callback(args, extra))) as never,
+  )) as typeof server.registerTool;
+
 export const productFactsProvider = new ProductFactsProvider({
   url: API_BASE + "/product-facts.json",
   fetchImpl: (input, init) => fetch(input, init),
@@ -1109,6 +1128,7 @@ export async function makeApiRequest<T>(
 ): Promise<T | null> {
   const headers: Record<string, string> = {
     ...clientAttributionHeaders(),
+    ...currentToolAttributionHeaders(),
     Accept: "application/json",
   };
 
@@ -1216,6 +1236,7 @@ export async function makeAuthRequest(
 
   const headers: Record<string, string> = {
     ...clientAttributionHeaders(),
+    ...currentToolAttributionHeaders(),
     Accept: "application/json",
     // The API accepts the customer API key as a bearer token.
     Authorization: `Bearer ${getApiKey()}`,
@@ -1412,7 +1433,11 @@ export async function fetchDemoPrices(
 ): Promise<DemoPrice[] | null> {
   try {
     const response = await fetchFn(`${API_BASE}/v1/demo/prices`, {
-      headers: { ...clientAttributionHeaders(), Accept: "application/json" },
+      headers: {
+        ...clientAttributionHeaders(),
+        ...currentToolAttributionHeaders(),
+        Accept: "application/json",
+      },
     });
     if (!response.ok) return null;
     const payload = (await response.json()) as ApiResponse<{
@@ -1718,6 +1743,21 @@ const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
       does: "Returns US oil & gas well drilling permit data, filterable by state or operator.",
       example:
         "TX: NNN permits · NM: NNN permits · ... (latest week, by state/operator)",
+    },
+    opa_search_well_permits: {
+      does: "Searches one state's well permits by county or operator and date range, with measured state freshness and completeness shown before the records.",
+      example:
+        "State health: available · date coverage NN.N% · N matching permits with source and fetched-at provenance",
+    },
+    opa_lookup_well: {
+      does: "Dereferences a 10-, 12-, or 14-digit API well number into a promoted lifecycle summary and monthly production when exact well-level production is available.",
+      example:
+        "API NN-NNN-NNNNN-NN-NN · operator · county · permit/spud/production dates · cumulative and monthly production evidence",
+    },
+    opa_get_well_activity: {
+      does: "Returns recent permit activity, top operators/formations, weekly trend, and explicit state-level freshness warnings.",
+      example:
+        "Last NN days: N,NNN permits · top operators · weekly trend · stale/degraded/attention state warnings",
     },
     opa_get_well_production: {
       does: "Returns US oil & gas well production data (beta coverage): national/state monthly summaries, per-state history, per-well history by API number, top producers, and drill-to-production cycle times.",
@@ -2852,10 +2892,18 @@ server.registerTool(
         .describe(
           "Optional US state name or 2-letter code to filter permits (e.g., 'Texas', 'TX'). Applies to the latest and by_state views.",
         ),
+      operator: z
+        .string()
+        .min(1)
+        .max(100)
+        .optional()
+        .describe(
+          "Operator name for the by_operator view. For richer filters and explicit freshness metadata, use opa_search_well_permits.",
+        ),
     },
     annotations: READ_TOOL_ANNOTATIONS,
   },
-  async ({ view, state }) => {
+  async ({ view, state, operator }) => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_well_permits");
 
     const pathByView: Record<string, string> = {
@@ -2865,6 +2913,7 @@ server.registerTool(
     };
 
     let endpoint = pathByView[view];
+    const query = new URLSearchParams();
 
     if (state) {
       const stateCode = resolveStateCode(state);
@@ -2873,8 +2922,21 @@ server.registerTool(
           `'${state}' is not a recognized US state. Use a full state name (e.g., 'Texas') or 2-letter code (e.g., 'TX').`,
         );
       }
-      endpoint += `?state=${stateCode}`;
+      if (view === "by_state") query.set("state", stateCode);
+      else query.set("states", stateCode);
     }
+
+    if (view === "by_operator") {
+      if (!operator) {
+        return errorResult(
+          "The by_operator view requires an operator parameter. Use opa_search_well_permits for operator search with explicit state-health metadata.",
+        );
+      }
+      query.set("operator", operator);
+    }
+
+    const queryString = query.toString();
+    if (queryString) endpoint += `?${queryString}`;
 
     const response =
       await makeApiRequest<ApiResponse<Record<string, unknown>>>(endpoint);
@@ -2890,6 +2952,392 @@ server.registerTool(
     text += "\n_Data from [OilPriceAPI](https://oilpriceapi.com)_";
 
     return textResult(text);
+  },
+);
+
+export interface WellPermitSearchOptions {
+  state: string;
+  county?: string;
+  operator?: string;
+  start_date?: string;
+  end_date?: string;
+  page?: number;
+  per_page?: number;
+}
+
+function validIsoDate(value: string | undefined): boolean {
+  if (!value) return true;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(date.valueOf()) && date.toISOString().startsWith(value);
+}
+
+/**
+ * Map a bounded permit search onto the existing core routes. Operator and
+ * county are intentionally exclusive because the core exposes them through
+ * separate query paths; silently dropping either filter would be misleading.
+ */
+export function wellPermitSearchEndpoint(
+  options: WellPermitSearchOptions,
+): { endpoint: string; stateCode: string } | { error: string } {
+  const stateCode = resolveStateCode(options.state);
+  if (!stateCode) {
+    return {
+      error:
+        "state must be a recognized US state name or 2-letter code (for example, Texas or TX).",
+    };
+  }
+  if (options.operator && options.county) {
+    return {
+      error:
+        "operator and county cannot be combined yet because the core API exposes them on separate search routes. Run one search for each filter.",
+    };
+  }
+  if (!validIsoDate(options.start_date) || !validIsoDate(options.end_date)) {
+    return { error: "start_date and end_date must use YYYY-MM-DD." };
+  }
+  if (
+    options.start_date &&
+    options.end_date &&
+    options.start_date > options.end_date
+  ) {
+    return { error: "start_date must be on or before end_date." };
+  }
+
+  const query = new URLSearchParams();
+  query.set("states", stateCode);
+  if (options.start_date) query.set("start_date", options.start_date);
+  if (options.end_date) query.set("end_date", options.end_date);
+  query.set("page", String(options.page ?? 1));
+  query.set("per_page", String(options.per_page ?? 25));
+
+  if (options.operator) {
+    query.set("operator", options.operator);
+    return {
+      endpoint: `/v1/ei/well-permits/by-operator?${query.toString()}`,
+      stateCode,
+    };
+  }
+  if (options.county) query.set("county", options.county);
+  return {
+    endpoint: `/v1/ei/well-permits/search?${query.toString()}`,
+    stateCode,
+  };
+}
+
+interface WellPermitStateHealth {
+  state_code?: string;
+  status?: string;
+  recommended_use?: string;
+  record_count?: number;
+  permit_date_coverage_pct?: number;
+  latest_permit_date?: string | null;
+  latest_fetched_at?: string | null;
+  future_permit_date_count?: number;
+  note?: string;
+}
+
+function permitHealthFromResponse(
+  response: ApiResponse<Record<string, unknown>>,
+): WellPermitStateHealth | null {
+  const value = response.data.state;
+  return value && typeof value === "object"
+    ? (value as WellPermitStateHealth)
+    : null;
+}
+
+function formatPermitHealth(health: WellPermitStateHealth): string {
+  return [
+    `- Status: **${health.status ?? "unknown"}**`,
+    `- Recommended use: ${health.recommended_use ?? "No recommendation supplied."}`,
+    `- Records: ${health.record_count ?? "unknown"}`,
+    `- Permit-date coverage: ${health.permit_date_coverage_pct ?? "unknown"}%`,
+    `- Latest permit date: ${health.latest_permit_date ?? "unknown"}`,
+    `- Latest fetched at: ${health.latest_fetched_at ?? "unknown"}`,
+    `- Future-dated records: ${health.future_permit_date_count ?? "unknown"}`,
+  ].join("\n");
+}
+
+server.registerTool(
+  "opa_search_well_permits",
+  {
+    title: "Search Well Permits",
+    description:
+      "Search well permits in one US state by county or operator and optional permit-date range. The tool checks the core API's measured state-health gate first, fails closed for unavailable/attention states, and always returns freshness, date coverage, source provenance, and any staleness/degradation caveat with the records. Operator and county filters currently require separate searches.",
+    inputSchema: {
+      state: z
+        .string()
+        .describe("Required US state name or 2-letter code, e.g. Texas or TX."),
+      county: z
+        .string()
+        .min(1)
+        .max(100)
+        .optional()
+        .describe("Optional county-name search. Cannot be combined with operator."),
+      operator: z
+        .string()
+        .min(1)
+        .max(100)
+        .optional()
+        .describe("Optional operator-name search. Cannot be combined with county."),
+      start_date: z
+        .string()
+        .optional()
+        .describe("Optional inclusive permit-date lower bound (YYYY-MM-DD)."),
+      end_date: z
+        .string()
+        .optional()
+        .describe("Optional inclusive permit-date upper bound (YYYY-MM-DD)."),
+      page: z.number().int().min(1).default(1),
+      per_page: z.number().int().min(1).max(100).default(25),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async (options) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_search_well_permits");
+
+    const mapped = wellPermitSearchEndpoint(options);
+    if ("error" in mapped) return errorResult(mapped.error);
+
+    const healthResponse = await makeApiRequest<
+      ApiResponse<Record<string, unknown>>
+    >(`/v1/ei/well-permits/states/${mapped.stateCode}`);
+    if (!healthResponse || healthResponse.status !== "success") {
+      return errorResult(
+        `State health for ${mapped.stateCode} is unavailable, so the permit search was not run. This tool fails closed rather than returning records without a freshness gate.`,
+      );
+    }
+
+    const health = permitHealthFromResponse(healthResponse);
+    if (!health) {
+      return errorResult(
+        `State health for ${mapped.stateCode} was malformed, so the permit search was not run.`,
+      );
+    }
+    if (health.status === "unavailable" || health.status === "attention") {
+      return errorResult(
+        `Permit search blocked by the ${mapped.stateCode} state-health gate (${health.status}). ${health.recommended_use ?? "Use the state-health endpoint for recovery guidance."}`,
+      );
+    }
+    if (
+      (options.start_date || options.end_date) &&
+      typeof health.permit_date_coverage_pct === "number" &&
+      health.permit_date_coverage_pct < 50
+    ) {
+      return errorResult(
+        `Date-based permit search blocked for ${mapped.stateCode}: only ${health.permit_date_coverage_pct}% of records have a permit date. ${health.recommended_use ?? ""}`.trim(),
+      );
+    }
+
+    const response = await makeApiRequest<
+      ApiResponse<Record<string, unknown>>
+    >(mapped.endpoint);
+    if (!response || response.status !== "success") {
+      return errorResult(
+        `No safe well-permit search result is available for ${mapped.stateCode}. Check account entitlement and retry.`,
+      );
+    }
+
+    return textResult(
+      [
+        `# Well Permit Search — ${mapped.stateCode}`,
+        "",
+        "## Measured state health",
+        formatPermitHealth(health),
+        "",
+        health.status === "available"
+          ? "_Health gate passed._"
+          : `_Caveat: state status is ${health.status}; treat these records according to the recommendation above._`,
+        "",
+        "## Results",
+        "```json",
+        JSON.stringify(response.data, null, 2),
+        "```",
+        "",
+        "_Data and state-health measurement from [OilPriceAPI](https://oilpriceapi.com)_",
+      ].join("\n"),
+    );
+  },
+);
+
+export function wellLookupEndpoint(
+  apiNumber: string,
+  state?: string,
+): { endpoint: string; normalizedApi: string } | { error: string } {
+  const normalizedApi = apiNumber.replace(/\D/g, "");
+  if (![10, 12, 14].includes(normalizedApi.length)) {
+    return {
+      error:
+        "api_number must contain a valid 10-, 12-, or 14-digit API well number.",
+    };
+  }
+  const query = new URLSearchParams();
+  if (state) {
+    const stateCode = resolveStateCode(state);
+    if (!stateCode) {
+      return { error: "state must be a recognized US state name or code." };
+    }
+    query.set("state", stateCode);
+  }
+  const suffix = query.size ? `?${query.toString()}` : "";
+  return {
+    endpoint: `/v1/well-lifecycle/wells/${normalizedApi}${suffix}`,
+    normalizedApi,
+  };
+}
+
+server.registerTool(
+  "opa_lookup_well",
+  {
+    title: "Look Up Well by API Number",
+    description:
+      "Look up a well by 10-, 12-, or 14-digit API number using the core API's promoted lifecycle summaries. Returns operator, county, lifecycle dates, cumulative production and evidence; for a 14-digit API number it also includes exact monthly well-production history when available. Optional state disambiguates API numbers that occur across source contexts. Unpromoted or ambiguous records fail closed.",
+    inputSchema: {
+      api_number: z
+        .string()
+        .min(1)
+        .describe("10-, 12-, or 14-digit API well number; punctuation is allowed."),
+      state: z
+        .string()
+        .optional()
+        .describe("Optional state name/code used to disambiguate source records."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ api_number, state }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_lookup_well");
+
+    const mapped = wellLookupEndpoint(api_number, state);
+    if ("error" in mapped) return errorResult(mapped.error);
+
+    const lifecycle = await makeApiRequest<
+      ApiResponse<Record<string, unknown>>
+    >(mapped.endpoint);
+    if (!lifecycle || lifecycle.status !== "success") {
+      return errorResult(
+        `No promoted lifecycle summary is available for API number ${mapped.normalizedApi}. The record may be outside current coverage, unpromoted, or require a state/source disambiguator. Use opa_search_well_permits to discover verified records.`,
+      );
+    }
+
+    let monthlyProduction: Record<string, unknown> | null = null;
+    let productionNote =
+      "Exact monthly well production was not requested because this is not a 14-digit API number.";
+    if (mapped.normalizedApi.length === 14) {
+      try {
+        const production = await makeApiRequest<
+          ApiResponse<Record<string, unknown>>
+        >(`/v1/well-production/wells/${mapped.normalizedApi}`);
+        if (production?.status === "success") {
+          monthlyProduction = production.data;
+          productionNote =
+            "Exact monthly well-level production is included below.";
+        } else {
+          productionNote =
+            "No exact monthly well-level production history is currently available; the promoted lifecycle production evidence remains authoritative for this response.";
+        }
+      } catch (error) {
+        if (!(error instanceof ApiGateError)) throw error;
+        productionNote = `Monthly well production is separately plan-gated (HTTP ${error.status}); lifecycle evidence is included.`;
+      }
+    }
+
+    return textResult(
+      [
+        `# Well Lookup — API ${mapped.normalizedApi}`,
+        "",
+        productionNote,
+        "",
+        "```json",
+        JSON.stringify(
+          {
+            lifecycle: lifecycle.data,
+            monthly_production: monthlyProduction,
+          },
+          null,
+          2,
+        ),
+        "```",
+        "",
+        "_Only promoted lifecycle summaries are returned. Data from [OilPriceAPI](https://oilpriceapi.com)._",
+      ].join("\n"),
+    );
+  },
+);
+
+server.registerTool(
+  "opa_get_well_activity",
+  {
+    title: "Get Recent Well Activity",
+    description:
+      "Get recent US well-permit activity including counts by state, top operators and formations, permit types, and weekly trend. The response also includes every non-available state-health record so stale, degraded, unavailable, or attention states are explicit; rankings must not be treated as complete national coverage when warnings exist.",
+    inputSchema: {
+      days: z
+        .number()
+        .int()
+        .min(1)
+        .max(365)
+        .default(30)
+        .describe("Recent activity window in days (1-365)."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ days }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_well_activity");
+
+    const [activity, healthResponse] = await Promise.all([
+      makeApiRequest<ApiResponse<Record<string, unknown>>>(
+        `/v1/ei/well-permits/summary?days=${days}`,
+      ),
+      makeApiRequest<ApiResponse<Record<string, unknown>>>(
+        "/v1/ei/well-permits/states",
+      ),
+    ]);
+    if (
+      !activity ||
+      activity.status !== "success" ||
+      !healthResponse ||
+      healthResponse.status !== "success"
+    ) {
+      return errorResult(
+        "Recent well activity is unavailable because either the activity summary or its state-health gate could not be loaded.",
+      );
+    }
+
+    const states =
+      healthResponse.data.states &&
+      typeof healthResponse.data.states === "object"
+        ? (healthResponse.data.states as Record<
+            string,
+            WellPermitStateHealth
+          >)
+        : {};
+    const warnings = Object.values(states).filter(
+      (stateHealth) => stateHealth.status !== "available",
+    );
+
+    return textResult(
+      [
+        `# Recent US Well Activity — ${days} days`,
+        "",
+        warnings.length === 0
+          ? "_All reported state-health gates are currently available._"
+          : `_Coverage warning: ${warnings.length} state(s) are stale, degraded, unavailable, or need attention. Rankings below are directional, not a complete national league table._`,
+        "",
+        "```json",
+        JSON.stringify(
+          {
+            activity: activity.data,
+            state_health_warnings: warnings,
+            state_health_as_of: healthResponse.data.meta,
+          },
+          null,
+          2,
+        ),
+        "```",
+        "",
+        "_Data and health gates from [OilPriceAPI](https://oilpriceapi.com)._",
+      ].join("\n"),
+    );
   },
 );
 
@@ -4496,7 +4944,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
 
   console.error(
-    `OilPriceAPI MCP: scope=${configuration.scope} profile=${configuration.profile} tools=${enabledTools.length}/29`,
+    `OilPriceAPI MCP: scope=${configuration.scope} profile=${configuration.profile} tools=${enabledTools.length}/32`,
   );
   if (!getApiKey()) {
     // stderr only — stdout is the MCP protocol channel.

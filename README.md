@@ -239,6 +239,9 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_get_forecasts`       | EIA STEO energy price forecasts                                                                 |
 | `opa_get_oil_inventories` | EIA weekly petroleum stocks (latest/summary/by_product)                                         |
 | `opa_get_well_permits`    | US well drilling permits (latest/by_state/by_operator)                                          |
+| `opa_search_well_permits` | State-scoped permit search by county/operator/date with measured freshness gate                  |
+| `opa_lookup_well`         | API-number lookup with promoted lifecycle and exact monthly production when available            |
+| `opa_get_well_activity`   | Recent permit counts/top operators/trends with explicit state-health warnings                    |
 | `opa_get_well_production` | US well production — beta coverage (summary/states/state/well/top_producers/cycle_time/cohorts) |
 | `opa_get_spread`          | Refining/trading spreads (crack, basis, margin)                                                 |
 
@@ -374,7 +377,7 @@ This MCP server runs locally on your machine and only communicates with the OilP
 
 - **What is sent**: tool requests are translated into HTTPS calls to `api.oilpriceapi.com` (commodity codes, query parameters such as time period or state, carrier slugs and service-level inputs for fuel surcharges, and — for alert/subscription tools — the alert parameters you specify), authenticated with your API key. **No conversation content is transmitted** — only the structured tool inputs above.
 - **API key storage**: your key is stored locally in your MCP client's configuration (or the `OILPRICEAPI_KEY` environment variable). It is sent only to `api.oilpriceapi.com` as an Authorization header.
-- **Logging**: API requests are logged by OilPriceAPI as described in the [OilPriceAPI Privacy Policy](https://www.oilpriceapi.com/privacy).
+- **Logging and demand telemetry**: each tool emits a local structured hit/miss event to stderr and attributes its API request with the tool name plus a deliberately lossy argument shape. Commodity codes, intervals, state codes, and bounded numeric controls may be retained; free text, prompts, names, IDs, API well numbers, coordinates, and thresholds are reduced to `provided`. API request logging follows the [OilPriceAPI Privacy Policy](https://www.oilpriceapi.com/privacy).
 - **Third parties**: no data is shared with third parties beyond what that policy describes.
 - **Demo mode**: without an API key, price tools call the keyless demo endpoint on the same host; no key or account data is involved.
 

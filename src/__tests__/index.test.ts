@@ -21,6 +21,8 @@ import {
   SIGNUP_URL,
   UPGRADE_URL,
   createSandboxServer,
+  wellPermitSearchEndpoint,
+  wellLookupEndpoint,
   wellProductionEndpoint,
   formatWellProduction,
   fuelSurchargeEndpoint,
@@ -34,6 +36,87 @@ import {
   SERVER_INSTRUCTIONS,
   productFactsProvider,
 } from "../index.js";
+
+// ---------------------------------------------------------------------------
+// #57 — well permit search and API-number lookup
+// ---------------------------------------------------------------------------
+
+describe("wellPermitSearchEndpoint (#57)", () => {
+  it("maps state/county/date filters onto the measured search route", () => {
+    expect(
+      wellPermitSearchEndpoint({
+        state: "New Mexico",
+        county: "Lea",
+        start_date: "2026-07-01",
+        end_date: "2026-07-25",
+        page: 2,
+        per_page: 10,
+      }),
+    ).toEqual({
+      endpoint:
+        "/v1/ei/well-permits/search?states=NM&start_date=2026-07-01&end_date=2026-07-25&page=2&per_page=10&county=Lea",
+      stateCode: "NM",
+    });
+  });
+
+  it("maps operator search without silently dropping the state gate", () => {
+    expect(
+      wellPermitSearchEndpoint({
+        state: "TX",
+        operator: "Example Energy",
+      }),
+    ).toEqual({
+      endpoint:
+        "/v1/ei/well-permits/by-operator?states=TX&page=1&per_page=25&operator=Example+Energy",
+      stateCode: "TX",
+    });
+  });
+
+  it("rejects unsupported combined filters and malformed ranges", () => {
+    expect(
+      wellPermitSearchEndpoint({
+        state: "TX",
+        operator: "Example",
+        county: "Reeves",
+      }),
+    ).toEqual(expect.objectContaining({ error: expect.stringMatching(/cannot/) }));
+    expect(
+      wellPermitSearchEndpoint({
+        state: "TX",
+        start_date: "2026-08-01",
+        end_date: "2026-07-01",
+      }),
+    ).toEqual(
+      expect.objectContaining({ error: expect.stringMatching(/on or before/) }),
+    );
+    expect(
+      wellPermitSearchEndpoint({ state: "Atlantis" }),
+    ).toEqual(expect.objectContaining({ error: expect.stringMatching(/state/) }));
+  });
+});
+
+describe("wellLookupEndpoint (#57)", () => {
+  it("normalizes API-number punctuation and accepts a state disambiguator", () => {
+    expect(wellLookupEndpoint("42-329-44713-00-00", "Texas")).toEqual({
+      endpoint: "/v1/well-lifecycle/wells/42329447130000?state=TX",
+      normalizedApi: "42329447130000",
+    });
+  });
+
+  it("accepts 10- and 12-digit API numbers but rejects other lengths", () => {
+    expect(wellLookupEndpoint("4232944713")).toEqual({
+      endpoint: "/v1/well-lifecycle/wells/4232944713",
+      normalizedApi: "4232944713",
+    });
+    expect(wellLookupEndpoint("423294471300")).toEqual({
+      endpoint: "/v1/well-lifecycle/wells/423294471300",
+      normalizedApi: "423294471300",
+    });
+    expect(wellLookupEndpoint("4232")).toEqual(
+      expect.objectContaining({ error: expect.stringMatching(/10-, 12-, or 14/) }),
+    );
+  });
+});
 
 // ---------------------------------------------------------------------------
 // resolveCommodityCode
@@ -1050,8 +1133,8 @@ describe("tool registration metadata", () => {
   const DELETE_TOOLS = ["opa_delete_price_alert", "opa_delete_subscription"];
   const WRITE_TOOLS = new Set([...CREATE_TOOLS, ...DELETE_TOOLS]);
 
-  it("registers exactly 29 tools", () => {
-    expect(Object.keys(tools)).toHaveLength(29);
+  it("registers exactly 32 tools", () => {
+    expect(Object.keys(tools)).toHaveLength(32);
     expect(tools.opa_get_product_facts).toBeDefined();
   });
 
