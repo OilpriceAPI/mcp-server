@@ -21,6 +21,8 @@ import {
   SIGNUP_URL,
   UPGRADE_URL,
   createSandboxServer,
+  wellPermitSearchEndpoint,
+  wellLookupEndpoint,
   wellProductionEndpoint,
   formatWellProduction,
   fuelSurchargeEndpoint,
@@ -34,6 +36,226 @@ import {
   SERVER_INSTRUCTIONS,
   productFactsProvider,
 } from "../index.js";
+
+// ---------------------------------------------------------------------------
+// #57 — well permit search and API-number lookup
+// ---------------------------------------------------------------------------
+
+describe("wellPermitSearchEndpoint (#57)", () => {
+  it("maps state/county/date filters onto the measured search route", () => {
+    expect(
+      wellPermitSearchEndpoint({
+        state: "New Mexico",
+        county: "Lea",
+        start_date: "2026-07-01",
+        end_date: "2026-07-25",
+        page: 2,
+        per_page: 10,
+      }),
+    ).toEqual({
+      endpoint:
+        "/v1/ei/well-permits/search?states=NM&start_date=2026-07-01&end_date=2026-07-25&page=2&per_page=10&county=Lea",
+      stateCode: "NM",
+    });
+  });
+
+  it("maps operator search without silently dropping the state gate", () => {
+    expect(
+      wellPermitSearchEndpoint({
+        state: "TX",
+        operator: "Example Energy",
+      }),
+    ).toEqual({
+      endpoint:
+        "/v1/ei/well-permits/by-operator?states=TX&page=1&per_page=25&operator=Example+Energy",
+      stateCode: "TX",
+    });
+  });
+
+  it("rejects unsupported combined filters and malformed ranges", () => {
+    expect(
+      wellPermitSearchEndpoint({
+        state: "TX",
+        operator: "Example",
+        county: "Reeves",
+      }),
+    ).toEqual(expect.objectContaining({ error: expect.stringMatching(/cannot/) }));
+    expect(
+      wellPermitSearchEndpoint({
+        state: "TX",
+        start_date: "2026-08-01",
+        end_date: "2026-07-01",
+      }),
+    ).toEqual(
+      expect.objectContaining({ error: expect.stringMatching(/on or before/) }),
+    );
+    expect(
+      wellPermitSearchEndpoint({ state: "Atlantis" }),
+    ).toEqual(expect.objectContaining({ error: expect.stringMatching(/state/) }));
+  });
+});
+
+describe("wellLookupEndpoint (#57)", () => {
+  it("normalizes API-number punctuation and accepts a state disambiguator", () => {
+    expect(wellLookupEndpoint("42-329-44713-00-00", "Texas")).toEqual({
+      endpoint: "/v1/well-lifecycle/wells/42329447130000?state=TX",
+      normalizedApi: "42329447130000",
+    });
+  });
+
+  it("accepts 10- and 12-digit API numbers but rejects other lengths", () => {
+    expect(wellLookupEndpoint("4232944713")).toEqual({
+      endpoint: "/v1/well-lifecycle/wells/4232944713",
+      normalizedApi: "4232944713",
+    });
+    expect(wellLookupEndpoint("423294471300")).toEqual({
+      endpoint: "/v1/well-lifecycle/wells/423294471300",
+      normalizedApi: "423294471300",
+    });
+    expect(wellLookupEndpoint("4232")).toEqual(
+      expect.objectContaining({ error: expect.stringMatching(/10-, 12-, or 14/) }),
+    );
+  });
+});
+
+describe("well discovery truth gates (#57)", () => {
+  const server = createSandboxServer();
+  const tools = (
+    server as unknown as {
+      _registeredTools: Record<
+        string,
+        {
+          handler: (
+            args: Record<string, unknown>,
+            extra: Record<string, unknown>,
+          ) => Promise<{
+            content: Array<{ type: string; text: string }>;
+            isError?: boolean;
+          }>;
+        }
+      >;
+    }
+  )._registeredTools;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("blocks permit results when state health needs attention", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({
+        status: "success",
+        data: {
+          state: {
+            state_code: "TX",
+            status: "attention",
+            recommended_use:
+              "Do not use until future-dated records are remediated.",
+          },
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await tools.opa_search_well_permits.handler(
+      { state: "TX", page: 1, per_page: 25 },
+      {},
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("state-health gate");
+    expect(result.content[0].text).toContain("attention");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(String(fetchSpy.mock.calls[0][0])).toContain(
+      "/v1/ei/well-permits/states/TX",
+    );
+  });
+
+  it("fails closed when a successful state-health envelope has null data", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ status: "success", data: null }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await tools.opa_search_well_permits.handler(
+      { state: "TX", page: 1, per_page: 25 },
+      {},
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("malformed");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("combines a promoted lifecycle with exact monthly production", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          status: "success",
+          data: {
+            api_number: "42329447130000",
+            operator: "Example Energy",
+            production_evidence: { status: "positive_production" },
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          status: "success",
+          data: {
+            api_number: "42329447130000",
+            count: 1,
+            data: [{ period: "2026-06", oil_bbl: 1200 }],
+          },
+        }),
+      });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await tools.opa_lookup_well.handler(
+      { api_number: "42-329-44713-00-00" },
+      {},
+    );
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0].text).toContain("promoted lifecycle");
+    expect(result.content[0].text).toContain('"monthly_production"');
+    expect(result.content[0].text).toContain('"oil_bbl": 1200');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns explicit keyless teasers for all new well tools", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "");
+    vi.stubEnv("OIL_PRICE_API_KEY", "");
+
+    for (const [name, args] of [
+      ["opa_search_well_permits", { state: "TX", page: 1, per_page: 25 }],
+      ["opa_lookup_well", { api_number: "42329447130000" }],
+      ["opa_get_well_activity", { days: 30 }],
+    ] as const) {
+      const result = await tools[name].handler(args, {});
+      expect(result.isError, name).toBe(true);
+      expect(result.content[0].text, name).toContain(name);
+      expect(result.content[0].text, name).toContain(SIGNUP_URL);
+    }
+  });
+});
 
 // ---------------------------------------------------------------------------
 // resolveCommodityCode
@@ -1050,8 +1272,8 @@ describe("tool registration metadata", () => {
   const DELETE_TOOLS = ["opa_delete_price_alert", "opa_delete_subscription"];
   const WRITE_TOOLS = new Set([...CREATE_TOOLS, ...DELETE_TOOLS]);
 
-  it("registers exactly 29 tools", () => {
-    expect(Object.keys(tools)).toHaveLength(29);
+  it("registers exactly 32 tools", () => {
+    expect(Object.keys(tools)).toHaveLength(32);
     expect(tools.opa_get_product_facts).toBeDefined();
   });
 

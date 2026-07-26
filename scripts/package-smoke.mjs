@@ -167,7 +167,7 @@ try {
   );
   if (
     readTools.scope !== "read" ||
-    readTools.tools.length !== 25 ||
+    readTools.tools.length !== 28 ||
     readTools.tools.some((tool) => tool.access === "write")
   ) {
     throw new Error(
@@ -239,8 +239,8 @@ try {
     throw new Error("Packaged doctor --demo did not pass.");
   }
 
-  await assertProtocolScope(entryPoint, baseUrl, "read", 25);
-  await assertProtocolScope(entryPoint, baseUrl, "write", 29);
+  await assertProtocolScope(entryPoint, baseUrl, "read", 28);
+  await assertProtocolScope(entryPoint, baseUrl, "write", 32);
 
   process.stdout.write(
     "packaged MCP smoke passed: version, doctor, capabilities, scopes, and protocol blocking\n",
