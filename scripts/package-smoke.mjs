@@ -202,6 +202,42 @@ try {
     throw new Error("Packaged capability metadata is incomplete.");
   }
 
+  const configClients = [
+    "claude-desktop",
+    "claude-code",
+    "cursor",
+    "vscode",
+    "cline",
+    "windsurf",
+  ];
+  const configSecret = "opa_live_package_smoke_must_stay_redacted";
+  for (const client of configClients) {
+    const generated = await run(entryPoint, ["--config", client], {
+      OILPRICEAPI_KEY: configSecret,
+    });
+    JSON.parse(generated.stdout);
+    if (
+      generated.stdout.includes(configSecret) ||
+      !generated.stdout.includes(packageJson.name)
+    ) {
+      throw new Error(
+        `Packaged ${client} config was invalid or exposed the environment key.`,
+      );
+    }
+  }
+  let missingConfigTargetFailedClosed = false;
+  try {
+    await run(entryPoint, ["--config"]);
+  } catch (error) {
+    missingConfigTargetFailedClosed =
+      error.code !== 0 &&
+      !error.stdout?.trim() &&
+      /--config requires a value/i.test(error.stderr || "");
+  }
+  if (!missingConfigTargetFailedClosed) {
+    throw new Error("Packaged --config command did not fail closed.");
+  }
+
   server = createServer((request, response) => {
     response.setHeader("Content-Type", "application/json");
     if (request.url === "/health") {
@@ -243,7 +279,7 @@ try {
   await assertProtocolScope(entryPoint, baseUrl, "write", 32);
 
   process.stdout.write(
-    "packaged MCP smoke passed: version, doctor, capabilities, scopes, and protocol blocking\n",
+    "packaged MCP smoke passed: version, configs, doctor, capabilities, scopes, and protocol blocking\n",
   );
 } finally {
   if (server) await new Promise((resolveClose) => server.close(resolveClose));

@@ -47,6 +47,11 @@ import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { runDoctor, type DoctorReport } from "./doctor.js";
+import {
+  CLIENT_CONFIG_TARGETS,
+  generateClientConfig,
+  isClientConfigTarget,
+} from "./clientConfig.js";
 import { PRODUCT_FACTS_URI, ProductFactsProvider } from "./productFacts.js";
 import {
   currentToolAttributionHeaders,
@@ -4830,6 +4835,14 @@ function hasFlag(argv: string[], flag: string): boolean {
   return argv.includes(flag);
 }
 
+function cliOption(argv: string[], name: string): string | undefined {
+  const equalsPrefix = `${name}=`;
+  const equals = argv.find((value) => value.startsWith(equalsPrefix));
+  if (equals) return equals.slice(equalsPrefix.length);
+  const index = argv.indexOf(name);
+  return index === -1 ? undefined : argv[index + 1];
+}
+
 function formatDoctor(report: DoctorReport): string {
   const lines = [`OilPriceAPI MCP doctor (${report.mode})`];
   for (const check of report.checks) {
@@ -4865,7 +4878,12 @@ function directExecution(): boolean {
 }
 
 function validateCliArguments(argv: string[]): void {
-  const optionsWithValues = new Set(["--scope", "--profile", "--categories"]);
+  const optionsWithValues = new Set([
+    "--scope",
+    "--profile",
+    "--categories",
+    "--config",
+  ]);
   const standalone = new Set([
     "--version",
     "--list-tools",
@@ -4883,6 +4901,10 @@ function validateCliArguments(argv: string[]): void {
       continue;
     }
     if (optionsWithValues.has(value)) {
+      const optionValue = argv[index + 1];
+      if (!optionValue || optionValue.startsWith("--")) {
+        throw new Error(`${value} requires a value.`);
+      }
       index += 1;
       continue;
     }
@@ -4901,6 +4923,31 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
 
   if (hasFlag(argv, "--version")) {
     process.stdout.write(`${metadata.name} ${metadata.version}\n`);
+    return;
+  }
+
+  const configTarget = cliOption(argv, "--config");
+  if (configTarget !== undefined) {
+    if (!isClientConfigTarget(configTarget)) {
+      throw new Error(
+        `Unknown MCP client '${configTarget}'. Expected one of: ${Object.keys(CLIENT_CONFIG_TARGETS).join(", ")}.`,
+      );
+    }
+    process.stdout.write(
+      `${JSON.stringify(
+        generateClientConfig({
+          client: configTarget,
+          scope: configuration.scope,
+          profile: configuration.profile,
+          ...(configuration.categoriesSource === "allowlist"
+            ? { categories: configuration.categories }
+            : {}),
+          demo: hasFlag(argv, "--demo"),
+        }),
+        null,
+        2,
+      )}\n`,
+    );
     return;
   }
 
