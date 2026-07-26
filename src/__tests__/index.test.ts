@@ -176,6 +176,26 @@ describe("well discovery truth gates (#57)", () => {
     );
   });
 
+  it("fails closed when a successful state-health envelope has null data", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    const fetchSpy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      json: async () => ({ status: "success", data: null }),
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const result = await tools.opa_search_well_permits.handler(
+      { state: "TX", page: 1, per_page: 25 },
+      {},
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("malformed");
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("combines a promoted lifecycle with exact monthly production", async () => {
     vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
     const fetchSpy = vi

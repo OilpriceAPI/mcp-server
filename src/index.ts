@@ -3040,7 +3040,7 @@ interface WellPermitStateHealth {
 function permitHealthFromResponse(
   response: ApiResponse<Record<string, unknown>>,
 ): WellPermitStateHealth | null {
-  const value = response.data.state;
+  const value = response.data?.state;
   return value && typeof value === "object"
     ? (value as WellPermitStateHealth)
     : null;
@@ -3179,7 +3179,8 @@ export function wellLookupEndpoint(
     }
     query.set("state", stateCode);
   }
-  const suffix = query.size ? `?${query.toString()}` : "";
+  const queryString = query.toString();
+  const suffix = queryString ? `?${queryString}` : "";
   return {
     endpoint: `/v1/well-lifecycle/wells/${normalizedApi}${suffix}`,
     normalizedApi,
@@ -3213,7 +3214,12 @@ server.registerTool(
     const lifecycle = await makeApiRequest<
       ApiResponse<Record<string, unknown>>
     >(mapped.endpoint);
-    if (!lifecycle || lifecycle.status !== "success") {
+    if (
+      !lifecycle ||
+      lifecycle.status !== "success" ||
+      !lifecycle.data ||
+      typeof lifecycle.data !== "object"
+    ) {
       return errorResult(
         `No promoted lifecycle summary is available for API number ${mapped.normalizedApi}. The record may be outside current coverage, unpromoted, or require a state/source disambiguator. Use opa_search_well_permits to discover verified records.`,
       );
@@ -3227,7 +3233,11 @@ server.registerTool(
         const production = await makeApiRequest<
           ApiResponse<Record<string, unknown>>
         >(`/v1/well-production/wells/${mapped.normalizedApi}`);
-        if (production?.status === "success") {
+        if (
+          production?.status === "success" &&
+          production.data &&
+          typeof production.data === "object"
+        ) {
           monthlyProduction = production.data;
           productionNote =
             "Exact monthly well-level production is included below.";
@@ -3295,8 +3305,12 @@ server.registerTool(
     if (
       !activity ||
       activity.status !== "success" ||
+      !activity.data ||
+      typeof activity.data !== "object" ||
       !healthResponse ||
-      healthResponse.status !== "success"
+      healthResponse.status !== "success" ||
+      !healthResponse.data ||
+      typeof healthResponse.data !== "object"
     ) {
       return errorResult(
         "Recent well activity is unavailable because either the activity summary or its state-health gate could not be loaded.",
@@ -3304,7 +3318,7 @@ server.registerTool(
     }
 
     const states =
-      healthResponse.data.states &&
+      healthResponse.data?.states &&
       typeof healthResponse.data.states === "object"
         ? (healthResponse.data.states as Record<
             string,
