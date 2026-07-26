@@ -310,6 +310,7 @@ export const capabilityManifestSchema = z.object({
     doctor: z.string(),
     demoDoctor: z.string(),
     capabilities: z.string(),
+    config: z.string(),
   }),
   profiles: z.record(z.string(), z.array(z.enum(TOOL_CATEGORIES))),
   inventories: z.object({
@@ -411,6 +412,7 @@ export function buildCapabilityManifest(
       doctor: `${metadata.name} doctor`,
       demoDoctor: `${metadata.name} doctor --demo`,
       capabilities: `${metadata.name} --capabilities --json`,
+      config: `${metadata.name} --config <client>`,
     },
     profiles: Object.fromEntries(
       Object.entries(TOOL_PROFILES).map(([name, categories]) => [

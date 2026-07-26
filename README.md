@@ -42,7 +42,17 @@ npx oilpriceapi-mcp --list-tools --json --profile core
 npx oilpriceapi-mcp doctor --demo
 npx oilpriceapi-mcp doctor
 npx oilpriceapi-mcp --capabilities --json
+npx oilpriceapi-mcp --config claude-code
+npx oilpriceapi-mcp --config vscode
 ```
+
+`--config` generates client-native, copy/paste-valid JSON for
+`claude-desktop`, `claude-code`, `cursor`, `vscode`, `cline`, or `windsurf`.
+It never reads or prints the configured API key. Claude Code, VS Code, and
+Windsurf outputs use their supported environment or secure-input references;
+Claude Desktop, Cursor, and Cline use an explicit local replacement marker.
+Add `--demo` to omit API-key configuration entirely. Scope, profile, and
+category options are preserved in the generated server arguments.
 
 ## What can your agent get?
 
