@@ -24,5 +24,8 @@ describe("directory-facing source metadata", () => {
       (entry: { name: string }) => entry.name === "OILPRICEAPI_KEY",
     ).description;
     expect(apiKeyDescription).toContain("oilpriceapi.com/auth/signup");
+    expect(apiKeyDescription).not.toMatch(
+      /oilpriceapi\.com\/signup(?:\?|\b)/i,
+    );
   });
 });
