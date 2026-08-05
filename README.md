@@ -10,6 +10,8 @@
 
 Backed by [OilPriceAPI](https://oilpriceapi.com), a normalized REST API for energy dashboards, fleet and logistics tools, maritime workflows, and market research.
 
+**Canonical sources:** [Public product facts](https://api.oilpriceapi.com/product-facts.json) · [Official MCP Registry record](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.OilpriceAPI%2Fmcp-server/versions/latest)
+
 ## Features
 
 - **Reviewed product facts** — a keyless read-only tool and stable resource for offer, freshness, authentication, catalog, entitlement, and data-rights questions
@@ -178,7 +180,7 @@ npm install -g oilpriceapi-mcp
 
 | Variable                     | Required | Description                                                                                                                                                                                                                                                                                            |
 | ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OILPRICEAPI_KEY`            | No       | API key from [oilpriceapi.com/signup](https://www.oilpriceapi.com/signup?utm_source=npm&utm_medium=mcp&utm_campaign=readme). After the core trial, the Free plan includes 200 requests/month. Dataset access and limits vary by plan and entitlement. Without a key, the server uses the limited demo. |
+| `OILPRICEAPI_KEY`            | No       | API key from [oilpriceapi.com/auth/signup](https://www.oilpriceapi.com/auth/signup?utm_source=npm&utm_medium=mcp&utm_campaign=readme). After the core trial, the Free plan includes 200 requests/month. Dataset access and limits vary by plan and entitlement. Without a key, the server uses the limited demo. |
 | `OILPRICEAPI_BASE_URL`       | No       | Override API base URL (for staging/testing). Default: `https://api.oilpriceapi.com`                                                                                                                                                                                                                    |
 | `OILPRICEAPI_MCP_SCOPE`      | No       | `read` (default) hides and blocks create/delete tools. Set `write` only when account mutations are intended.                                                                                                                                                                                           |
 | `OILPRICEAPI_MCP_PROFILE`    | No       | Stable inventory profile: `all` (default), `core`, `market`, or `automation`.                                                                                                                                                                                                                          |

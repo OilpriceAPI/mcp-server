@@ -17,7 +17,7 @@
       },
       "environmentVariables": [
         {
-          "description": "Your OilPriceAPI key from oilpriceapi.com/signup. Optional: without it, keyless demo mode.",
+          "description": "Your OilPriceAPI key from oilpriceapi.com/auth/signup. Optional: without it, keyless demo mode.",
           "isRequired": false,
           "format": "string",
           "isSecret": true,
