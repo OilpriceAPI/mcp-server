@@ -1116,7 +1116,7 @@ async function buildGateError(response: Response): Promise<ApiGateError> {
         : "Rate limit exceeded (HTTP 429) — the plan's request limit was hit";
   return new ApiGateError(
     response.status,
-    `${label}${detail ? `: ${detail}` : "."} Upgrade: ${UPGRADE_URL}`,
+    `${label}${detail ? `: ${detail}` : "."} Upgrade: ${UPGRADE_URL} — compare plans with the opa_get_plans tool; check current usage with opa_get_account_status.`,
   );
 }
 
@@ -1318,7 +1318,7 @@ export function alertHttpError(
   let msg = `Could not ${action} (HTTP ${result.status})${detail ? `: ${detail}` : "."}`;
   // Tier/feature gate or rate limit — add the upgrade nudge (#17).
   if (result.status === 402 || result.status === 403 || result.status === 429) {
-    msg += ` Upgrade: ${UPGRADE_URL}`;
+    msg += ` Upgrade: ${UPGRADE_URL} — compare plans with the opa_get_plans tool; check current usage with opa_get_account_status.`;
   }
   return msg;
 }
@@ -2231,7 +2231,7 @@ server.registerTool(
   {
     title: "Get Price History",
     description:
-      "Get historical price data for a commodity over a time period. Use when the user asks about price trends, historical prices, or how a commodity has performed over time. Returns high, low, average, change, and data point count. Periods: day (24h), week (7d), month (30d), year (365d).",
+      "Get historical price data for a commodity over a time period. Use when the user asks about price trends, historical prices, or how a commodity has performed over time. Returns high, low, average, change, and data point count. Periods: day (24h), week (7d), month (30d), year (365d). Requires a paid plan (Developer, $19/mo, and up) — the free tier serves latest prices only.",
     inputSchema: {
       commodity: z
         .string()
@@ -2303,7 +2303,7 @@ server.registerTool(
   {
     title: "Get Futures Price",
     description:
-      "Get the latest front-month futures contract price for energy commodities. Use when the user asks about futures, forward prices, or contract prices. Supports crude oil (BZ/ice-brent = Brent, CL/ice-wti = WTI), ICE Gasoil (ice-gasoil), natural gas (natural-gas), European TTF gas (ttf-gas), LNG JKM (lng-jkm), EUA carbon (eua-carbon), and UK carbon (uk-carbon). For the full forward curve across all contract months, use opa_get_futures_curve instead.",
+      "Get the latest front-month futures contract price for energy commodities. Use when the user asks about futures, forward prices, or contract prices. Supports crude oil (BZ/ice-brent = Brent, CL/ice-wti = WTI), ICE Gasoil (ice-gasoil), natural gas (natural-gas), European TTF gas (ttf-gas), LNG JKM (lng-jkm), EUA carbon (eua-carbon), and UK carbon (uk-carbon). For the full forward curve across all contract months, use opa_get_futures_curve instead. Requires the Professional plan ($99/mo) or higher.",
     inputSchema: {
       contract: z
         .enum(FUTURES_CONTRACTS)
@@ -2351,7 +2351,7 @@ server.registerTool(
   {
     title: "Get Futures Curve",
     description:
-      "Get the full futures forward curve showing prices across all contract months. Use when the user asks about the forward curve, contango/backwardation, or term structure. Supports crude oil (BZ/ice-brent = Brent, CL/ice-wti = WTI), ICE Gasoil (ice-gasoil), natural gas (natural-gas), European TTF gas (ttf-gas), LNG JKM (lng-jkm), EUA carbon (eua-carbon), and UK carbon (uk-carbon). Returns a table of contract months with settlement prices, plus market structure analysis.",
+      "Get the full futures forward curve showing prices across all contract months. Use when the user asks about the forward curve, contango/backwardation, or term structure. Supports crude oil (BZ/ice-brent = Brent, CL/ice-wti = WTI), ICE Gasoil (ice-gasoil), natural gas (natural-gas), European TTF gas (ttf-gas), LNG JKM (lng-jkm), EUA carbon (eua-carbon), and UK carbon (uk-carbon). Returns a table of contract months with settlement prices, plus market structure analysis. Requires the Professional plan ($99/mo) or higher.",
     inputSchema: {
       contract: z
         .enum(FUTURES_CONTRACTS)
@@ -2399,12 +2399,113 @@ server.registerTool(
   },
 );
 
+
+// ---------------------------------------------------------------------------
+// US physical natural gas hubs (#64) — wraps /v1/natural-gas/hubs (api#1294).
+// The API endpoint exists precisely because customers searched for hub codes
+// (Waha, SoCal Citygate, Algonquin...) and 404'd; this tool closes the same
+// discoverability gap on the MCP surface.
+// ---------------------------------------------------------------------------
+
+interface HubQuote {
+  hub: string;
+  name: string;
+  code: string;
+  region?: string;
+  price: number | null;
+  currency?: string;
+  unit?: string;
+  as_of?: string;
+  history_since?: string;
+  history_days?: number;
+  basis_to_henry?: number | null;
+  benchmark_price?: number | null;
+  basis_history?: Array<Record<string, unknown>>;
+}
+
+interface HubsIndexData {
+  benchmark: { code: string; name: string; price: number | null; as_of?: string };
+  hubs: HubQuote[];
+  meta?: Record<string, unknown>;
+}
+
+server.registerTool(
+  "opa_get_natural_gas_hubs",
+  {
+    title: "Get US Natural Gas Hub Prices",
+    description:
+      "Get US physical natural gas hub prices as basis to Henry Hub (USD/MMBtu). Use when the user asks about regional gas prices or hub basis — Waha (West Texas/Permian), SoCal Citygate, Chicago Citygate, Algonquin Citygate, Eastern Gas South (formerly Dominion South), Houston Ship Channel. Without a hub, returns every live hub plus its basis; with a hub, returns that hub's latest price, basis, and basis history. Hub series differ in depth — check history_days before requesting a long window. Requires a paid plan (Developer, $19/mo, and up).",
+    inputSchema: {
+      hub: z
+        .string()
+        .optional()
+        .describe(
+          "Optional hub slug: waha, socal, chicago, algonquin, eastern-gas-south, houston-ship-channel. Omit to list all live hubs with their basis to Henry Hub.",
+        ),
+      past: z
+        .string()
+        .optional()
+        .describe(
+          "Optional basis-history window for a single hub, e.g. 30d, 6m, 1y (only used when hub is given).",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ hub, past }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_natural_gas_hubs");
+
+    if (hub) {
+      const query = past ? `?past=${encodeURIComponent(past)}` : "";
+      const response = await makeApiRequest<ApiResponse<HubQuote>>(
+        `/v1/natural-gas/hubs/${encodeURIComponent(hub.toLowerCase())}${query}`,
+      );
+      if (!response || response.status !== "success") {
+        return errorResult(
+          `No data for natural gas hub '${hub}'. Valid slugs: waha, socal, chicago, algonquin, eastern-gas-south, houston-ship-channel. Requires a paid plan (Developer $19/mo and up).`,
+        );
+      }
+      const q = response.data;
+      let text = `# ${q.name ?? hub} Natural Gas\n\n`;
+      text += "```json\n" + JSON.stringify(q, null, 2) + "\n```\n";
+      text +=
+        "\n_basis_to_henry = hub price − Henry Hub price on the same gas day (USD/MMBtu) | Data from [OilPriceAPI](https://oilpriceapi.com)_";
+      return textResult(text);
+    }
+
+    const response = await makeApiRequest<ApiResponse<HubsIndexData>>(
+      "/v1/natural-gas/hubs",
+    );
+    if (!response || response.status !== "success") {
+      return errorResult(
+        "Natural gas hub data not available. Requires a paid plan (Developer $19/mo and up).",
+      );
+    }
+    const { benchmark, hubs } = response.data;
+    let text = "# US Natural Gas Hubs — Basis to Henry Hub\n\n";
+    if (benchmark) {
+      text += `Benchmark: **${benchmark.name}** ${benchmark.price != null ? `$${benchmark.price}` : "n/a"}${benchmark.as_of ? ` (as of ${benchmark.as_of})` : ""}\n\n`;
+    }
+    text += "| Hub | Price | Basis | History since |\n|---|---|---|---|\n";
+    for (const h of hubs ?? []) {
+      const price = h.price != null ? `$${h.price}` : "n/a";
+      const basis =
+        h.basis_to_henry != null
+          ? `${h.basis_to_henry >= 0 ? "+" : ""}${h.basis_to_henry}`
+          : "n/a";
+      text += `| ${h.name} (${h.hub}) | ${price} | ${basis} | ${h.history_since ?? "?"} (${h.history_days ?? "?"}d) |\n`;
+    }
+    text +=
+      "\n_USD/MMBtu; basis = hub − Henry Hub, same gas day. Hub histories differ in depth — check history_days. | Data from [OilPriceAPI](https://oilpriceapi.com)_";
+    return textResult(text);
+  },
+);
+
 server.registerTool(
   "opa_get_marine_fuels",
   {
     title: "Get Marine Fuel Prices",
     description:
-      "Get latest marine fuel (bunker) prices across major shipping ports. Use when the user asks about bunker fuel, marine fuel, VLSFO, MGO, IFO380, or shipping fuel costs. Can filter by port (e.g., SINGAPORE, ROTTERDAM, HOUSTON) and/or fuel type (VLSFO, MGO, IFO380). Returns a table of port prices.",
+      "Get latest marine fuel (bunker) prices across major shipping ports. Use when the user asks about bunker fuel, marine fuel, VLSFO, MGO, IFO380, or shipping fuel costs. Can filter by port (e.g., SINGAPORE, ROTTERDAM, HOUSTON) and/or fuel type (VLSFO, MGO, IFO380). Returns a table of port prices. Requires the Professional plan ($99/mo) or higher.",
     inputSchema: {
       port: z
         .string()
@@ -2461,7 +2562,7 @@ server.registerTool(
   {
     title: "Get US Rig Counts",
     description:
-      "Get the latest US oil and gas rig count data (Baker Hughes). Use when the user asks about drilling activity, rig counts, or oil field operations. Returns oil rigs, gas rigs, total count, and week-over-week change. No parameters needed.",
+      "Get the latest US oil and gas rig count data (Baker Hughes). Use when the user asks about drilling activity, rig counts, or oil field operations. Returns oil rigs, gas rigs, total count, and week-over-week change. No parameters needed. Requires the Reservoir Mastery premium tier.",
     inputSchema: {},
     annotations: READ_TOOL_ANNOTATIONS,
   },
@@ -2555,7 +2656,7 @@ server.registerTool(
   {
     title: "Get Drilling Activity",
     description:
-      "Get a drilling activity snapshot: US, Canada, and international rig counts, frac spread count, well permits issued in the last 30 days (with a by-state breakdown), and DUC (drilled-uncompleted) well totals. Use when the user asks about drilling activity, rigs vs frac spreads, or upstream operations. Requires a paid plan with energy intelligence access.",
+      "Get a drilling activity snapshot: US, Canada, and international rig counts, frac spread count, well permits issued in the last 30 days (with a by-state breakdown), and DUC (drilled-uncompleted) well totals. Use when the user asks about drilling activity, rigs vs frac spreads, or upstream operations. Requires the Scale plan ($299/mo) or a drilling data plan.",
     inputSchema: {},
     annotations: READ_TOOL_ANNOTATIONS,
   },
@@ -2714,7 +2815,7 @@ server.registerTool(
   {
     title: "Get Oil Storage Levels",
     description:
-      "Get oil storage and inventory levels for Cushing, Oklahoma (WTI delivery hub) and/or the US Strategic Petroleum Reserve (SPR). Use when the user asks about oil inventories, storage levels, Cushing stocks, or the SPR. Returns current inventory levels with changes.",
+      "Get oil storage and inventory levels for Cushing, Oklahoma (WTI delivery hub) and/or the US Strategic Petroleum Reserve (SPR). Use when the user asks about oil inventories, storage levels, Cushing stocks, or the SPR. Returns current inventory levels with changes. Requires the Reservoir Mastery premium tier.",
     inputSchema: {
       facility: z
         .enum(["cushing", "spr", "all"])
@@ -2774,7 +2875,7 @@ server.registerTool(
   {
     title: "Get OPEC Production",
     description:
-      "Get the latest OPEC oil production data. Use when the user asks about OPEC output, production quotas, supply cuts, or OPEC+ compliance. Returns country-level production figures. Requires a paid plan with energy intelligence access.",
+      "Get the latest OPEC oil production data. Use when the user asks about OPEC output, production quotas, supply cuts, or OPEC+ compliance. Returns country-level production figures. Requires the Reservoir Mastery premium tier.",
     inputSchema: {},
     annotations: READ_TOOL_ANNOTATIONS,
   },
@@ -2804,7 +2905,7 @@ server.registerTool(
   {
     title: "Get Price Forecasts",
     description:
-      "Get energy price forecasts from EIA Short-Term Energy Outlook (STEO) and other sources. Use when the user asks about price predictions, outlooks, or where oil/gas prices are heading. Returns forecast data for key commodities. Requires a paid plan with energy intelligence access.",
+      "Get energy price forecasts from EIA Short-Term Energy Outlook (STEO) and other sources. Use when the user asks about price predictions, outlooks, or where oil/gas prices are heading. Returns forecast data for key commodities. Requires the Reservoir Mastery premium tier.",
     inputSchema: {},
     annotations: READ_TOOL_ANNOTATIONS,
   },
@@ -2839,7 +2940,7 @@ server.registerTool(
   {
     title: "Get EIA Oil Inventories",
     description:
-      "Get the latest EIA weekly petroleum inventory (stocks) data. Use when the user asks about oil inventories, crude stocks, weekly EIA stocks, inventory builds/draws, or product-level inventory levels. Returns the latest weekly figures; optionally a summary view or a breakdown by petroleum product. Requires a paid plan with energy intelligence access.",
+      "Get the latest EIA weekly petroleum inventory (stocks) data. Use when the user asks about oil inventories, crude stocks, weekly EIA stocks, inventory builds/draws, or product-level inventory levels. Returns the latest weekly figures; optionally a summary view or a breakdown by petroleum product. Requires the Reservoir Mastery premium tier.",
     inputSchema: {
       view: z
         .enum(["latest", "summary", "by_product"])
@@ -2883,7 +2984,7 @@ server.registerTool(
   {
     title: "Get Well Permits",
     description:
-      "Get the latest US oil & gas well drilling permit data. Use when the user asks about well permits, new drilling permits, permitting activity, or upstream permit trends. Returns the latest permits; optionally filtered/aggregated by state or by operator. Requires a paid plan with energy intelligence access.",
+      "Get the latest US oil & gas well drilling permit data. Use when the user asks about well permits, new drilling permits, permitting activity, or upstream permit trends. Returns the latest permits; optionally filtered/aggregated by state or by operator. Requires the well-permits add-on or an enterprise plan.",
     inputSchema: {
       view: z
         .enum(["latest", "by_state", "by_operator"])
@@ -3591,7 +3692,7 @@ server.registerTool(
   {
     title: "Get Well Production",
     description:
-      "Get US oil & gas well production data (BETA coverage: monthly state-level production from EIA + selected state regulators, and well-level histories for selected states only — NOT complete US well-level production). Views: summary (national + top states), states (all reporting states, latest month), state (monthly history for one state), well (monthly history for one well by 14-digit API number), top_producers (highest-output wells, optionally by state), cycle_time (permit-to-production cycle time stats, optionally by state), cohorts (cycle times by spud quarter). Use when the user asks about oil/gas production volumes by state or well, top producing wells, or drill-to-production cycle times. Requires a paid plan with energy intelligence access.",
+      "Get US oil & gas well production data (BETA coverage: monthly state-level production from EIA + selected state regulators, and well-level histories for selected states only — NOT complete US well-level production). Views: summary (national + top states), states (all reporting states, latest month), state (monthly history for one state), well (monthly history for one well by 14-digit API number), top_producers (highest-output wells, optionally by state), cycle_time (permit-to-production cycle time stats, optionally by state), cohorts (cycle times by spud quarter). Use when the user asks about oil/gas production volumes by state or well, top producing wells, or drill-to-production cycle times. Requires the well-permits add-on or an enterprise plan.",
     inputSchema: {
       view: z
         .enum(WELL_PRODUCTION_VIEWS)
@@ -3649,7 +3750,7 @@ server.registerTool(
   {
     title: "Get Refining & Trading Spreads",
     description:
-      "Get refining and trading spreads: crack spreads (refining margin proxy), basis spreads (regional price differentials), and blending/transport margins. Use when the user asks about crack spreads, 3-2-1 crack, refining margins, basis differentials, or blend/transport margins. Requires a paid plan with energy intelligence access.",
+      "Get refining and trading spreads: crack spreads (refining margin proxy), basis spreads (regional price differentials), and blending/transport margins. Use when the user asks about crack spreads, 3-2-1 crack, refining margins, basis differentials, or blend/transport margins. Requires the Professional plan ($99/mo) or higher.",
     inputSchema: {
       type: z
         .enum(["crack", "basis", "margin"])
@@ -3720,6 +3821,109 @@ function formatAlertLine(a: AlertRecord): string {
     : "";
   return `- **${a.name || label}** (id: \`${a.id}\`) — ${label} [${status}${triggers}${last}]`;
 }
+
+
+// ---------------------------------------------------------------------------
+// Agent self-service (#63 follow-through): let an agent answer "what plan am I
+// on, what is left, and what would an upgrade cost" WITHOUT probing gated
+// tools. Status reads the authenticated /v1/dashboard; plans reads the public
+// /v1/pricing (live source of truth — prices are never hardcoded here).
+// ---------------------------------------------------------------------------
+
+interface DashboardUsage {
+  current_month?: {
+    used?: number;
+    limit?: number;
+    effective_limit?: number;
+    remaining?: number;
+    percentage_used?: number;
+    reset_at?: string;
+    usage_window?: string;
+  };
+  subscription_tier?: string;
+}
+
+interface DashboardData {
+  usage?: DashboardUsage;
+  user?: { email?: string; created_at?: string };
+  feature_access?: Record<string, unknown> | null;
+}
+
+server.registerTool(
+  "opa_get_account_status",
+  {
+    title: "Get Account Status",
+    description:
+      "Get the current API account's plan tier, request usage, remaining quota, and reset date. Use before calling gated tools, when the user asks about their plan/limits/usage, or after any 402/403/429 to explain what the current plan covers. Works on every plan including free.",
+    inputSchema: {},
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async () => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_account_status");
+
+    const response =
+      await makeApiRequest<ApiResponse<DashboardData>>("/v1/dashboard");
+    if (!response || response.status !== "success") {
+      return errorResult(
+        "Could not read account status. If this persists, verify the OILPRICEAPI_KEY is valid.",
+      );
+    }
+    const usage = response.data.usage ?? {};
+    const month = usage.current_month ?? {};
+    const tier = usage.subscription_tier ?? "free";
+    let text = "# OilPriceAPI Account Status\n\n";
+    text += `- **Plan tier:** ${tier}\n`;
+    if (month.limit != null) {
+      text += `- **Requests this period:** ${month.used ?? 0} of ${month.effective_limit ?? month.limit} (${month.percentage_used ?? 0}% used, ${month.remaining ?? "?"} remaining)\n`;
+    }
+    if (month.reset_at) text += `- **Quota resets:** ${month.reset_at}\n`;
+    text +=
+      "\nTo see what higher plans include, call opa_get_plans. Gated tools state their required plan in their descriptions.";
+    return textResult(text);
+  },
+);
+
+interface PricingPlan {
+  id?: string;
+  name?: string;
+  monthlyPrice?: number;
+  yearlyPrice?: number;
+  requestLimit?: number;
+  features?: string[];
+  popular?: boolean;
+}
+
+server.registerTool(
+  "opa_get_plans",
+  {
+    title: "Get Plans & Pricing",
+    description:
+      "Get OilPriceAPI's current subscription plans: monthly/yearly price, request limits, and included features for each tier. Use when the user asks what an upgrade costs, which plan unlocks a gated tool (history, futures, natural gas hubs...), or how the tiers compare. Live pricing from the API — no key required.",
+    inputSchema: {},
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async () => {
+    const response = await makeApiRequest<
+      ApiResponse<{ plans?: PricingPlan[] }>
+    >("/v1/pricing");
+    const plans = response?.data?.plans;
+    if (!response || response.status !== "success" || !plans?.length) {
+      return errorResult(
+        `Could not load live plan data. Current plans are listed at ${UPGRADE_URL}`,
+      );
+    }
+    let text = "# OilPriceAPI Plans\n\n";
+    text += "| Plan | Monthly | Yearly | Requests/mo | Key features |\n";
+    text += "|---|---|---|---|---|\n";
+    for (const p of plans) {
+      const feats = (p.features ?? []).slice(0, 4).join("; ");
+      text += `| ${p.name}${p.popular ? " ★" : ""} | $${p.monthlyPrice} | $${p.yearlyPrice} | ${p.requestLimit?.toLocaleString?.() ?? p.requestLimit} | ${feats} |\n`;
+    }
+    text += `\nFree tier: 200 requests/mo, latest prices only.\n`;
+    text += `\nTo subscribe or upgrade, open: ${UPGRADE_URL} (checkout takes ~1 minute). Check the current plan with opa_get_account_status.`;
+    return textResult(text);
+  },
+);
 
 server.registerTool(
   "opa_create_price_alert",

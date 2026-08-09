@@ -1272,9 +1272,38 @@ describe("tool registration metadata", () => {
   const DELETE_TOOLS = ["opa_delete_price_alert", "opa_delete_subscription"];
   const WRITE_TOOLS = new Set([...CREATE_TOOLS, ...DELETE_TOOLS]);
 
-  it("registers exactly 32 tools", () => {
-    expect(Object.keys(tools)).toHaveLength(32);
+  it("registers exactly 35 tools", () => {
+    expect(Object.keys(tools)).toHaveLength(35);
     expect(tools.opa_get_product_facts).toBeDefined();
+    expect(tools.opa_get_natural_gas_hubs).toBeDefined();
+    expect(tools.opa_get_account_status).toBeDefined();
+    expect(tools.opa_get_plans).toBeDefined();
+  });
+
+  // #63 — agents read schemas, not pricing pages: every plan-gated tool must
+  // state its required plan in the description, so discovery does not cost 402s.
+  const GATED_TOOL_LABELS: Record<string, RegExp> = {
+    opa_get_history: /Developer, \$19\/mo/,
+    opa_get_futures: /Professional plan \(\$99\/mo\)/,
+    opa_get_futures_curve: /Professional plan \(\$99\/mo\)/,
+    opa_get_marine_fuels: /Professional plan \(\$99\/mo\)/,
+    opa_get_spread: /Professional plan \(\$99\/mo\)/,
+    opa_get_storage: /Reservoir Mastery/,
+    opa_get_rig_counts: /Reservoir Mastery/,
+    opa_get_opec_production: /Reservoir Mastery/,
+    opa_get_oil_inventories: /Reservoir Mastery/,
+    opa_get_forecasts: /Reservoir Mastery/,
+    opa_get_drilling: /Scale plan \(\$299\/mo\)/,
+    opa_get_well_permits: /well-permits add-on or an enterprise plan/,
+    opa_get_well_production: /well-permits add-on or an enterprise plan/,
+    opa_get_natural_gas_hubs: /Developer, \$19\/mo/,
+  };
+
+  it("every plan-gated tool states its required plan in the description (#63)", () => {
+    for (const [name, pattern] of Object.entries(GATED_TOOL_LABELS)) {
+      expect(tools[name], name).toBeDefined();
+      expect(tools[name].description, `${name} description`).toMatch(pattern);
+    }
   });
 
   it("registers all four write tools (creates + deletes)", () => {

@@ -31,9 +31,12 @@ const TOOL_CATEGORY_BY_NAME: Record<string, ToolCategory> = {
   opa_compare_prices: "core",
   opa_list_commodities: "core",
   opa_get_history: "core",
+  opa_get_account_status: "core",
+  opa_get_plans: "core",
   opa_get_futures: "market",
   opa_get_futures_curve: "market",
   opa_get_marine_fuels: "market",
+  opa_get_natural_gas_hubs: "market",
   opa_get_rig_counts: "market",
   opa_get_drilling: "market",
   opa_get_diesel_by_state: "market",
@@ -61,6 +64,7 @@ const TOOL_CATEGORY_BY_NAME: Record<string, ToolCategory> = {
 
 const KEYLESS_TOOLS = new Set([
   "opa_get_product_facts",
+  "opa_get_plans",
   "opa_get_price",
   "opa_market_overview",
   "opa_compare_prices",
