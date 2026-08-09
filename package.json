@@ -1,6 +1,6 @@
 {
   "name": "oilpriceapi-mcp",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "mcpName": "io.github.OilpriceAPI/mcp-server",
   "description": "Source-timestamped oil, gas, and related energy data plus reviewed product facts for MCP clients.",
   "type": "module",

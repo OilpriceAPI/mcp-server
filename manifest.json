@@ -2,8 +2,8 @@
   "$schema": "https://raw.githubusercontent.com/anthropics/mcpb/main/dist/mcpb-manifest.schema.json",
   "manifest_version": "0.2",
   "name": "oilpriceapi",
-  "display_name": "OilPriceAPI — Oil, Gas & Commodity Prices",
-  "version": "3.0.0",
+  "display_name": "OilPriceAPI \u2014 Oil, Gas & Commodity Prices",
+  "version": "3.1.0",
   "description": "Source-timestamped energy data and reviewed OilPriceAPI product facts for MCP clients.",
   "long_description": "OilPriceAPI tools and resources for latest available energy values, history, futures, refining spreads, carrier fuel surcharges, selected energy-intelligence datasets, alerts, market briefs, and a versioned public product contract. Keyless demo mode supports a limited commodity set. Dataset access and limits vary by plan and account entitlement.",
   "author": {
@@ -13,7 +13,9 @@
   },
   "homepage": "https://oilpriceapi.com/mcp",
   "documentation": "https://github.com/OilpriceAPI/mcp-server#readme",
-  "privacy_policies": ["https://www.oilpriceapi.com/privacy"],
+  "privacy_policies": [
+    "https://www.oilpriceapi.com/privacy"
+  ],
   "support": "https://github.com/OilpriceAPI/mcp-server/issues",
   "icon": "icon.png",
   "server": {
@@ -21,7 +23,9 @@
     "entry_point": "build/index.js",
     "mcp_config": {
       "command": "node",
-      "args": ["${__dirname}/build/index.js"],
+      "args": [
+        "${__dirname}/build/index.js"
+      ],
       "env": {
         "OILPRICEAPI_KEY": "${user_config.api_key}"
       }
@@ -31,7 +35,7 @@
     "api_key": {
       "type": "string",
       "title": "OilPriceAPI Key",
-      "description": "Optional — leave empty for the limited demo. Add an account key for the broader account-enabled catalog; dataset access varies by plan and entitlement.",
+      "description": "Optional \u2014 leave empty for the limited demo. Add an account key for the broader account-enabled catalog; dataset access varies by plan and entitlement.",
       "sensitive": true,
       "required": false
     }
@@ -54,7 +58,11 @@
     "url": "https://github.com/OilpriceAPI/mcp-server"
   },
   "compatibility": {
-    "platforms": ["darwin", "win32", "linux"],
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
     "runtimes": {
       "node": ">=18.0.0"
     }
