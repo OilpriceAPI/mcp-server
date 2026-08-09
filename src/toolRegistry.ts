@@ -52,6 +52,7 @@ const TOOL_CATEGORY_BY_NAME: Record<string, ToolCategory> = {
   opa_get_well_production: "market",
   opa_get_spread: "market",
   opa_get_market_brief: "market",
+  opa_get_data_quality: "market",
   opa_create_price_alert: "automation",
   opa_list_price_alerts: "automation",
   opa_delete_price_alert: "automation",

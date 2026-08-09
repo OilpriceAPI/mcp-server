@@ -26,8 +26,8 @@ describe("MCP tool scope and profiles", () => {
     const registered = getRegisteredToolEntries(server);
 
     expect(configuration).toMatchObject({ scope: "read", profile: "all" });
-    expect(registered).toHaveLength(35);
-    expect(enabled).toHaveLength(31);
+    expect(registered).toHaveLength(36);
+    expect(enabled).toHaveLength(32);
     expect(enabled).toContain("opa_list_price_alerts");
     expect(enabled).toContain("opa_get_subscription_events");
     for (const name of WRITE_TOOL_NAMES) {
@@ -46,7 +46,7 @@ describe("MCP tool scope and profiles", () => {
     });
     const enabled = applyToolConfiguration(server, configuration);
 
-    expect(enabled).toHaveLength(35);
+    expect(enabled).toHaveLength(36);
     for (const name of WRITE_TOOL_NAMES) expect(enabled).toContain(name);
   });
 
@@ -118,7 +118,7 @@ describe("generated MCP capability manifest", () => {
       scope: "read",
       profile: "all",
     });
-    expect(first.tools).toHaveLength(35);
+    expect(first.tools).toHaveLength(36);
     expect(first.tools.map((tool) => tool.name).sort()).toEqual(
       getRegisteredToolEntries(server)
         .map(([name]) => name)
@@ -127,8 +127,8 @@ describe("generated MCP capability manifest", () => {
     expect(first.resources).toContainEqual(
       expect.objectContaining({ uri: "oilpriceapi://product-facts" }),
     );
-    expect(first.inventories.read.all).toHaveLength(31);
-    expect(first.inventories.write.all).toHaveLength(35);
+    expect(first.inventories.read.all).toHaveLength(32);
+    expect(first.inventories.write.all).toHaveLength(36);
   });
 
   it("contains no credential, account, prompt, or customer response data", () => {

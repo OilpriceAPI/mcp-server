@@ -1272,12 +1272,13 @@ describe("tool registration metadata", () => {
   const DELETE_TOOLS = ["opa_delete_price_alert", "opa_delete_subscription"];
   const WRITE_TOOLS = new Set([...CREATE_TOOLS, ...DELETE_TOOLS]);
 
-  it("registers exactly 35 tools", () => {
-    expect(Object.keys(tools)).toHaveLength(35);
+  it("registers exactly 36 tools", () => {
+    expect(Object.keys(tools)).toHaveLength(36);
     expect(tools.opa_get_product_facts).toBeDefined();
     expect(tools.opa_get_natural_gas_hubs).toBeDefined();
     expect(tools.opa_get_account_status).toBeDefined();
     expect(tools.opa_get_plans).toBeDefined();
+    expect(tools.opa_get_data_quality).toBeDefined();
   });
 
   // #63 — agents read schemas, not pricing pages: every plan-gated tool must
@@ -1297,6 +1298,7 @@ describe("tool registration metadata", () => {
     opa_get_well_permits: /well-permits add-on or an enterprise plan/,
     opa_get_well_production: /well-permits add-on or an enterprise plan/,
     opa_get_natural_gas_hubs: /Developer, \$19\/mo/,
+    opa_get_data_quality: /Developer, \$19\/mo/,
   };
 
   it("every plan-gated tool states its required plan in the description (#63)", () => {

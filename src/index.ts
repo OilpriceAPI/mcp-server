@@ -3925,6 +3925,66 @@ server.registerTool(
   },
 );
 
+
+// ---------------------------------------------------------------------------
+// Data-quality reports — wraps /v1/data-quality/{summary,reports/:code}.
+// Provenance surface: per-series grades and dimension scores, so an agent can
+// answer "how reliable is the series I am about to depend on" from the API
+// itself. Catalogue summary is available on any key; per-commodity reports are
+// paid (require_paid_subscription in data_quality_reports_controller).
+// ---------------------------------------------------------------------------
+
+server.registerTool(
+  "opa_get_data_quality",
+  {
+    title: "Get Data Quality Report",
+    description:
+      "Get OilPriceAPI's own data-quality grades. With a commodity code: that series' quality report — overall grade/score plus dimension scores (completeness, freshness, and more) for the current period. Without a code: the catalogue-wide summary (grade distribution by category). Use when the user asks how reliable/complete a series is, or which series carry the highest quality grades. Per-commodity reports require a paid plan (Developer, $19/mo, and up); the summary works on any key.",
+    inputSchema: {
+      commodity: z
+        .string()
+        .optional()
+        .describe(
+          "Optional commodity name or code (e.g., 'brent', 'NATURAL_GAS_USD') for a per-series report. Omit for the catalogue-wide summary.",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ commodity }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_data_quality");
+
+    if (commodity) {
+      const resolved = resolveOrError(commodity);
+      if ("error" in resolved) return resolved.error;
+      const response = await makeApiRequest<
+        ApiResponse<{ report?: Record<string, unknown> }>
+      >(`/v1/data-quality/reports/${encodeURIComponent(resolved.code)}`);
+      if (!response || response.status !== "success" || !response.data.report) {
+        return errorResult(
+          `No data-quality report for '${commodity}' (code: ${resolved.code}). Per-commodity reports require a paid plan (Developer $19/mo and up).`,
+        );
+      }
+      let text = `# Data Quality — ${resolved.code}\n\n`;
+      text += "```json\n" + JSON.stringify(response.data.report, null, 2) + "\n```\n";
+      text +=
+        "\n_Grades are computed per period from measured completeness/freshness — not marketing copy. | [OilPriceAPI](https://oilpriceapi.com)_";
+      return textResult(text);
+    }
+
+    const response = await makeApiRequest<
+      ApiResponse<{ summary?: Record<string, unknown> }>
+    >("/v1/data-quality/summary");
+    if (!response || response.status !== "success" || !response.data.summary) {
+      return errorResult("Data-quality summary not available right now.");
+    }
+    let text = "# OilPriceAPI Data Quality — Catalogue Summary\n\n";
+    text += "```json\n" + JSON.stringify(response.data.summary, null, 2) + "\n```\n";
+    text +=
+      "\n_Per-commodity reports: call this tool with a commodity code (paid plans). | [OilPriceAPI](https://oilpriceapi.com)_";
+    return textResult(text);
+  },
+);
+
 server.registerTool(
   "opa_create_price_alert",
   {
