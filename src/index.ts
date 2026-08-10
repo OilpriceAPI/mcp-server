@@ -77,7 +77,7 @@ export {
 // API Configuration
 const API_BASE =
   process.env.OILPRICEAPI_BASE_URL || "https://api.oilpriceapi.com";
-export const MCP_VERSION = "3.1.0";
+export const MCP_VERSION = "3.2.0";
 export const CLIENT_MARKER = `oilpriceapi-mcp/${MCP_VERSION}`;
 export const USER_AGENT = CLIENT_MARKER;
 
@@ -2231,7 +2231,7 @@ server.registerTool(
   {
     title: "Get Price History",
     description:
-      "Get historical price data for a commodity over a time period. Use when the user asks about price trends, historical prices, or how a commodity has performed over time. Returns high, low, average, change, and data point count. Periods: day (24h), week (7d), month (30d), year (365d). Requires a paid plan (Developer, $19/mo, and up) — the free tier serves latest prices only.",
+      "Get historical price data for a commodity over a time period. Use when the user asks about price trends, historical prices, or how a commodity has performed over time. Returns high, low, average, change, and data point count. Periods: day (24h), week (7d), month (30d), year (365d). Supports point-in-time (vintage) queries via as_of: the series as it was knowable at that instant — later-collected rows absent, later revisions rolled back (no lookahead bias; built for backtests). Requires a paid plan (Developer, $19/mo, and up) — the free tier serves latest prices only.",
     inputSchema: {
       commodity: z
         .string()
@@ -2240,17 +2240,24 @@ server.registerTool(
         .enum(["day", "week", "month", "year"])
         .default("month")
         .describe("Time period: day, week, month, or year (default: month)"),
+      as_of: z
+        .string()
+        .optional()
+        .describe(
+          "Optional ISO8601 date/datetime for a point-in-time (vintage) view, e.g. '2026-06-02'. Returns the series as it was knowable then: rows collected later are absent and values revised later are rolled back. Must not be in the future. Revision-correction coverage since 2026-07-28.",
+        ),
     },
     annotations: READ_TOOL_ANNOTATIONS,
   },
-  async ({ commodity, period }) => {
+  async ({ commodity, period, as_of }) => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_history");
 
     const resolved = resolveOrError(commodity);
     if ("error" in resolved) return resolved.error;
 
+    const asOfQuery = as_of ? `&as_of=${encodeURIComponent(as_of)}` : "";
     const response = await makeApiRequest<ApiResponse<HistoricalPriceData>>(
-      `/v1/prices/past_${period}?by_code=${resolved.code}`,
+      `/v1/prices/past_${period}?by_code=${resolved.code}${asOfQuery}`,
     );
 
     if (
