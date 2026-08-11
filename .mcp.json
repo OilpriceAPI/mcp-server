@@ -1,11 +1,11 @@
 {
   "name": "oilpriceapi",
   "description": "Source-timestamped energy data and reviewed OilPriceAPI product facts for MCP clients.",
-  "version": "3.2.2",
+  "version": "3.2.3",
   "mcpServers": {
     "oilpriceapi": {
       "command": "npx",
-      "args": ["-y", "oilpriceapi-mcp@3.2.2"]
+      "args": ["-y", "oilpriceapi-mcp@3.2.3"]
     }
   }
 }
