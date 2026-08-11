@@ -1509,6 +1509,8 @@ describe("reviewed plan allowance copy", () => {
     const text = result.content[0].text;
 
     expect(text).toContain("Free tier: 50 requests/day");
+    expect(text).toContain("Dataset access and limits vary by plan");
+    expect(text).not.toContain("latest prices only");
     expect(text).not.toMatch(/200 requests?\/(?:mo|month)/i);
 
     vi.unstubAllGlobals();

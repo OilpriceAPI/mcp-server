@@ -3929,7 +3929,7 @@ server.registerTool(
     const productFacts = await productFactsProvider.get();
     const freeLimit = productFacts.facts.offer.freeRequestLimit;
     const freeWindow = productFacts.facts.offer.freeRequestWindow;
-    text += `\nFree tier: ${freeLimit.toLocaleString()} requests/${freeWindow}, latest prices only.\n`;
+    text += `\nFree tier: ${freeLimit.toLocaleString()} requests/${freeWindow}. ${productFacts.facts.offer.qualification}\n`;
     text += `\nTo subscribe or upgrade, open: ${UPGRADE_URL} (checkout takes ~1 minute). Check the current plan with opa_get_account_status.`;
     return textResult(text);
   },
