@@ -58,7 +58,9 @@ function jsonResponse(
 
 describe("pinned product-facts contract", () => {
   it("loads only after verifying the reviewed artifact checksum", () => {
-    expect(PINNED_PRODUCT_FACTS_CHECKSUM).toMatch(/^[a-f0-9]{64}$/);
+    expect(PINNED_PRODUCT_FACTS_CHECKSUM).toBe(
+      "2f2a3a7a0e64177485a583a2bf143dc19486821bd5c21141deae64fc7f3ad529",
+    );
     expect(PINNED_PRODUCT_FACTS.schemaVersion).toBe("2.0.0");
     expect(PINNED_PRODUCT_FACTS.contractVersion).toBe("2026-08-11");
     expect(PINNED_PRODUCT_FACTS.offer).toMatchObject({
