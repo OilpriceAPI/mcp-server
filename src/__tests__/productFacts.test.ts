@@ -61,6 +61,8 @@ describe("pinned product-facts contract", () => {
     expect(PINNED_PRODUCT_FACTS.offer).not.toHaveProperty(
       "freeRequestsPerMonth",
     );
+    expect(Object.isFrozen(PINNED_PRODUCT_FACTS)).toBe(true);
+    expect(Object.isFrozen(PINNED_PRODUCT_FACTS.offer)).toBe(true);
   });
 
   it("accepts native v2 and normalizes the exact reviewed legacy v1 bridge", () => {
@@ -211,6 +213,26 @@ describe("pinned product-facts contract", () => {
 });
 
 describe("ProductFactsProvider", () => {
+  it("keeps checksum-bound facts immutable across cached deliveries", async () => {
+    const provider = new ProductFactsProvider({
+      fetchImpl: vi.fn(async () =>
+        jsonResponse(nativeV2Facts()),
+      ) as unknown as typeof fetch,
+      now: () => Date.parse("2026-08-11T20:00:00Z"),
+    });
+
+    const canonical = await provider.get();
+    expect(() => {
+      canonical.facts.offer.freeRequestLimit = 999;
+    }).toThrow(TypeError);
+
+    const cached = await provider.get();
+    expect(cached.facts.offer.freeRequestLimit).toBe(50);
+    expect(cached.delivery.contractChecksum).toBe(
+      canonical.delivery.contractChecksum,
+    );
+  });
+
   it("uses one canonical checksum for identical remote and pinned facts", async () => {
     const canonical = await new ProductFactsProvider({
       fetchImpl: vi.fn(async () =>

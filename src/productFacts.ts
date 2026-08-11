@@ -549,6 +549,16 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value as Record<string, unknown>)) {
+      deepFreeze(child);
+    }
+    Object.freeze(value);
+  }
+  return value;
+}
+
 function loadPinnedProductFacts(): {
   facts: ProductFacts;
   checksum: string;
@@ -585,7 +595,7 @@ function loadPinnedProductFacts(): {
 }
 
 const pinned = loadPinnedProductFacts();
-export const PINNED_PRODUCT_FACTS = pinned.facts;
+export const PINNED_PRODUCT_FACTS = deepFreeze(pinned.facts);
 export const PINNED_PRODUCT_FACTS_CHECKSUM = pinned.checksum;
 export const PINNED_PRODUCT_FACTS_CONTRACT_CHECKSUM = stableFactsDigest(
   pinned.facts,
@@ -645,7 +655,7 @@ export class ProductFactsProvider {
         "provider pinned product-facts must be native v2",
       );
     }
-    this.pinnedFacts = pinnedValidation.facts;
+    this.pinnedFacts = deepFreeze(pinnedValidation.facts);
     if (
       options.pinnedChecksum !== undefined &&
       !/^[a-f0-9]{64}$/.test(options.pinnedChecksum)
@@ -779,7 +789,7 @@ export class ProductFactsProvider {
       const checksum = validated.contractChecksum;
       const etag = response.headers?.get("etag") || "sha256:" + checksum;
       return {
-        facts: validated.facts,
+        facts: deepFreeze(validated.facts),
         fetchedAtMs: now,
         checksum,
         etag,
