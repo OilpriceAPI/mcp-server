@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  resolveNpmPublicationState,
   validateNpmAttestationsDocument,
   validateNpmVersionDocument,
   verifyNpmRelease,
@@ -102,6 +103,56 @@ function attestationsDocument(statement = validStatement()) {
 
 validateNpmVersionDocument(validVersion, expected);
 validateNpmAttestationsDocument(attestationsDocument(), expected);
+
+function registryResponse(status, payload) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => payload,
+  };
+}
+
+const absentState = await resolveNpmPublicationState({
+  ...expected,
+  fetchImpl: async () => registryResponse(404, { error: "Not found" }),
+});
+if (absentState !== "absent") {
+  throw new Error("npm publication-state verifier did not accept an exact 404");
+}
+
+const presentState = await resolveNpmPublicationState({
+  ...expected,
+  fetchImpl: async () => registryResponse(200, validVersion),
+});
+if (presentState !== "present") {
+  throw new Error(
+    "npm publication-state verifier did not recognize the exact tarball",
+  );
+}
+
+for (const response of [
+  registryResponse(200, {
+    ...validVersion,
+    dist: { ...validVersion.dist, integrity: "sha512-wrong" },
+  }),
+  registryResponse(200, { error: "not a version document" }),
+  registryResponse(500, { error: "registry unavailable" }),
+]) {
+  let rejected = false;
+  try {
+    await resolveNpmPublicationState({
+      ...expected,
+      fetchImpl: async () => response,
+    });
+  } catch {
+    rejected = true;
+  }
+  if (!rejected) {
+    throw new Error(
+      "npm publication-state verifier accepted an ambiguous registry response",
+    );
+  }
+}
 
 for (const mutate of [
   (document) => {

@@ -186,15 +186,21 @@ jobs:
           NAME=$(tar -xOf "$PACKAGE_FILE" package/package.json | jq -er '.name')
           VERSION=$(tar -xOf "$PACKAGE_FILE" package/package.json | jq -er '.version')
           SOURCE_COMMIT=$(tar -xOf "$PACKAGE_FILE" package/build/build-metadata.json | jq -er '.sourceCommit | select(test("^[0-9a-f]{40}$"))')
-          EXISTING_INTEGRITY=$(timeout 30s node "$NPM_CLI" view "$NAME@$VERSION" dist.integrity --json 2>/dev/null | jq -r '. // empty' || true)
-          if [ -n "$EXISTING_INTEGRITY" ]; then
-            if [ "$EXISTING_INTEGRITY" != "$EXPECTED_INTEGRITY" ]; then
-              echo "::error::npm $NAME@$VERSION exists with unexpected integrity"
-              exit 1
-            fi
+          PUBLICATION_STATE=$(
+            NPM_RELEASE_MODE=publication-state \
+            NPM_RELEASE_EXPECTED_NAME="$NAME" \
+            NPM_RELEASE_EXPECTED_VERSION="$VERSION" \
+            NPM_RELEASE_EXPECTED_INTEGRITY="$EXPECTED_INTEGRITY" \
+            NPM_RELEASE_TIMEOUT_MS=10000 \
+              timeout 30s node verify-npm-release.mjs
+          )
+          if [ "$PUBLICATION_STATE" = "present" ]; then
             echo "npm $NAME@$VERSION already matches the verified tarball; continuing recovery."
-          else
+          elif [ "$PUBLICATION_STATE" = "absent" ]; then
             timeout 10m node "$NPM_CLI" publish "$PACKAGE_FILE" --ignore-scripts --provenance --access public
+          else
+            echo "::error::Unexpected npm publication state: $PUBLICATION_STATE"
+            exit 1
           fi
 
           NPM_RELEASE_EXPECTED_NAME="$NAME" \

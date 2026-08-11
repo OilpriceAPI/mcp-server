@@ -64,6 +64,61 @@ export function validateNpmVersionDocument(
   }
 }
 
+export async function resolveNpmPublicationState({
+  expectedName,
+  expectedVersion,
+  expectedIntegrity,
+  timeoutMs = 10_000,
+  fetchImpl = fetch,
+}) {
+  if (
+    typeof expectedName !== "string" ||
+    expectedName.length === 0 ||
+    typeof expectedVersion !== "string" ||
+    expectedVersion.length === 0
+  ) {
+    throw new Error("expected npm package name and version are required");
+  }
+  integrityHex(expectedIntegrity);
+
+  const encodedName = encodeURIComponent(expectedName);
+  const encodedVersion = encodeURIComponent(expectedVersion);
+  const response = await fetchImpl(
+    `${REGISTRY_BASE}/${encodedName}/${encodedVersion}`,
+    {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+      signal: AbortSignal.timeout(timeoutMs),
+    },
+  );
+
+  if (response.status === 404) return "absent";
+  if (!response.ok) {
+    throw new Error(
+      `npm publication-state readback returned HTTP ${response.status}`,
+    );
+  }
+
+  const document = requireRecord(
+    await response.json(),
+    "npm publication-state document",
+  );
+  const dist = requireRecord(
+    document.dist,
+    "npm publication-state dist metadata",
+  );
+  if (
+    document.name !== expectedName ||
+    document.version !== expectedVersion ||
+    dist.integrity !== expectedIntegrity
+  ) {
+    throw new Error(
+      "npm publication-state metadata did not match the verified tarball",
+    );
+  }
+  return "present";
+}
+
 export function validateNpmAttestationsDocument(
   value,
   {
@@ -257,38 +312,58 @@ if (
   const expectedVersion = process.env.NPM_RELEASE_EXPECTED_VERSION;
   const expectedIntegrity = process.env.NPM_RELEASE_EXPECTED_INTEGRITY;
   const expectedSourceCommit = process.env.NPM_RELEASE_EXPECTED_SOURCE_COMMIT;
+  const mode = process.env.NPM_RELEASE_MODE || "verify";
   if (
     !expectedName ||
     !expectedVersion ||
-    !expectedIntegrity ||
-    !/^[0-9a-f]{40}$/.test(expectedSourceCommit || "")
+    !expectedIntegrity
   ) {
     throw new Error(
-      "NPM_RELEASE_EXPECTED_NAME, NPM_RELEASE_EXPECTED_VERSION, NPM_RELEASE_EXPECTED_INTEGRITY, and a 40-character NPM_RELEASE_EXPECTED_SOURCE_COMMIT are required",
+      "NPM_RELEASE_EXPECTED_NAME, NPM_RELEASE_EXPECTED_VERSION, and NPM_RELEASE_EXPECTED_INTEGRITY are required",
     );
   }
-  const attempts = Number(process.env.NPM_RELEASE_ATTEMPTS || 12);
-  const delayMs = Number(process.env.NPM_RELEASE_DELAY_MS || 5_000);
   const timeoutMs = Number(process.env.NPM_RELEASE_TIMEOUT_MS || 10_000);
-  if (!Number.isInteger(attempts) || attempts < 1) {
-    throw new Error("NPM_RELEASE_ATTEMPTS must be a positive integer");
-  }
-  if (!Number.isInteger(delayMs) || delayMs < 0) {
-    throw new Error("NPM_RELEASE_DELAY_MS must be a non-negative integer");
-  }
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1) {
     throw new Error("NPM_RELEASE_TIMEOUT_MS must be a positive integer");
   }
-  await verifyNpmRelease({
-    expectedName,
-    expectedVersion,
-    expectedIntegrity,
-    expectedSourceCommit,
-    attempts,
-    delayMs,
-    timeoutMs,
-  });
-  process.stdout.write(
-    `npm latest integrity and source-bound SLSA provenance verified for ${expectedName}@${expectedVersion}.\n`,
-  );
+
+  if (mode === "publication-state") {
+    const state = await resolveNpmPublicationState({
+      expectedName,
+      expectedVersion,
+      expectedIntegrity,
+      timeoutMs,
+    });
+    process.stdout.write(`${state}\n`);
+  } else {
+    if (mode !== "verify") {
+      throw new Error(`unsupported NPM_RELEASE_MODE: ${mode}`);
+    }
+    if (!/^[0-9a-f]{40}$/.test(expectedSourceCommit || "")) {
+      throw new Error(
+        "a 40-character NPM_RELEASE_EXPECTED_SOURCE_COMMIT is required in verify mode",
+      );
+    }
+
+    const attempts = Number(process.env.NPM_RELEASE_ATTEMPTS || 12);
+    const delayMs = Number(process.env.NPM_RELEASE_DELAY_MS || 5_000);
+    if (!Number.isInteger(attempts) || attempts < 1) {
+      throw new Error("NPM_RELEASE_ATTEMPTS must be a positive integer");
+    }
+    if (!Number.isInteger(delayMs) || delayMs < 0) {
+      throw new Error("NPM_RELEASE_DELAY_MS must be a non-negative integer");
+    }
+    await verifyNpmRelease({
+      expectedName,
+      expectedVersion,
+      expectedIntegrity,
+      expectedSourceCommit,
+      attempts,
+      delayMs,
+      timeoutMs,
+    });
+    process.stdout.write(
+      `npm latest integrity and source-bound SLSA provenance verified for ${expectedName}@${expectedVersion}.\n`,
+    );
+  }
 }
