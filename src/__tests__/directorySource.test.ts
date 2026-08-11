@@ -139,6 +139,11 @@ describe("directory-facing source metadata", () => {
     expect(npmPublishJob).toContain('node "$NPM_CLI" publish');
     expect(npmPublishJob).toContain("NPM_RELEASE_EXPECTED_INTEGRITY");
     expect(npmPublishJob).toContain("NPM_RELEASE_EXPECTED_SOURCE_COMMIT");
+    expect(npmPublishJob).toContain("NPM_RELEASE_MODE=publication-state");
+    expect(npmPublishJob).not.toMatch(
+      /\b(?:npm|NPM_CLI)\b[^\n]*\bview\b/,
+    );
+    expect(npmPublishJob).not.toContain("|| true");
     expect(npmPublishJob).toContain("node verify-npm-release.mjs");
     expect(verifyJob).toContain('npm pack "npm@$NPM_CLI_VERSION"');
     expect(verifyJob).toContain("$NPM_CLI_INTEGRITY");
