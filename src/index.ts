@@ -77,7 +77,7 @@ export {
 // API Configuration
 const API_BASE =
   process.env.OILPRICEAPI_BASE_URL || "https://api.oilpriceapi.com";
-export const MCP_VERSION = "3.2.0";
+export const MCP_VERSION = "3.2.1";
 export const CLIENT_MARKER = `oilpriceapi-mcp/${MCP_VERSION}`;
 export const USER_AGENT = CLIENT_MARKER;
 
@@ -3926,7 +3926,10 @@ server.registerTool(
       const feats = (p.features ?? []).slice(0, 4).join("; ");
       text += `| ${p.name}${p.popular ? " ★" : ""} | $${p.monthlyPrice} | $${p.yearlyPrice} | ${p.requestLimit?.toLocaleString?.() ?? p.requestLimit} | ${feats} |\n`;
     }
-    text += `\nFree tier: 200 requests/mo, latest prices only.\n`;
+    const productFacts = await productFactsProvider.get();
+    const freeLimit = productFacts.facts.offer.freeRequestLimit;
+    const freeWindow = productFacts.facts.offer.freeRequestWindow;
+    text += `\nFree tier: ${freeLimit.toLocaleString()} requests/${freeWindow}, latest prices only.\n`;
     text += `\nTo subscribe or upgrade, open: ${UPGRADE_URL} (checkout takes ~1 minute). Check the current plan with opa_get_account_status.`;
     return textResult(text);
   },

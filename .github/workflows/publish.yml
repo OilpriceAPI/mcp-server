@@ -27,6 +27,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Reject known dependency vulnerabilities
+        run: npm audit --audit-level=moderate
+
       - name: Verify release metadata
         run: npm run verify:release-metadata
 
@@ -38,6 +41,9 @@ jobs:
 
       - name: Smoke packaged product-facts discovery
         run: npm run smoke:product-facts
+
+      - name: Smoke the live canonical product-facts contract
+        run: npm run smoke:product-facts:live
 
       - name: Smoke packed CLI, capability, scope, and protocol contracts
         run: npm run smoke:package

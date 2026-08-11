@@ -1419,7 +1419,12 @@ describe("reviewed product-facts discovery", () => {
     const result = await tool.handler({}, {});
     const payload = JSON.parse(result.content[0].text);
 
-    expect(payload.facts.contractVersion).toBe("2026-07-18");
+    expect(payload.facts.contractVersion).toBe("2026-08-11");
+    expect(payload.facts.offer).toMatchObject({
+      freeRequestLimit: 50,
+      freeRequestWindow: "day",
+    });
+    expect(payload.facts.offer).not.toHaveProperty("freeRequestsPerMonth");
     expect(payload.facts.developer.authenticationHeader).toBe(
       "Authorization: Token YOUR_API_KEY",
     );
@@ -1444,10 +1449,67 @@ describe("reviewed product-facts discovery", () => {
     const payload = JSON.parse(result.contents[0].text || "{}");
 
     expect(result.contents[0].uri).toBe(PRODUCT_FACTS_URI);
-    expect(payload.facts.schemaVersion).toBe("1.0.0");
+    expect(payload.facts.schemaVersion).toBe("2.0.0");
     expect(payload.delivery.warning).toContain(
       "checksum-verified package contract",
     );
+
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("reviewed plan allowance copy", () => {
+  const server = createSandboxServer();
+  const tools = (
+    server as unknown as {
+      _registeredTools: Record<
+        string,
+        {
+          handler: (
+            args: Record<string, unknown>,
+            extra: Record<string, unknown>,
+          ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+        }
+      >;
+    }
+  )._registeredTools;
+
+  it("renders the post-trial allowance from reviewed product facts", async () => {
+    productFactsProvider.clearCache();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes("/v1/pricing")) {
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: () => null },
+            json: async () => ({
+              status: "success",
+              data: {
+                plans: [
+                  {
+                    name: "Developer",
+                    monthlyPrice: 19,
+                    yearlyPrice: 190,
+                    requestLimit: 10_000,
+                    features: ["Latest prices"],
+                  },
+                ],
+              },
+            }),
+          } as unknown as Response;
+        }
+        throw new Error("canonical facts unavailable in isolated test");
+      }),
+    );
+
+    const result = await tools.opa_get_plans.handler({}, {});
+    const text = result.content[0].text;
+
+    expect(text).toContain("Free tier: 50 requests/day");
+    expect(text).not.toMatch(/200 requests?\/(?:mo|month)/i);
 
     vi.unstubAllGlobals();
   });

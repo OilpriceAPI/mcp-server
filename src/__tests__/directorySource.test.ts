@@ -17,6 +17,16 @@ describe("directory-facing source metadata", () => {
     );
   });
 
+  it("does not hard-code a numeric post-trial Free allowance", () => {
+    expect(readme).not.toMatch(
+      /Free(?: plan| API key)?[^\n]{0,160}\d[\d,]*\s+(?:API\s+)?(?:requests?|calls?)\s*(?:\/|per\s+)(?:day|month)/i,
+    );
+    expect(readme).toContain(
+      "https://api.oilpriceapi.com/product-facts.json",
+    );
+    expect(readme).toContain("current Free allowance and reset window");
+  });
+
   it("uses the direct account-creation route on directory-facing surfaces", () => {
     expect(readme).not.toMatch(/oilpriceapi\.com\/signup(?:\?|\b)/i);
 

@@ -14,6 +14,34 @@ function cloneFacts(): Record<string, unknown> {
   >;
 }
 
+function legacyV1Facts(): Record<string, unknown> {
+  const facts = cloneFacts();
+  const offer = facts.offer as Record<string, unknown>;
+  delete offer.freeRequestLimit;
+  delete offer.freeRequestWindow;
+  offer.freeRequestsPerMonth = 50;
+  facts.schemaVersion = "1.0.0";
+  facts.contractVersion = "2026-07-18";
+  facts.reviewedAt = "2026-07-18";
+  facts.schemaUrl =
+    "https://api.oilpriceapi.com/schemas/product-facts-v1.schema.json";
+  return facts;
+}
+
+function nativeV2Facts(): Record<string, unknown> {
+  const facts = legacyV1Facts();
+  const offer = facts.offer as Record<string, unknown>;
+  delete offer.freeRequestsPerMonth;
+  offer.freeRequestLimit = 50;
+  offer.freeRequestWindow = "day";
+  facts.schemaVersion = "2.0.0";
+  facts.contractVersion = "2026-08-11";
+  facts.reviewedAt = "2026-08-11";
+  facts.schemaUrl =
+    "https://api.oilpriceapi.com/schemas/product-facts-v2.schema.json";
+  return facts;
+}
+
 function jsonResponse(
   body: unknown,
   options: { status?: number; etag?: string } = {},
@@ -30,20 +58,98 @@ function jsonResponse(
 
 describe("pinned product-facts contract", () => {
   it("loads only after verifying the reviewed artifact checksum", () => {
-    expect(PINNED_PRODUCT_FACTS_CHECKSUM).toBe(
-      "311a5f0b0b51526605302dc5c2127b8dfb8718aeff4f1b349f62d61bfbff4323",
+    expect(PINNED_PRODUCT_FACTS_CHECKSUM).toMatch(/^[a-f0-9]{64}$/);
+    expect(PINNED_PRODUCT_FACTS.schemaVersion).toBe("2.0.0");
+    expect(PINNED_PRODUCT_FACTS.contractVersion).toBe("2026-08-11");
+    expect(PINNED_PRODUCT_FACTS.offer).toMatchObject({
+      freeRequestLimit: 50,
+      freeRequestWindow: "day",
+    });
+    expect(PINNED_PRODUCT_FACTS.offer).not.toHaveProperty(
+      "freeRequestsPerMonth",
     );
-    expect(PINNED_PRODUCT_FACTS.schemaVersion).toBe("1.0.0");
-    expect(PINNED_PRODUCT_FACTS.contractVersion).toBe("2026-07-18");
   });
 
-  it("rejects incompatible schemas and malformed contracts", () => {
-    expect(() =>
-      validateAndSanitizeProductFacts({
-        ...cloneFacts(),
-        schemaVersion: "2.0.0",
-      }),
-    ).toThrow(ProductFactsContractError);
+  it("accepts native v2 and normalizes the exact reviewed legacy v1 bridge", () => {
+    const native = validateAndSanitizeProductFacts(nativeV2Facts());
+    const legacy = validateAndSanitizeProductFacts(legacyV1Facts());
+
+    expect(native.offer).toMatchObject({
+      freeRequestLimit: 50,
+      freeRequestWindow: "day",
+    });
+    expect(legacy.offer).toMatchObject({
+      freeRequestLimit: 50,
+      freeRequestWindow: "day",
+    });
+    expect(legacy.offer).not.toHaveProperty("freeRequestsPerMonth");
+  });
+
+  it("rejects changed legacy provenance and malformed schema versions", () => {
+    const staleLimit = legacyV1Facts();
+    (staleLimit.offer as Record<string, unknown>).freeRequestsPerMonth = 200;
+    const changedReview = legacyV1Facts();
+    changedReview.contractVersion = "2026-08-11";
+    changedReview.reviewedAt = "2026-08-11";
+    const changedWording = legacyV1Facts();
+    (changedWording.catalog as Record<string, unknown>).publicWording =
+      "Changed without a new reviewed v2 contract.";
+
+    for (const body of [
+      staleLimit,
+      changedReview,
+      changedWording,
+      { ...legacyV1Facts(), schemaVersion: "1foo" },
+      { ...legacyV1Facts(), schemaVersion: "01.0.0" },
+      { ...nativeV2Facts(), schemaVersion: "2foo" },
+      { ...nativeV2Facts(), schemaVersion: "02.0.0" },
+      { ...nativeV2Facts(), schemaVersion: "3.0.0" },
+    ]) {
+      expect(() => validateAndSanitizeProductFacts(body)).toThrow(
+        ProductFactsContractError,
+      );
+    }
+  });
+
+  it("rejects mixed legacy and typed allowance fields", () => {
+    const mixedV1 = legacyV1Facts();
+    (mixedV1.offer as Record<string, unknown>).freeRequestLimit = 50;
+    const mixedV2 = nativeV2Facts();
+    (mixedV2.offer as Record<string, unknown>).freeRequestsPerMonth = 50;
+
+    for (const body of [mixedV1, mixedV2]) {
+      expect(() => validateAndSanitizeProductFacts(body)).toThrow(
+        ProductFactsContractError,
+      );
+    }
+  });
+
+  it("rejects a custom pinned contract with a mismatched checksum", () => {
+    expect(
+      () =>
+        new ProductFactsProvider({
+          pinnedFacts: PINNED_PRODUCT_FACTS,
+          pinnedChecksum: "0".repeat(64),
+        }),
+    ).toThrow(/do not match the supplied checksum/i);
+  });
+
+  it("rejects malformed typed allowance values", () => {
+    for (const [key, value] of [
+      ["freeRequestLimit", 0],
+      ["freeRequestLimit", 1.5],
+      ["freeRequestWindow", "week"],
+      ["freeRequestWindow", ""],
+    ] as const) {
+      const body = nativeV2Facts();
+      (body.offer as Record<string, unknown>)[key] = value;
+      expect(() => validateAndSanitizeProductFacts(body)).toThrow(
+        ProductFactsContractError,
+      );
+    }
+  });
+
+  it("rejects incomplete contracts", () => {
     expect(() =>
       validateAndSanitizeProductFacts({ schemaVersion: "1.0.0" }),
     ).toThrow(ProductFactsContractError);
@@ -74,13 +180,13 @@ describe("ProductFactsProvider", () => {
       expect(headers.Accept).toBe("application/json");
       expect(headers.Authorization).toBeUndefined();
       return jsonResponse(
-        { ...cloneFacts(), ignoredPublicExtension: "not projected" },
-        { etag: '"facts-v1"' },
+        { ...nativeV2Facts(), ignoredPublicExtension: "not projected" },
+        { etag: '"facts-v2"' },
       );
     }) as unknown as typeof fetch;
     const provider = new ProductFactsProvider({
       fetchImpl,
-      now: () => Date.parse("2026-07-18T20:00:00Z"),
+      now: () => Date.parse("2026-08-11T20:00:00Z"),
     });
 
     const result = await provider.get();
@@ -89,19 +195,46 @@ describe("ProductFactsProvider", () => {
       source: "canonical",
       upstreamAvailable: true,
       stale: false,
-      contractEtag: '"facts-v1"',
+      contractEtag: '"facts-v2"',
+      sourceSchemaVersion: "2.0.0",
+      normalization: "native-v2",
     });
-    expect(result.facts.contractVersion).toBe("2026-07-18");
+    expect(result.facts.contractVersion).toBe("2026-08-11");
+    expect(result.facts.offer).toMatchObject({
+      freeRequestLimit: 50,
+      freeRequestWindow: "day",
+    });
     expect(result.facts.developer.authenticationHeader).toBe(
       "Authorization: Token YOUR_API_KEY",
     );
     expect(result.facts).not.toHaveProperty("ignoredPublicExtension");
   });
 
+  it("labels checksum-bound legacy v1 normalization", async () => {
+    const provider = new ProductFactsProvider({
+      fetchImpl: vi.fn(async () =>
+        jsonResponse(legacyV1Facts()),
+      ) as unknown as typeof fetch,
+    });
+
+    const result = await provider.get();
+
+    expect(result.delivery).toMatchObject({
+      source: "canonical",
+      sourceSchemaVersion: "1.0.0",
+      normalization: "reviewed-v1-daily-bridge",
+    });
+    expect(result.facts.offer).toMatchObject({
+      freeRequestLimit: 50,
+      freeRequestWindow: "day",
+    });
+    expect(JSON.stringify(result)).not.toContain("freeRequestsPerMonth");
+  });
+
   it("uses a fresh cache without another upstream request", async () => {
     let now = 1_000;
     const fetchImpl = vi.fn(async () =>
-      jsonResponse(cloneFacts()),
+      jsonResponse(nativeV2Facts()),
     ) as unknown as typeof fetch;
     const provider = new ProductFactsProvider({
       fetchImpl,
@@ -126,7 +259,7 @@ describe("ProductFactsProvider", () => {
     let fail = false;
     const fetchImpl = vi.fn(async () => {
       if (fail) throw new Error("upstream unavailable");
-      return jsonResponse(cloneFacts());
+      return jsonResponse(nativeV2Facts());
     }) as unknown as typeof fetch;
     const provider = new ProductFactsProvider({
       fetchImpl,
@@ -183,8 +316,8 @@ describe("ProductFactsProvider", () => {
   it("does not expose malformed or sensitive upstream contracts", async () => {
     for (const body of [
       { schemaVersion: "1.0.0" },
-      { ...cloneFacts(), schemaVersion: "9.0.0" },
-      { ...cloneFacts(), internalPlanId: "price_do_not_publish" },
+      { ...nativeV2Facts(), schemaVersion: "9.0.0" },
+      { ...nativeV2Facts(), internalPlanId: "price_do_not_publish" },
     ]) {
       const provider = new ProductFactsProvider({
         fetchImpl: vi.fn(async () =>

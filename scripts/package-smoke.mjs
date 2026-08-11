@@ -119,6 +119,21 @@ try {
   if (packed.files.some((file) => file.path.includes("/__tests__/"))) {
     throw new Error("The npm tarball contains compiled test artifacts.");
   }
+  const packedPaths = new Set(packed.files.map((file) => file.path));
+  if (
+    packedPaths.has("build/product-facts.v1.json") ||
+    packedPaths.has("build/product-facts.v1.sha256")
+  ) {
+    throw new Error("The npm tarball contains the retired v1 product facts.");
+  }
+  for (const required of [
+    "build/product-facts.v2.json",
+    "build/product-facts.v2.sha256",
+  ]) {
+    if (!packedPaths.has(required)) {
+      throw new Error(`The npm tarball is missing ${required}.`);
+    }
+  }
   const tarball = join(temporary, packed.filename);
   await execFileAsync(
     "npm",
