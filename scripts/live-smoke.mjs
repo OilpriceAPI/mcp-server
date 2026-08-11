@@ -5,8 +5,8 @@
  *
  * Verifies the futures path fix (v2.2.1) AND the #3245 subscription +
  * market-brief tools (v2.3.0) end-to-end against PRODUCTION:
- *   - GET /v1/futures/ice-brent          (latest)  -> 200 + numeric front-month last_price
- *   - GET /v1/futures/ice-brent/curve    (curve)   -> 200 + curve data OR documented no-data state
+ *   - GET /v1/futures/brent          (latest)  -> 200 + numeric front-month last_price
+ *   - GET /v1/futures/brent/curve    (curve)   -> 200 + curve data OR documented no-data state
  *   - GET /v1/market-brief?codes=BRENT_CRUDE_USD   -> 200 + a numeric price (opa_get_market_brief)
  *   - GET /v1/subscriptions               (list)   -> 200 + { data: { subscriptions: [...] } } (opa_list_subscriptions)
  *   - POST/GET/DELETE round-trip on /v1/subscriptions (opa_create_price_subscription / events / delete)
@@ -37,7 +37,7 @@ const API_BASE =
   process.env.OILPRICEAPI_BASE_URL || "https://api.oilpriceapi.com";
 const KEY = process.env.OILPRICEAPI_TEST_KEY;
 const REQUIRE_KEY = process.env.OILPRICEAPI_LIVE_REQUIRED === "1";
-const SLUG = "ice-brent";
+const SLUG = "brent";
 const RATE_LIMIT_MS = 1100; // > 1 req/sec
 const RATE_LIMIT_RETRIES = 1;
 // Opt-in: exercise the WRITE round-trip (create -> events -> delete) against

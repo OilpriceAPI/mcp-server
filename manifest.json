@@ -3,7 +3,7 @@
   "manifest_version": "0.2",
   "name": "oilpriceapi",
   "display_name": "OilPriceAPI \u2014 Oil, Gas & Commodity Prices",
-  "version": "3.2.2",
+  "version": "3.2.3",
   "description": "Source-timestamped energy data and reviewed OilPriceAPI product facts for MCP clients.",
   "long_description": "OilPriceAPI tools and resources for latest available energy values, history, futures, refining spreads, carrier fuel surcharges, selected energy-intelligence datasets, alerts, market briefs, and a versioned public product contract. Keyless demo mode supports a limited commodity set. Dataset access and limits vary by plan and account entitlement.",
   "author": {

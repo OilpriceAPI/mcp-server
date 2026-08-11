@@ -36,7 +36,134 @@ import {
   SERVER_INSTRUCTIONS,
   productFactsProvider,
   formatStartupInventory,
+  FUTURES_CONTRACTS,
+  FUTURES_CONTRACT_SLUGS,
+  FUTURES_CONTRACT_NAMES,
 } from "../index.js";
+
+describe("instrument-generic futures routes (#4175)", () => {
+  const routeCases = [
+    ["brent", "brent"],
+    ["BZ", "brent"],
+    ["ice-brent", "brent"],
+    ["wti", "wti"],
+    ["CL", "wti"],
+    ["ice-wti", "wti"],
+    ["gasoil", "gasoil"],
+    ["G", "gasoil"],
+    ["ice-gasoil", "gasoil"],
+    ["eu-carbon", "eu-carbon"],
+    ["EUA", "eu-carbon"],
+    ["eua-carbon", "eu-carbon"],
+  ] as const;
+  const server = createSandboxServer();
+  const tools = (
+    server as unknown as {
+      _registeredTools: Record<
+        string,
+        {
+          handler: (
+            args: Record<string, unknown>,
+            extra: Record<string, unknown>,
+          ) => Promise<{
+            content: Array<{ type: string; text: string }>;
+            isError?: boolean;
+          }>;
+        }
+      >;
+    }
+  )._registeredTools;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it.each(routeCases)(
+    "normalizes %s to /v1/futures/%s",
+    async (input, canonical) => {
+      vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+      const fetchSpy = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          front_month: { contract_month: "2026-09", last_price: 70 },
+          contracts: [{ contract_month: "2026-09", last_price: 70 }],
+        }),
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const result = await tools.opa_get_futures.handler(
+        { contract: input },
+        {},
+      );
+
+      expect(result.isError).toBeUndefined();
+      expect(new URL(String(fetchSpy.mock.calls[0][0])).pathname).toBe(
+        `/v1/futures/${canonical}`,
+      );
+    },
+  );
+
+  it.each(routeCases)(
+    "normalizes curve input %s to /v1/futures/%s/curve",
+    async (input, canonical) => {
+      vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+      const fetchSpy = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({
+          contracts: [
+            { contract_month: "2026-09", settlement_price: 70 },
+            { contract_month: "2026-10", settlement_price: 71 },
+          ],
+        }),
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const result = await tools.opa_get_futures_curve.handler(
+        { contract: input },
+        {},
+      );
+
+      expect(result.isError).toBeUndefined();
+      expect(new URL(String(fetchSpy.mock.calls[0][0])).pathname).toBe(
+        `/v1/futures/${canonical}/curve`,
+      );
+    },
+  );
+
+  it("publishes generic slugs while retaining legacy inputs", () => {
+    for (const slug of ["brent", "wti", "gasoil", "eu-carbon"] as const) {
+      expect(FUTURES_CONTRACTS).toContain(slug);
+      expect(FUTURES_CONTRACT_SLUGS[slug]).toBe(slug);
+    }
+    expect(FUTURES_CONTRACT_SLUGS["ice-brent"]).toBe("brent");
+    expect(FUTURES_CONTRACT_SLUGS["ice-wti"]).toBe("wti");
+    expect(FUTURES_CONTRACT_SLUGS["ice-gasoil"]).toBe("gasoil");
+    expect(FUTURES_CONTRACT_SLUGS["eua-carbon"]).toBe("eu-carbon");
+    expect(FUTURES_CONTRACT_NAMES["ice-brent"]).toBe("Brent Crude");
+    expect(FUTURES_CONTRACT_NAMES["ice-wti"]).toBe("WTI Crude");
+    expect(FUTURES_CONTRACT_NAMES["ice-gasoil"]).toBe("Gasoil");
+  });
+
+  it("recommends generic slugs and scopes older venue names to compatibility", () => {
+    const metadata = (
+      server as unknown as {
+        _registeredTools: Record<string, { description?: string }>;
+      }
+    )._registeredTools;
+
+    for (const name of ["opa_get_futures", "opa_get_futures_curve"]) {
+      const description = metadata[name].description ?? "";
+      expect(description).toContain("canonical instrument slugs");
+      expect(description).toContain("compatibility inputs");
+      expect(description).not.toMatch(/ICE Brent|ICE WTI|ICE Gasoil/);
+    }
+  });
+});
 
 describe("startup inventory", () => {
   it("reports enabled and registered counts without a fixed denominator", () => {
@@ -109,7 +236,9 @@ describe("wellPermitSearchEndpoint (#57)", () => {
         operator: "Example",
         county: "Reeves",
       }),
-    ).toEqual(expect.objectContaining({ error: expect.stringMatching(/cannot/) }));
+    ).toEqual(
+      expect.objectContaining({ error: expect.stringMatching(/cannot/) }),
+    );
     expect(
       wellPermitSearchEndpoint({
         state: "TX",
@@ -119,9 +248,9 @@ describe("wellPermitSearchEndpoint (#57)", () => {
     ).toEqual(
       expect.objectContaining({ error: expect.stringMatching(/on or before/) }),
     );
-    expect(
-      wellPermitSearchEndpoint({ state: "Atlantis" }),
-    ).toEqual(expect.objectContaining({ error: expect.stringMatching(/state/) }));
+    expect(wellPermitSearchEndpoint({ state: "Atlantis" })).toEqual(
+      expect.objectContaining({ error: expect.stringMatching(/state/) }),
+    );
   });
 });
 
@@ -143,7 +272,9 @@ describe("wellLookupEndpoint (#57)", () => {
       normalizedApi: "423294471300",
     });
     expect(wellLookupEndpoint("4232")).toEqual(
-      expect.objectContaining({ error: expect.stringMatching(/10-, 12-, or 14/) }),
+      expect.objectContaining({
+        error: expect.stringMatching(/10-, 12-, or 14/),
+      }),
     );
   });
 });
@@ -1141,7 +1272,7 @@ describe("tier-limit gate errors (#17) - makeApiRequest", () => {
     });
 
     const error = await makeApiRequest(
-      "/v1/futures/ice-brent",
+      "/v1/futures/brent",
       mockFetch as typeof fetch,
     ).catch((e: unknown) => e);
 
@@ -1355,7 +1486,9 @@ describe("tool registration metadata", () => {
     expect(description).toContain(
       "Observation-dated bulk backfills may appear in an earlier as_of result",
     );
-    expect(description).not.toMatch(/as it was knowable|later-collected rows absent/i);
+    expect(description).not.toMatch(
+      /as it was knowable|later-collected rows absent/i,
+    );
   });
 
   it("registers all four write tools (creates + deletes)", () => {
@@ -1566,7 +1699,6 @@ describe("reviewed plan allowance copy", () => {
     expect(text).toContain("Dataset access and limits vary by plan");
     expect(text).not.toContain("latest prices only");
     expect(text).not.toMatch(/200 requests?\/(?:mo|month)/i);
-
   });
 });
 

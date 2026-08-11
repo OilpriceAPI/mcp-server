@@ -257,7 +257,7 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_compare_prices`      | Side-by-side comparison of 2-5 commodities with spread                                          |
 | `opa_list_commodities`    | Account-visible commodity catalog returned by the live API                                      |
 | `opa_get_history`         | Historical prices with high/low/avg/change (day/week/month/year)                                |
-| `opa_get_futures`         | Front-month futures (Brent BZ, WTI CL, ICE Gasoil, TTF, JKM, EUA)                               |
+| `opa_get_futures`         | Front-month futures (Brent, WTI, gasoil, TTF, JKM, EU carbon)                                   |
 | `opa_get_futures_curve`   | Full forward curve with contango/backwardation analysis                                         |
 | `opa_get_marine_fuels`    | Bunker fuel prices by port and fuel type (VLSFO/MGO/IFO380)                                     |
 | `opa_get_rig_counts`      | Baker Hughes US rig count with week-over-week change                                            |
@@ -315,7 +315,7 @@ The market brief gives a multi-commodity snapshot in one call. Subscriptions ("w
 "How many well permits were issued in Texas?"
 "What's the current 3-2-1 crack spread?"
 "What's the UPS ground fuel surcharge?"
-"Show me the ICE Gasoil futures curve"
+"Show me the gasoil futures curve"
 ```
 
 ## Resources

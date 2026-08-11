@@ -79,7 +79,7 @@ export {
 // API Configuration
 const API_BASE =
   process.env.OILPRICEAPI_BASE_URL || "https://api.oilpriceapi.com";
-export const MCP_VERSION = "3.2.2";
+export const MCP_VERSION = "3.2.3";
 export const CLIENT_MARKER = `oilpriceapi-mcp/${MCP_VERSION}`;
 export const USER_AGENT = CLIENT_MARKER;
 
@@ -405,16 +405,19 @@ interface FuturesCurveContract {
 }
 
 // Supported futures contracts (used by opa_get_futures + opa_get_futures_curve).
-// Accepts both legacy codes (BZ/CL) and friendly API slug names. Each maps to a
-// canonical API slug used to build /v1/futures/{slug} and /v1/futures/{slug}/curve.
+// Accepts canonical instrument slugs, contract codes, and legacy venue slugs.
+// Every spelling maps to the instrument-generic API path.
 // There is NO generic ?contract= route — paths are per-commodity slugs.
 export const FUTURES_CONTRACTS = [
   // Crude
+  "brent",
+  "wti",
   "BZ",
   "CL",
   "ice-brent",
   "ice-wti",
   // Gasoil
+  "gasoil",
   "G",
   "QS",
   "ice-gasoil",
@@ -428,6 +431,7 @@ export const FUTURES_CONTRACTS = [
   "JKM",
   "lng-jkm",
   // Carbon
+  "eu-carbon",
   "EUA",
   "eua-carbon",
   "UKA",
@@ -439,21 +443,25 @@ export const FUTURES_CONTRACT_SLUGS: Record<
   (typeof FUTURES_CONTRACTS)[number],
   string
 > = {
-  BZ: "ice-brent",
-  CL: "ice-wti",
-  "ice-brent": "ice-brent",
-  "ice-wti": "ice-wti",
-  G: "ice-gasoil",
-  QS: "ice-gasoil",
-  "ice-gasoil": "ice-gasoil",
+  brent: "brent",
+  wti: "wti",
+  BZ: "brent",
+  CL: "wti",
+  "ice-brent": "brent",
+  "ice-wti": "wti",
+  gasoil: "gasoil",
+  G: "gasoil",
+  QS: "gasoil",
+  "ice-gasoil": "gasoil",
   NG: "natural-gas",
   "natural-gas": "natural-gas",
   TTF: "ttf-gas",
   "ttf-gas": "ttf-gas",
   JKM: "lng-jkm",
   "lng-jkm": "lng-jkm",
-  EUA: "eua-carbon",
-  "eua-carbon": "eua-carbon",
+  "eu-carbon": "eu-carbon",
+  EUA: "eu-carbon",
+  "eua-carbon": "eu-carbon",
   UKA: "uk-carbon",
   "uk-carbon": "uk-carbon",
 };
@@ -462,19 +470,23 @@ export const FUTURES_CONTRACT_NAMES: Record<
   (typeof FUTURES_CONTRACTS)[number],
   string
 > = {
+  brent: "Brent Crude",
+  wti: "WTI Crude",
   BZ: "Brent Crude",
   CL: "WTI Crude",
-  "ice-brent": "ICE Brent Crude",
-  "ice-wti": "ICE WTI Crude",
-  G: "ICE Gasoil",
-  QS: "ICE Gasoil",
-  "ice-gasoil": "ICE Gasoil",
+  "ice-brent": "Brent Crude",
+  "ice-wti": "WTI Crude",
+  gasoil: "Gasoil",
+  G: "Gasoil",
+  QS: "Gasoil",
+  "ice-gasoil": "Gasoil",
   NG: "Natural Gas",
   "natural-gas": "Natural Gas",
   TTF: "European TTF Natural Gas",
   "ttf-gas": "European TTF Natural Gas",
   JKM: "LNG JKM (Asia)",
   "lng-jkm": "LNG JKM (Asia)",
+  "eu-carbon": "EU Carbon Allowance (EUA)",
   EUA: "EU Carbon Allowance (EUA)",
   "eua-carbon": "EU Carbon Allowance (EUA)",
   UKA: "UK Carbon Allowance (UKA)",
@@ -2235,7 +2247,7 @@ server.registerTool(
     title: "Get Price History",
     description:
       "Get historical price data for a commodity over a time period. Use when the user asks about price trends, historical prices, or how a commodity has performed over time. Returns high, low, average, change, and data point count. Periods: day (24h), week (7d), month (30d), year (365d). Supports point-in-time filtering via stored observation and revision timestamps. Observation-dated bulk backfills may appear in an earlier as_of result because their actual load time cannot be reconstructed. " +
-        ACCOUNT_ENTITLEMENT_GUIDANCE,
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       commodity: z
         .string()
@@ -2314,14 +2326,14 @@ server.registerTool(
   {
     title: "Get Futures Price",
     description:
-      "Get the latest front-month futures contract price for energy commodities. Use when the user asks about futures, forward prices, or contract prices. Supports crude oil (BZ/ice-brent = Brent, CL/ice-wti = WTI), ICE Gasoil (ice-gasoil), natural gas (natural-gas), European TTF gas (ttf-gas), LNG JKM (lng-jkm), EUA carbon (eua-carbon), and UK carbon (uk-carbon). For the forward curve returned for this account, use opa_get_futures_curve instead. " +
-        ACCOUNT_ENTITLEMENT_GUIDANCE,
+      "Get the latest front-month futures contract price for energy commodities. Use canonical instrument slugs: brent, wti, gasoil, natural-gas, ttf-gas, lng-jkm, eu-carbon, or uk-carbon. Contract codes and older venue slugs remain compatibility inputs. For the forward curve returned for this account, use opa_get_futures_curve instead. " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       contract: z
         .enum(FUTURES_CONTRACTS)
-        .default("BZ")
+        .default("brent")
         .describe(
-          "Futures contract code or slug: BZ/ice-brent = Brent crude, CL/ice-wti = WTI crude, ice-gasoil (G/QS) = ICE Gasoil, natural-gas (NG) = Natural Gas, ttf-gas (TTF) = European TTF natural gas, lng-jkm (JKM) = LNG JKM (Asia), eua-carbon (EUA) = EU carbon allowance, uk-carbon (UKA) = UK carbon allowance (default: BZ)",
+          "Canonical instrument slug (recommended): brent, wti, gasoil, natural-gas, ttf-gas, lng-jkm, eu-carbon, or uk-carbon. Contract codes and legacy venue slugs remain accepted for compatibility (default: brent).",
         ),
     },
     annotations: READ_TOOL_ANNOTATIONS,
@@ -2363,14 +2375,14 @@ server.registerTool(
   {
     title: "Get Futures Curve",
     description:
-      "Get the futures forward-curve contracts returned for this account. Use when the user asks about the forward curve, contango/backwardation, or term structure. Supports crude oil (BZ/ice-brent = Brent, CL/ice-wti = WTI), ICE Gasoil (ice-gasoil), natural gas (natural-gas), European TTF gas (ttf-gas), LNG JKM (lng-jkm), EUA carbon (eua-carbon), and UK carbon (uk-carbon). Returns available contract months with settlement prices plus market-structure analysis. " +
-        ACCOUNT_ENTITLEMENT_GUIDANCE,
+      "Get the futures forward-curve contracts returned for this account. Use canonical instrument slugs: brent, wti, gasoil, natural-gas, ttf-gas, lng-jkm, eu-carbon, or uk-carbon. Contract codes and older venue slugs remain compatibility inputs. Returns available contract months with settlement prices plus market-structure analysis. " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       contract: z
         .enum(FUTURES_CONTRACTS)
-        .default("BZ")
+        .default("brent")
         .describe(
-          "Futures contract code or slug: BZ/ice-brent = Brent crude, CL/ice-wti = WTI crude, ice-gasoil (G/QS) = ICE Gasoil, natural-gas (NG) = Natural Gas, ttf-gas (TTF) = European TTF natural gas, lng-jkm (JKM) = LNG JKM (Asia), eua-carbon (EUA) = EU carbon allowance, uk-carbon (UKA) = UK carbon allowance (default: BZ)",
+          "Canonical instrument slug (recommended): brent, wti, gasoil, natural-gas, ttf-gas, lng-jkm, eu-carbon, or uk-carbon. Contract codes and legacy venue slugs remain accepted for compatibility (default: brent).",
         ),
     },
     annotations: READ_TOOL_ANNOTATIONS,
@@ -2412,7 +2424,6 @@ server.registerTool(
   },
 );
 
-
 // ---------------------------------------------------------------------------
 // US physical natural gas hubs (#64) — wraps /v1/natural-gas/hubs (api#1294).
 // The API endpoint exists precisely because customers searched for hub codes
@@ -2437,7 +2448,12 @@ interface HubQuote {
 }
 
 interface HubsIndexData {
-  benchmark: { code: string; name: string; price: number | null; as_of?: string };
+  benchmark: {
+    code: string;
+    name: string;
+    price: number | null;
+    as_of?: string;
+  };
   hubs: HubQuote[];
   meta?: Record<string, unknown>;
 }
@@ -2448,7 +2464,7 @@ server.registerTool(
     title: "Get US Natural Gas Hub Prices",
     description:
       "Get US physical natural gas hub prices as basis to Henry Hub (USD/MMBtu). Use when the user asks about regional gas prices or hub basis — Waha (West Texas/Permian), SoCal Citygate, Chicago Citygate, Algonquin Citygate, Eastern Gas South (formerly Dominion South), Houston Ship Channel. Without a hub, returns each live hub available to the account plus its basis; with a hub, returns that hub's latest price, basis, and basis history. Hub series differ in depth — check history_days before requesting a long window. " +
-        ACCOUNT_ENTITLEMENT_GUIDANCE,
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       hub: z
         .string()
@@ -2520,7 +2536,7 @@ server.registerTool(
     title: "Get Marine Fuel Prices",
     description:
       "Get latest marine fuel (bunker) prices returned for the account. Use when the user asks about bunker fuel, marine fuel, VLSFO, MGO, IFO380, or shipping fuel costs. Can filter by port (e.g., SINGAPORE, ROTTERDAM, HOUSTON) and/or fuel type (VLSFO, MGO, IFO380). Returns available port prices. " +
-        ACCOUNT_ENTITLEMENT_GUIDANCE,
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       port: z
         .string()
@@ -2578,7 +2594,7 @@ server.registerTool(
     title: "Get US Rig Counts",
     description:
       "Get the latest US oil and gas rig count data (Baker Hughes). Use when the user asks about drilling activity, rig counts, or oil field operations. Returns oil rigs, gas rigs, total count, and week-over-week change. No parameters needed. " +
-        ACCOUNT_ENTITLEMENT_GUIDANCE,
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {},
     annotations: READ_TOOL_ANNOTATIONS,
   },
@@ -2673,7 +2689,7 @@ server.registerTool(
     title: "Get Drilling Activity",
     description:
       "Get a drilling activity snapshot: US, Canada, and international rig counts, frac spread count, well permits issued in the last 30 days (with a by-state breakdown), and DUC (drilled-uncompleted) well totals. Use when the user asks about drilling activity, rigs vs frac spreads, or upstream operations. " +
-        ACCOUNT_ENTITLEMENT_GUIDANCE,
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {},
     annotations: READ_TOOL_ANNOTATIONS,
   },
@@ -2833,7 +2849,7 @@ server.registerTool(
     title: "Get Oil Storage Levels",
     description:
       "Get oil storage and inventory levels for Cushing, Oklahoma (WTI delivery hub) and/or the US Strategic Petroleum Reserve (SPR). Use when the user asks about oil inventories, storage levels, Cushing stocks, or the SPR. Returns current inventory levels with changes. " +
-        ACCOUNT_ENTITLEMENT_GUIDANCE,
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       facility: z
         .enum(["cushing", "spr", "all"])
@@ -2894,7 +2910,7 @@ server.registerTool(
     title: "Get OPEC Production",
     description:
       "Get the latest OPEC oil production data. Use when the user asks about OPEC output, production quotas, supply cuts, or OPEC+ compliance. Returns available country-level production figures. " +
-        ACCOUNT_ENTITLEMENT_GUIDANCE,
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {},
     annotations: READ_TOOL_ANNOTATIONS,
   },
@@ -2925,7 +2941,7 @@ server.registerTool(
     title: "Get Price Forecasts",
     description:
       "Get energy price forecasts from EIA Short-Term Energy Outlook (STEO) and other sources. Use when the user asks about price predictions, outlooks, or where oil/gas prices are heading. Returns forecast data available to the account. " +
-        ACCOUNT_ENTITLEMENT_GUIDANCE,
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {},
     annotations: READ_TOOL_ANNOTATIONS,
   },
@@ -2961,7 +2977,7 @@ server.registerTool(
     title: "Get EIA Oil Inventories",
     description:
       "Get the latest EIA weekly petroleum inventory (stocks) data. Use when the user asks about oil inventories, crude stocks, weekly EIA stocks, inventory builds/draws, or product-level inventory levels. Returns the latest weekly figures available to the account; optionally a summary view or a breakdown by petroleum product. " +
-        ACCOUNT_ENTITLEMENT_GUIDANCE,
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       view: z
         .enum(["latest", "summary", "by_product"])
@@ -3006,7 +3022,7 @@ server.registerTool(
     title: "Get Well Permits",
     description:
       "Get the latest US oil & gas well drilling permit data. Use when the user asks about well permits, new drilling permits, permitting activity, or upstream permit trends. Returns available permits; optionally filtered/aggregated by state or by operator. " +
-        ACCOUNT_ENTITLEMENT_GUIDANCE,
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       view: z
         .enum(["latest", "by_state", "by_operator"])
@@ -3201,13 +3217,17 @@ server.registerTool(
         .min(1)
         .max(100)
         .optional()
-        .describe("Optional county-name search. Cannot be combined with operator."),
+        .describe(
+          "Optional county-name search. Cannot be combined with operator.",
+        ),
       operator: z
         .string()
         .min(1)
         .max(100)
         .optional()
-        .describe("Optional operator-name search. Cannot be combined with county."),
+        .describe(
+          "Optional operator-name search. Cannot be combined with county.",
+        ),
       start_date: z
         .string()
         .optional()
@@ -3257,9 +3277,9 @@ server.registerTool(
       );
     }
 
-    const response = await makeApiRequest<
-      ApiResponse<Record<string, unknown>>
-    >(mapped.endpoint);
+    const response = await makeApiRequest<ApiResponse<Record<string, unknown>>>(
+      mapped.endpoint,
+    );
     if (!response || response.status !== "success") {
       return errorResult(
         `No safe well-permit search result is available for ${mapped.stateCode}. Check account entitlement and retry.`,
@@ -3325,11 +3345,15 @@ server.registerTool(
       api_number: z
         .string()
         .min(1)
-        .describe("10-, 12-, or 14-digit API well number; punctuation is allowed."),
+        .describe(
+          "10-, 12-, or 14-digit API well number; punctuation is allowed.",
+        ),
       state: z
         .string()
         .optional()
-        .describe("Optional state name/code used to disambiguate source records."),
+        .describe(
+          "Optional state name/code used to disambiguate source records.",
+        ),
     },
     annotations: READ_TOOL_ANNOTATIONS,
   },
@@ -3448,10 +3472,7 @@ server.registerTool(
     const states =
       healthResponse.data?.states &&
       typeof healthResponse.data.states === "object"
-        ? (healthResponse.data.states as Record<
-            string,
-            WellPermitStateHealth
-          >)
+        ? (healthResponse.data.states as Record<string, WellPermitStateHealth>)
         : {};
     const warnings = Object.values(states).filter(
       (stateHealth) => stateHealth.status !== "available",
@@ -3715,7 +3736,7 @@ server.registerTool(
     title: "Get Well Production",
     description:
       "Get US oil & gas well production data (BETA coverage: monthly state-level production from EIA + selected state regulators, and well-level histories for selected states only — NOT complete US well-level production). Views: summary (national + top states), states (reporting states returned by the API, latest month), state (monthly history for one state), well (monthly history for one well by 14-digit API number), top_producers (highest-output wells, optionally by state), cycle_time (permit-to-production cycle time stats, optionally by state), cohorts (cycle times by spud quarter). Use when the user asks about oil/gas production volumes by state or well, top producing wells, or drill-to-production cycle times. " +
-        ACCOUNT_ENTITLEMENT_GUIDANCE,
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       view: z
         .enum(WELL_PRODUCTION_VIEWS)
@@ -3774,7 +3795,7 @@ server.registerTool(
     title: "Get Refining & Trading Spreads",
     description:
       "Get refining and trading spreads: crack spreads (refining margin proxy), basis spreads (regional price differentials), and blending/transport margins. Use when the user asks about crack spreads, 3-2-1 crack, refining margins, basis differentials, or blend/transport margins. " +
-        ACCOUNT_ENTITLEMENT_GUIDANCE,
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       type: z
         .enum(["crack", "basis", "margin"])
@@ -3845,7 +3866,6 @@ function formatAlertLine(a: AlertRecord): string {
     : "";
   return `- **${a.name || label}** (id: \`${a.id}\`) — ${label} [${status}${triggers}${last}]`;
 }
-
 
 // ---------------------------------------------------------------------------
 // Agent self-service (#63 follow-through): let an agent answer "what plan am I
@@ -3927,9 +3947,10 @@ server.registerTool(
     annotations: READ_TOOL_ANNOTATIONS,
   },
   async () => {
-    const response = await makeApiRequest<
-      ApiResponse<{ plans?: PricingPlan[] }>
-    >("/v1/pricing");
+    const response =
+      await makeApiRequest<ApiResponse<{ plans?: PricingPlan[] }>>(
+        "/v1/pricing",
+      );
     const plans = response?.data?.plans;
     if (!response || response.status !== "success" || !plans?.length) {
       return errorResult(
@@ -3952,7 +3973,6 @@ server.registerTool(
   },
 );
 
-
 // ---------------------------------------------------------------------------
 // Data-quality reports — wraps /v1/data-quality/{summary,reports/:code}.
 // Provenance surface: per-series grades and dimension scores, so an agent can
@@ -3967,7 +3987,7 @@ server.registerTool(
     title: "Get Data Quality Report",
     description:
       "Get OilPriceAPI's own data-quality grades. With a commodity code: that series' quality report — overall grade/score plus dimension scores (completeness, freshness, and more) for the current period. Without a code: the API's available catalog summary (grade distribution by category). Use when the user asks how reliable/complete a series is, or which series carry the highest quality grades. The summary works on any valid key; per-commodity access varies. " +
-        ACCOUNT_ENTITLEMENT_GUIDANCE,
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       commodity: z
         .string()
@@ -3993,7 +4013,8 @@ server.registerTool(
         );
       }
       let text = `# Data Quality — ${resolved.code}\n\n`;
-      text += "```json\n" + JSON.stringify(response.data.report, null, 2) + "\n```\n";
+      text +=
+        "```json\n" + JSON.stringify(response.data.report, null, 2) + "\n```\n";
       text +=
         "\n_Grades are computed per period from measured completeness/freshness — not marketing copy. | [OilPriceAPI](https://oilpriceapi.com)_";
       return textResult(text);
@@ -4006,7 +4027,8 @@ server.registerTool(
       return errorResult("Data-quality summary not available right now.");
     }
     let text = "# OilPriceAPI Data Quality — Catalogue Summary\n\n";
-    text += "```json\n" + JSON.stringify(response.data.summary, null, 2) + "\n```\n";
+    text +=
+      "```json\n" + JSON.stringify(response.data.summary, null, 2) + "\n```\n";
     text +=
       "\n_Per-commodity reports: access varies by account entitlement; use opa_get_plans for current details. | [OilPriceAPI](https://oilpriceapi.com)_";
     return textResult(text);
