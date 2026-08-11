@@ -5,8 +5,8 @@ name: Live API tests
 # (/v1/futures/latest?contract= — a route that does not exist). The unit
 # suite (vitest) mocks fetch, so only this job exercises the real endpoints.
 #
-# Gated on the OILPRICEAPI_TEST_KEY repo secret so forks without the secret
-# are not blocked. The job is a no-op (clean skip) when the secret is absent.
+# The secret-bearing smoke runs only after merge or by an explicit manual
+# dispatch. Pull-request code never receives the production synthetic key.
 
 on:
   push:
@@ -82,8 +82,8 @@ jobs:
     name: Live API smoke test
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Only run when the secret is configured (skips on forks / PRs without it).
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    # Never expose the production synthetic key to pull-request code.
+    if: ${{ github.event_name != 'pull_request' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

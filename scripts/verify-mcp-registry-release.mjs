@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { readFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
@@ -18,7 +19,9 @@ function assertOnlyKeys(record, allowedKeys, name) {
   const allowed = new Set(allowedKeys);
   const unexpected = Object.keys(record).filter((key) => !allowed.has(key));
   if (unexpected.length > 0) {
-    throw new Error(`${name} returned unsupported fields (${unexpected.length})`);
+    throw new Error(
+      `${name} returned unsupported fields (${unexpected.length}): ${unexpected.sort().join(", ")}`,
+    );
   }
 }
 
@@ -151,7 +154,7 @@ export async function verifyRegistryRelease({
     } catch (error) {
       lastError = error;
       if (attempt < attempts) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
       }
     }
   }
@@ -160,8 +163,11 @@ export async function verifyRegistryRelease({
   );
 }
 
-const invokedPath = fileURLToPath(import.meta.url);
-if (process.argv[1] && resolve(process.argv[1]) === invokedPath) {
+const invokedPath = realpathSync(fileURLToPath(import.meta.url));
+if (
+  process.argv[1] &&
+  realpathSync(resolve(process.argv[1])) === invokedPath
+) {
   const expectedServer = JSON.parse(
     await readFile(new URL("../server.json", import.meta.url), "utf8"),
   );

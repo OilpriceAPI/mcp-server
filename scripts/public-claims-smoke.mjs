@@ -9,7 +9,7 @@ import {
   statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, extname, join, relative, resolve } from "node:path";
+import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -101,12 +101,14 @@ function sourceSurfaces() {
     )
     .map((entry) => join(repositoryRoot, entry.name));
   const source = walkFiles(join(repositoryRoot, "src")).filter((path) => {
-    const rel = relative(repositoryRoot, path);
+    const rel = relative(repositoryRoot, path).split(sep).join("/");
+    if (rel.includes("/__tests__/") || /\.(?:test|spec)\.[^.]+$/.test(rel)) {
+      return false;
+    }
+    const extension = extname(path);
     return (
-      !rel.includes("/__tests__/") &&
-      !/\.(?:test|spec)\.[^.]+$/.test(rel) &&
-      [".ts", ".tsx", ".js", ".mjs", ".cjs"].includes(extname(path)) ||
-      publicExtensions.has(extname(path))
+      [".ts", ".tsx", ".js", ".mjs", ".cjs"].includes(extension) ||
+      publicExtensions.has(extension)
     );
   });
   const docs = walkFiles(join(repositoryRoot, "docs")).filter((path) =>

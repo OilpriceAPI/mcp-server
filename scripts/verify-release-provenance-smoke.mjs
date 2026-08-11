@@ -16,6 +16,8 @@ const sourceScript = fileURLToPath(
   new URL("./verify-release-provenance.mjs", import.meta.url),
 );
 const temp = mkdtempSync(join(tmpdir(), "mcp-release-provenance-"));
+const inheritedMode = process.env.MCP_PROVENANCE_MODE;
+process.env.MCP_PROVENANCE_MODE = "registry-backfill";
 
 function git(...args) {
   return execFileSync("git", args, { cwd: temp, encoding: "utf8" }).trim();
@@ -25,7 +27,7 @@ function runVerifier(env) {
   return spawnSync("node", [join(temp, "scripts/verify-release-provenance.mjs")], {
     cwd: temp,
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: { ...process.env, MCP_PROVENANCE_MODE: "", ...env },
   });
 }
 
@@ -115,6 +117,8 @@ try {
   );
 } finally {
   rmSync(temp, { recursive: true, force: true });
+  if (inheritedMode === undefined) delete process.env.MCP_PROVENANCE_MODE;
+  else process.env.MCP_PROVENANCE_MODE = inheritedMode;
 }
 
 process.stdout.write("Release-provenance smoke passed.\n");

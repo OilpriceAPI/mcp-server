@@ -179,6 +179,7 @@ try {
       }
     }
     if (
+      livePayload?.facts?.schemaVersion !== "2.0.0" ||
       livePayload?.facts?.offer?.freeRequestLimit !== 50 ||
       livePayload?.facts?.offer?.freeRequestWindow !== "day" ||
       livePayload?.delivery?.source !== "canonical" ||

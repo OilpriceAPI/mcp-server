@@ -1,14 +1,24 @@
 #!/usr/bin/env node
 
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   validateNpmAttestationsDocument,
   validateNpmVersionDocument,
   verifyNpmRelease,
 } from "./verify-npm-release.mjs";
 
+const packageJson = JSON.parse(
+  await readFile(new URL("../package.json", import.meta.url), "utf8"),
+);
+const staleVersion = `${packageJson.version}-stale`;
 const expected = {
-  expectedName: "oilpriceapi-mcp",
-  expectedVersion: "3.2.1",
+  expectedName: packageJson.name,
+  expectedVersion: packageJson.version,
   expectedIntegrity: `sha512-${Buffer.alloc(64, 1).toString("base64")}`,
   expectedSourceCommit: "a".repeat(40),
 };
@@ -98,7 +108,7 @@ for (const mutate of [
     document.name = "wrong-package";
   },
   (document) => {
-    document.version = "3.2.0";
+    document.version = staleVersion;
   },
   (document) => {
     document.dist.integrity = "sha512-wrong";
@@ -157,7 +167,7 @@ for (const mutate of [
   },
   (statement) => {
     statement.predicate.buildDefinition.externalParameters.workflow.ref =
-      "refs/tags/v3.2.0";
+      `refs/tags/v${staleVersion}`;
   },
   (statement) => {
     statement.predicate.buildDefinition.resolvedDependencies[0].digest.gitCommit =
@@ -194,11 +204,40 @@ await verifyNpmRelease({
     }
     const payload = clone(validVersion);
     if (calls === 2 && url.endsWith("/latest")) {
-      payload.version = "3.2.0";
+      payload.version = staleVersion;
     }
     return { ok: true, status: 200, json: async () => payload };
   },
 });
 if (calls !== 5) throw new Error("npm verifier did not retry stale latest");
+
+const symlinkRoot = mkdtempSync(join(tmpdir(), "npm-release-verifier-link-"));
+try {
+  const link = join(symlinkRoot, "npm-verifier.mjs");
+  symlinkSync(
+    fileURLToPath(new URL("./verify-npm-release.mjs", import.meta.url)),
+    link,
+  );
+  const linked = spawnSync(process.execPath, [link], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NPM_RELEASE_EXPECTED_NAME: "",
+      NPM_RELEASE_EXPECTED_VERSION: "",
+      NPM_RELEASE_EXPECTED_INTEGRITY: "",
+      NPM_RELEASE_EXPECTED_SOURCE_COMMIT: "",
+    },
+  });
+  if (
+    linked.status === 0 ||
+    !`${linked.stderr}${linked.stdout}`.includes(
+      "NPM_RELEASE_EXPECTED_NAME",
+    )
+  ) {
+    throw new Error("npm verifier silently skipped symlink invocation");
+  }
+} finally {
+  rmSync(symlinkRoot, { recursive: true, force: true });
+}
 
 process.stdout.write("npm release verifier smoke passed.\n");

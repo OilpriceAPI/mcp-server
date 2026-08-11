@@ -24,9 +24,13 @@ describe("directory-facing source metadata", () => {
   });
 
   it("does not hard-code a numeric post-trial Free allowance", () => {
-    expect(readme).not.toMatch(
-      /Free(?: plan| API key)?[^\n]{0,160}\d[\d,]*\s+(?:API\s+)?(?:requests?|calls?)\s*(?:\/|per\s+)(?:day|month)/i,
-    );
+    const normalizedReadme = readme.replace(/\s+/g, " ");
+    const numericAllowance =
+      /Free(?: plan| API key)?[^\n]{0,160}\d[\d,]*\s+(?:API\s+)?(?:requests?|calls?)\s*(?:\/|per\s+)(?:day|month)/i;
+    expect(normalizedReadme).not.toMatch(numericAllowance);
+    expect(
+      "Free plan\nincludes 1,000 requests/day".replace(/\s+/g, " "),
+    ).toMatch(numericAllowance);
     expect(readme).toContain(
       "https://api.oilpriceapi.com/product-facts.json",
     );
@@ -54,7 +58,9 @@ describe("directory-facing source metadata", () => {
       liveWorkflow,
       publishWorkflow,
     ]) {
-      expect(source).not.toContain("--audit-level=moderate");
+      for (const match of source.matchAll(/--audit-level=(\w+)/g)) {
+        expect(match[1]).toBe("low");
+      }
     }
   });
 
@@ -86,8 +92,14 @@ describe("directory-facing source metadata", () => {
     expect(publishWorkflow.indexOf("mcp-publisher validate")).toBeLessThan(
       publishWorkflow.indexOf('node "$NPM_CLI" publish "$PACKAGE_FILE"'),
     );
-    expect(publishWorkflow.indexOf("mcp-publisher publish")).toBeLessThan(
-      publishWorkflow.lastIndexOf("verify:mcp-registry-release"),
+    const publisherPublishIndex = publishWorkflow.indexOf(
+      "mcp-publisher publish",
+    );
+    expect(publisherPublishIndex).toBeGreaterThan(-1);
+    expect(publisherPublishIndex).toBeLessThan(
+      publishWorkflow.lastIndexOf(
+        "node scripts/verify-mcp-registry-release.mjs",
+      ),
     );
     expect(packageJson.scripts).toHaveProperty("smoke:release-provenance");
     expect(liveWorkflow).toContain("npm run smoke:release-provenance");
@@ -95,7 +107,9 @@ describe("directory-facing source metadata", () => {
     expect(backfillWorkflow).toContain(
       "MCP_PROVENANCE_MODE: registry-backfill",
     );
-    expect(backfillWorkflow).toContain("npm run verify:release-provenance");
+    expect(backfillWorkflow).toContain(
+      "node scripts/verify-release-provenance.mjs",
+    );
   });
 
   it("keeps dependency execution outside OIDC publication jobs", () => {
@@ -129,11 +143,43 @@ describe("directory-facing source metadata", () => {
     expect(verifyJob).toContain("npm run smoke:npm-verifier");
   });
 
+  it("never exposes production API credentials to pull-request code", () => {
+    const liveJobStart = liveWorkflow.indexOf("\n  live:\n");
+    expect(liveJobStart).toBeGreaterThan(-1);
+    const liveJob = liveWorkflow.slice(liveJobStart);
+    expect(liveJob).toContain(
+      "if: ${{ github.event_name != 'pull_request' }}",
+    );
+    expect(liveJob).not.toContain("github.event.pull_request.head.repo.full_name");
+    expect(liveJob).toContain(
+      "OILPRICEAPI_TEST_KEY: ${{ secrets.OILPRICEAPI_TEST_KEY }}",
+    );
+  });
+
+  it("runs built-in-only registry gates directly in OIDC jobs", () => {
+    const registryStart = publishWorkflow.indexOf("\n  registry:\n");
+    expect(registryStart).toBeGreaterThan(-1);
+    const publishRegistryJob = publishWorkflow.slice(registryStart);
+    for (const workflow of [publishRegistryJob, backfillWorkflow]) {
+      expect(workflow).not.toContain("npm run verify:mcp-registry-release");
+      expect(workflow).not.toContain("npm run verify:release-provenance");
+      expect(workflow).not.toContain("npm run verify:release-metadata");
+      expect(workflow).toContain(
+        "node scripts/verify-mcp-registry-release.mjs",
+      );
+    }
+  });
+
   it("pins every workflow action that participates in release proof", () => {
     for (const workflow of [publishWorkflow, backfillWorkflow, liveWorkflow]) {
-      expect(workflow).not.toMatch(/uses:\s+actions\/[^@\s]+@v\d+/);
-      for (const match of workflow.matchAll(/uses:\s+actions\/[^@\s]+@([^\s#]+)/g)) {
-        expect(match[1]).toMatch(/^[0-9a-f]{40}$/);
+      for (const match of workflow.matchAll(/uses:\s+(\S+)/g)) {
+        const reference = match[1];
+        if (reference.startsWith("./")) continue;
+        if (reference.startsWith("docker://")) {
+          expect(reference).toMatch(/@sha256:[0-9a-f]{64}$/);
+        } else {
+          expect(reference).toMatch(/^[^@\s]+@[0-9a-f]{40}$/);
+        }
       }
     }
   });

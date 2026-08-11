@@ -84,7 +84,7 @@ interface LegacyV1ProductFacts extends Omit<ProductFacts, "offer"> {
 
 interface ValidatedProductFacts {
   facts: ProductFacts;
-  sourceFactsChecksum: string;
+  contractChecksum: string;
   sourceSchemaVersion: string;
   normalization: ProductFactsNormalization;
 }
@@ -173,7 +173,11 @@ function assertHttps(value: string, key: string): string {
   return value;
 }
 
-function requiredIsoDate(record: JsonRecord, key: string): string {
+function requiredIsoDate(
+  record: JsonRecord,
+  key: string,
+  maximumDate?: string,
+): string {
   const value = requiredString(record, key);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     throw new ProductFactsContractError(key + " must be an ISO date");
@@ -185,7 +189,7 @@ function requiredIsoDate(record: JsonRecord, key: string): string {
   ) {
     throw new ProductFactsContractError(key + " must be a valid ISO date");
   }
-  if (value > new Date().toISOString().slice(0, 10)) {
+  if (maximumDate !== undefined && value > maximumDate) {
     throw new ProductFactsContractError(key + " cannot be in the future");
   }
   return value;
@@ -216,7 +220,10 @@ function assertNoSensitiveData(value: unknown, path = "root"): void {
   }
 }
 
-function validateProductFacts(input: unknown): ValidatedProductFacts {
+function validateProductFacts(
+  input: unknown,
+  maximumDate?: string,
+): ValidatedProductFacts {
   assertNoSensitiveData(input);
   const root = asRecord(input, "product-facts");
   const product = asRecord(root.product, "product");
@@ -317,8 +324,12 @@ function validateProductFacts(input: unknown): ValidatedProductFacts {
     "developer",
   );
 
-  const contractVersion = requiredIsoDate(root, "contractVersion");
-  const reviewedAt = requiredIsoDate(root, "reviewedAt");
+  const contractVersion = requiredIsoDate(
+    root,
+    "contractVersion",
+    maximumDate,
+  );
+  const reviewedAt = requiredIsoDate(root, "reviewedAt", maximumDate);
   if (contractVersion !== reviewedAt) {
     throw new ProductFactsContractError(
       "contractVersion and reviewedAt must match",
@@ -429,7 +440,6 @@ function validateProductFacts(input: unknown): ValidatedProductFacts {
   };
 
   let facts: ProductFacts;
-  let sourceFactsChecksum: string;
   let normalization: ProductFactsNormalization;
 
   if (schemaMajor === 2) {
@@ -452,7 +462,6 @@ function validateProductFacts(input: unknown): ValidatedProductFacts {
         freeRequestWindow,
       },
     };
-    sourceFactsChecksum = stableFactsDigest(facts);
     normalization = "native-v2";
   } else {
     if ("freeRequestLimit" in offer || "freeRequestWindow" in offer) {
@@ -470,7 +479,7 @@ function validateProductFacts(input: unknown): ValidatedProductFacts {
         ),
       },
     };
-    sourceFactsChecksum = stableFactsDigest(legacyFacts);
+    const sourceFactsChecksum = stableFactsDigest(legacyFacts);
     if (sourceFactsChecksum !== LEGACY_V1_DAILY_BRIDGE_CHECKSUM) {
       throw new ProductFactsContractError(
         "legacy v1 product-facts contract is not the reviewed daily bridge",
@@ -478,6 +487,9 @@ function validateProductFacts(input: unknown): ValidatedProductFacts {
     }
     facts = {
       ...commonFacts,
+      schemaVersion: "2.0.0",
+      schemaUrl:
+        "https://api.oilpriceapi.com/schemas/product-facts-v2.schema.json",
       offer: {
         ...commonOffer,
         freeRequestLimit: 50,
@@ -500,14 +512,17 @@ function validateProductFacts(input: unknown): ValidatedProductFacts {
 
   return {
     facts,
-    sourceFactsChecksum,
+    contractChecksum: stableFactsDigest(facts),
     sourceSchemaVersion: schemaVersion,
     normalization,
   };
 }
 
 export function validateAndSanitizeProductFacts(input: unknown): ProductFacts {
-  return validateProductFacts(input).facts;
+  return validateProductFacts(
+    input,
+    new Date().toISOString().slice(0, 10),
+  ).facts;
 }
 
 function digest(content: string | Buffer): string {
@@ -572,6 +587,9 @@ function loadPinnedProductFacts(): {
 const pinned = loadPinnedProductFacts();
 export const PINNED_PRODUCT_FACTS = pinned.facts;
 export const PINNED_PRODUCT_FACTS_CHECKSUM = pinned.checksum;
+export const PINNED_PRODUCT_FACTS_CONTRACT_CHECKSUM = stableFactsDigest(
+  pinned.facts,
+);
 
 interface CachedProductFacts {
   facts: ProductFacts;
@@ -628,33 +646,28 @@ export class ProductFactsProvider {
       );
     }
     this.pinnedFacts = pinnedValidation.facts;
-    if (options.pinnedChecksum && !/^[a-f0-9]{64}$/.test(options.pinnedChecksum)) {
+    if (
+      options.pinnedChecksum !== undefined &&
+      !/^[a-f0-9]{64}$/.test(options.pinnedChecksum)
+    ) {
       throw new ProductFactsContractError(
         "provider pinned checksum must be a lowercase SHA-256 digest",
       );
     }
-    if (options.pinnedFacts) {
-      const projectedChecksum = stableFactsDigest(pinnedValidation.facts);
-      if (
-        options.pinnedChecksum &&
-        options.pinnedChecksum !== projectedChecksum
-      ) {
-        throw new ProductFactsContractError(
-          "provider pinned facts do not match the supplied checksum",
-        );
-      }
-      this.pinnedChecksum = options.pinnedChecksum ?? projectedChecksum;
-    } else {
-      if (
-        options.pinnedChecksum &&
-        options.pinnedChecksum !== PINNED_PRODUCT_FACTS_CHECKSUM
-      ) {
-        throw new ProductFactsContractError(
-          "provider default pinned checksum cannot be overridden",
-        );
-      }
-      this.pinnedChecksum = PINNED_PRODUCT_FACTS_CHECKSUM;
+    const projectedChecksum = stableFactsDigest(pinnedValidation.facts);
+    const matchesVerifiedBuiltInArtifact =
+      options.pinnedFacts === undefined &&
+      options.pinnedChecksum === PINNED_PRODUCT_FACTS_CHECKSUM;
+    if (
+      options.pinnedChecksum !== undefined &&
+      options.pinnedChecksum !== projectedChecksum &&
+      !matchesVerifiedBuiltInArtifact
+    ) {
+      throw new ProductFactsContractError(
+        "provider pinned facts do not match the supplied checksum",
+      );
     }
+    this.pinnedChecksum = projectedChecksum;
     this.pinnedSourceSchemaVersion = pinnedValidation.sourceSchemaVersion;
     this.pinnedNormalization = pinnedValidation.normalization;
   }
@@ -758,8 +771,12 @@ export class ProductFactsProvider {
       if (!response.ok) {
         throw new Error("HTTP " + response.status);
       }
-      const validated = validateProductFacts(await response.json());
-      const checksum = validated.sourceFactsChecksum;
+      const maximumDate = new Date(now).toISOString().slice(0, 10);
+      const validated = validateProductFacts(
+        await response.json(),
+        maximumDate,
+      );
+      const checksum = validated.contractChecksum;
       const etag = response.headers?.get("etag") || "sha256:" + checksum;
       return {
         facts: validated.facts,

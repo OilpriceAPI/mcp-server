@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   validateRegistryPayload,
   verifyRegistryRelease,
@@ -123,5 +128,28 @@ await verifyRegistryRelease({
   },
 });
 if (calls !== 2) throw new Error("registry verifier did not retry drift");
+
+const symlinkRoot = mkdtempSync(join(tmpdir(), "mcp-registry-verifier-link-"));
+try {
+  const link = join(symlinkRoot, "registry-verifier.mjs");
+  symlinkSync(
+    fileURLToPath(new URL("./verify-mcp-registry-release.mjs", import.meta.url)),
+    link,
+  );
+  const linked = spawnSync(process.execPath, [link], {
+    encoding: "utf8",
+    env: { ...process.env, MCP_REGISTRY_ATTEMPTS: "0" },
+  });
+  if (
+    linked.status === 0 ||
+    !`${linked.stderr}${linked.stdout}`.includes(
+      "MCP_REGISTRY_ATTEMPTS must be a positive integer",
+    )
+  ) {
+    throw new Error("registry verifier silently skipped symlink invocation");
+  }
+} finally {
+  rmSync(symlinkRoot, { recursive: true, force: true });
+}
 
 process.stdout.write("MCP registry verifier smoke passed.\n");

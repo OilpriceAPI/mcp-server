@@ -264,7 +264,7 @@ jobs:
           MCP_REGISTRY_ATTEMPTS: "1"
           MCP_REGISTRY_DELAY_MS: "0"
         run: |
-          if npm run verify:mcp-registry-release; then
+          if node scripts/verify-mcp-registry-release.mjs; then
             echo "current=true" >> "$GITHUB_OUTPUT"
           else
             echo "current=false" >> "$GITHUB_OUTPUT"
@@ -279,4 +279,4 @@ jobs:
         run: timeout 5m mcp-publisher publish
 
       - name: Verify public MCP registry readback
-        run: npm run verify:mcp-registry-release
+        run: node scripts/verify-mcp-registry-release.mjs

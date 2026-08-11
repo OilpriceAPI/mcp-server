@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   PINNED_PRODUCT_FACTS,
   PINNED_PRODUCT_FACTS_CHECKSUM,
+  PINNED_PRODUCT_FACTS_CONTRACT_CHECKSUM,
   ProductFactsContractError,
   ProductFactsProvider,
   validateAndSanitizeProductFacts,
@@ -29,17 +30,7 @@ function legacyV1Facts(): Record<string, unknown> {
 }
 
 function nativeV2Facts(): Record<string, unknown> {
-  const facts = legacyV1Facts();
-  const offer = facts.offer as Record<string, unknown>;
-  delete offer.freeRequestsPerMonth;
-  offer.freeRequestLimit = 50;
-  offer.freeRequestWindow = "day";
-  facts.schemaVersion = "2.0.0";
-  facts.contractVersion = "2026-08-11";
-  facts.reviewedAt = "2026-08-11";
-  facts.schemaUrl =
-    "https://api.oilpriceapi.com/schemas/product-facts-v2.schema.json";
-  return facts;
+  return cloneFacts();
 }
 
 function jsonResponse(
@@ -83,6 +74,11 @@ describe("pinned product-facts contract", () => {
     expect(legacy.offer).toMatchObject({
       freeRequestLimit: 50,
       freeRequestWindow: "day",
+    });
+    expect(legacy).toMatchObject({
+      schemaVersion: "2.0.0",
+      schemaUrl:
+        "https://api.oilpriceapi.com/schemas/product-facts-v2.schema.json",
     });
     expect(legacy.offer).not.toHaveProperty("freeRequestsPerMonth");
   });
@@ -166,6 +162,13 @@ describe("pinned product-facts contract", () => {
           pinnedChecksum: "0".repeat(64),
         }),
     ).toThrow(/do not match the supplied checksum/i);
+    expect(
+      () =>
+        new ProductFactsProvider({
+          pinnedFacts: PINNED_PRODUCT_FACTS,
+          pinnedChecksum: "",
+        }),
+    ).toThrow(/lowercase SHA-256 digest/i);
   });
 
   it("rejects malformed typed allowance values", () => {
@@ -208,6 +211,60 @@ describe("pinned product-facts contract", () => {
 });
 
 describe("ProductFactsProvider", () => {
+  it("uses one canonical checksum for identical remote and pinned facts", async () => {
+    const canonical = await new ProductFactsProvider({
+      fetchImpl: vi.fn(async () =>
+        jsonResponse(nativeV2Facts()),
+      ) as unknown as typeof fetch,
+      now: () => Date.parse("2026-08-11T20:00:00Z"),
+    }).get();
+    const fallback = await new ProductFactsProvider({
+      fetchImpl: vi.fn(async () => {
+        throw new Error("offline");
+      }) as unknown as typeof fetch,
+    }).get();
+
+    expect(canonical.delivery.contractChecksum).toBe(
+      PINNED_PRODUCT_FACTS_CONTRACT_CHECKSUM,
+    );
+    expect(fallback.delivery.contractChecksum).toBe(
+      PINNED_PRODUCT_FACTS_CONTRACT_CHECKSUM,
+    );
+    expect(PINNED_PRODUCT_FACTS_CONTRACT_CHECKSUM).not.toBe(
+      PINNED_PRODUCT_FACTS_CHECKSUM,
+    );
+  });
+
+  it("normalizes the legacy built-in artifact checksum option", async () => {
+    const fallback = await new ProductFactsProvider({
+      pinnedChecksum: PINNED_PRODUCT_FACTS_CHECKSUM,
+      fetchImpl: vi.fn(async () => {
+        throw new Error("offline");
+      }) as unknown as typeof fetch,
+    }).get();
+
+    expect(fallback.delivery.contractChecksum).toBe(
+      PINNED_PRODUCT_FACTS_CONTRACT_CHECKSUM,
+    );
+    expect(fallback.delivery.contractEtag).toBe(
+      `sha256:${PINNED_PRODUCT_FACTS_CONTRACT_CHECKSUM}`,
+    );
+  });
+
+  it("rejects future remote review dates using the injected clock", async () => {
+    const provider = new ProductFactsProvider({
+      fetchImpl: vi.fn(async () =>
+        jsonResponse(nativeV2Facts()),
+      ) as unknown as typeof fetch,
+      now: () => Date.parse("2020-01-01T20:00:00Z"),
+    });
+
+    const result = await provider.get();
+
+    expect(result.delivery.source).toBe("pinned");
+    expect(result.delivery.warning).toContain("failed contract validation");
+  });
+
   it("returns a valid canonical response with version, ETag, and no auth", async () => {
     const fetchImpl = vi.fn(async (_input, init) => {
       const headers = init?.headers as Record<string, string>;
@@ -258,11 +315,13 @@ describe("ProductFactsProvider", () => {
       freeRequestLimit: 50,
       freeRequestWindow: "day",
     });
+    expect(result.facts.schemaVersion).toBe("2.0.0");
     expect(JSON.stringify(result)).not.toContain("freeRequestsPerMonth");
   });
 
   it("uses a fresh cache without another upstream request", async () => {
-    let now = 1_000;
+    const base = Date.parse("2026-08-11T20:00:00Z");
+    let now = base + 1_000;
     const fetchImpl = vi.fn(async () =>
       jsonResponse(nativeV2Facts()),
     ) as unknown as typeof fetch;
@@ -273,7 +332,7 @@ describe("ProductFactsProvider", () => {
     });
 
     expect((await provider.get()).delivery.source).toBe("canonical");
-    now = 2_000;
+    now = base + 2_000;
     const cached = await provider.get();
 
     expect(cached.delivery).toMatchObject({
@@ -285,7 +344,8 @@ describe("ProductFactsProvider", () => {
   });
 
   it("labels a bounded stale cache and rejects an expired cache", async () => {
-    let now = 0;
+    const base = Date.parse("2026-08-11T20:00:00Z");
+    let now = base;
     let fail = false;
     const fetchImpl = vi.fn(async () => {
       if (fail) throw new Error("upstream unavailable");
@@ -300,7 +360,7 @@ describe("ProductFactsProvider", () => {
 
     expect((await provider.get()).delivery.source).toBe("canonical");
     fail = true;
-    now = 2_000;
+    now = base + 2_000;
     const stale = await provider.get();
     expect(stale.delivery).toMatchObject({
       source: "cache",
@@ -309,7 +369,7 @@ describe("ProductFactsProvider", () => {
     });
     expect(stale.delivery.warning).toContain("cached canonical facts");
 
-    now = 6_000;
+    now = base + 6_000;
     const expired = await provider.get();
     expect(expired.delivery).toMatchObject({
       source: "pinned",
@@ -325,7 +385,8 @@ describe("ProductFactsProvider", () => {
   });
 
   it("preserves reviewed v1 bridge provenance only inside the stale bound", async () => {
-    let now = 0;
+    const base = Date.parse("2026-08-11T20:00:00Z");
+    let now = base;
     let fail = false;
     const fetchImpl = vi.fn(async () => {
       if (fail) throw new Error("upstream unavailable");
@@ -346,7 +407,7 @@ describe("ProductFactsProvider", () => {
     });
 
     fail = true;
-    now = 2_000;
+    now = base + 2_000;
     const stale = await provider.get();
     expect(stale.delivery).toMatchObject({
       source: "cache",
@@ -359,7 +420,7 @@ describe("ProductFactsProvider", () => {
       freeRequestWindow: "day",
     });
 
-    now = 6_000;
+    now = base + 6_000;
     const expired = await provider.get();
     expect(expired.delivery).toMatchObject({
       source: "pinned",
@@ -384,7 +445,7 @@ describe("ProductFactsProvider", () => {
     expect(result.delivery.source).toBe("pinned");
     expect(result.delivery.warning).toContain("request timed out");
     expect(result.delivery.contractChecksum).toBe(
-      PINNED_PRODUCT_FACTS_CHECKSUM,
+      PINNED_PRODUCT_FACTS_CONTRACT_CHECKSUM,
     );
   });
 

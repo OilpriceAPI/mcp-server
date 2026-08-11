@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
@@ -247,8 +248,11 @@ export async function verifyNpmRelease({
   );
 }
 
-const invokedPath = fileURLToPath(import.meta.url);
-if (process.argv[1] && resolve(process.argv[1]) === invokedPath) {
+const invokedPath = realpathSync(fileURLToPath(import.meta.url));
+if (
+  process.argv[1] &&
+  realpathSync(resolve(process.argv[1])) === invokedPath
+) {
   const expectedName = process.env.NPM_RELEASE_EXPECTED_NAME;
   const expectedVersion = process.env.NPM_RELEASE_EXPECTED_VERSION;
   const expectedIntegrity = process.env.NPM_RELEASE_EXPECTED_INTEGRITY;

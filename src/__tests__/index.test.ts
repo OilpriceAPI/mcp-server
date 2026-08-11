@@ -1509,6 +1509,10 @@ describe("reviewed product-facts discovery", () => {
 });
 
 describe("reviewed plan allowance copy", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   const server = createSandboxServer();
   const tools = (
     server as unknown as {
@@ -1563,7 +1567,6 @@ describe("reviewed plan allowance copy", () => {
     expect(text).not.toContain("latest prices only");
     expect(text).not.toMatch(/200 requests?\/(?:mo|month)/i);
 
-    vi.unstubAllGlobals();
   });
 });
 

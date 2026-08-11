@@ -35,6 +35,7 @@ function textContent(result) {
 function assertReviewedContract(payload) {
   const { facts, delivery } = payload;
   if (
+    facts?.schemaVersion !== "2.0.0" ||
     facts?.offer?.freeRequestLimit !== 50 ||
     facts?.offer?.freeRequestWindow !== "day" ||
     "freeRequestsPerMonth" in (facts?.offer || {})

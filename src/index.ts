@@ -69,6 +69,7 @@ import {
 export {
   PINNED_PRODUCT_FACTS,
   PINNED_PRODUCT_FACTS_CHECKSUM,
+  PINNED_PRODUCT_FACTS_CONTRACT_CHECKSUM,
   PRODUCT_FACTS_URI,
   ProductFactsContractError,
   ProductFactsProvider,
