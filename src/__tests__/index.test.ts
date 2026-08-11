@@ -35,7 +35,37 @@ import {
   PRODUCT_FACTS_URI,
   SERVER_INSTRUCTIONS,
   productFactsProvider,
+  formatStartupInventory,
 } from "../index.js";
+
+describe("startup inventory", () => {
+  it("reports enabled and registered counts without a fixed denominator", () => {
+    expect(
+      formatStartupInventory(
+        {
+          scope: "read",
+          profile: "all",
+          categories: ["core", "market", "automation"],
+          categoriesSource: "profile",
+        },
+        32,
+        36,
+      ),
+    ).toContain("tools=32/36");
+    expect(
+      formatStartupInventory(
+        {
+          scope: "write",
+          profile: "all",
+          categories: ["core", "market", "automation"],
+          categoriesSource: "profile",
+        },
+        36,
+        36,
+      ),
+    ).toContain("tools=36/36");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // #57 — well permit search and API-number lookup

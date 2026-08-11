@@ -60,6 +60,7 @@ import {
 import {
   applyToolConfiguration,
   buildCapabilityManifest,
+  getRegisteredToolEntries,
   resolveToolConfiguration,
   type CapabilityBuildMetadata,
   type ToolConfiguration,
@@ -5295,7 +5296,11 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   }
 
   console.error(
-    `OilPriceAPI MCP: scope=${configuration.scope} profile=${configuration.profile} tools=${enabledTools.length}/32`,
+    formatStartupInventory(
+      configuration,
+      enabledTools.length,
+      getRegisteredToolEntries(server).length,
+    ),
   );
   if (!getApiKey()) {
     // stderr only — stdout is the MCP protocol channel.
@@ -5310,6 +5315,14 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(`OilPriceAPI MCP Server v${MCP_VERSION} running on stdio`);
+}
+
+export function formatStartupInventory(
+  configuration: ToolConfiguration,
+  enabledCount: number,
+  registeredCount: number,
+): string {
+  return `OilPriceAPI MCP: scope=${configuration.scope} profile=${configuration.profile} tools=${enabledCount}/${registeredCount}`;
 }
 
 if (directExecution()) {

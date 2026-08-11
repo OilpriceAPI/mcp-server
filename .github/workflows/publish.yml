@@ -4,6 +4,9 @@ env:
   MCP_PUBLISHER_VERSION: v1.8.1
   MCP_PUBLISHER_ARCHIVE: mcp-publisher_linux_amd64.tar.gz
   MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+  NPM_CLI_VERSION: 11.12.1
+  NPM_CLI_INTEGRITY: sha512-zcoUuF1kezGSAo0CqtvoLXX3mkRqzuqYdL6Y5tdo8g69NVV3CkjQ6ZBhBgB4d7vGkPcV6TcvLi3GRKPDFX+xTA==
+  NPM_CLI_SHA256: e679850e663b16f5f146ee425d0eb0e3442c1d2bda3d513bbfd7c81f5ee5db38
 
 on:
   release:
@@ -16,6 +19,8 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    outputs:
+      artifact_manifest_sha256: ${{ steps.pack.outputs.artifact_manifest_sha256 }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -28,9 +33,6 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
-
-      - name: Install verified npm (OIDC trusted publishing needs npm >= 11.5.1)
-        run: npm install -g npm@11.12.1
 
       - name: Install dependencies
         run: npm ci
@@ -84,7 +86,9 @@ jobs:
         run: timeout 2m mcp-publisher validate
 
       - name: Pack the verified release candidate
+        id: pack
         run: |
+          set -euo pipefail
           ARTIFACT_DIR="$RUNNER_TEMP/release-artifact"
           mkdir -p "$ARTIFACT_DIR"
           npm pack --ignore-scripts --json > "$RUNNER_TEMP/npm-pack.json"
@@ -92,8 +96,29 @@ jobs:
           jq -e '.[0] | {filename, integrity, shasum}' \
             "$RUNNER_TEMP/npm-pack.json" > "$ARTIFACT_DIR/pack-metadata.json"
           mv "$PACKAGE_FILE" "$ARTIFACT_DIR/$PACKAGE_FILE"
+
+          npm pack "npm@$NPM_CLI_VERSION" --ignore-scripts --json \
+            --pack-destination "$ARTIFACT_DIR" > "$RUNNER_TEMP/npm-cli-pack.json"
+          jq -e \
+            --arg version "$NPM_CLI_VERSION" \
+            --arg integrity "$NPM_CLI_INTEGRITY" \
+            '.[0] | select(.name == "npm" and .version == $version and .integrity == $integrity) | {filename, integrity, shasum}' \
+            "$RUNNER_TEMP/npm-cli-pack.json" > "$ARTIFACT_DIR/npm-cli-metadata.json"
+          NPM_CLI_FILE=$(jq -er '.filename' "$ARTIFACT_DIR/npm-cli-metadata.json")
+          test -f "$ARTIFACT_DIR/$NPM_CLI_FILE"
+          echo "$NPM_CLI_SHA256  $ARTIFACT_DIR/$NPM_CLI_FILE" | sha256sum -c -
+
           cp "$GITHUB_WORKSPACE/scripts/verify-npm-release.mjs" "$ARTIFACT_DIR/"
-          (cd "$ARTIFACT_DIR" && sha256sum "$PACKAGE_FILE" pack-metadata.json verify-npm-release.mjs > artifact.sha256)
+          (
+            cd "$ARTIFACT_DIR"
+            sha256sum \
+              "$PACKAGE_FILE" \
+              "$NPM_CLI_FILE" \
+              pack-metadata.json \
+              npm-cli-metadata.json \
+              verify-npm-release.mjs > artifact.sha256
+            echo "artifact_manifest_sha256=$(sha256sum artifact.sha256 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          )
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -107,6 +132,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: verify
+    env:
+      EXPECTED_ARTIFACT_MANIFEST_SHA256: ${{ needs.verify.outputs.artifact_manifest_sha256 }}
     permissions:
       contents: read
       id-token: write
@@ -123,9 +150,6 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Install verified npm (OIDC trusted publishing needs npm >= 11.5.1)
-        run: npm install -g npm@11.12.1
-
       # Authentication via OIDC Trusted Publishing (configured on npmjs.com for
       # repo OilpriceAPI/mcp-server, workflow publish.yml, no environment).
       # No NODE_AUTH_TOKEN needed; OIDC also satisfies the package 2FA requirement
@@ -134,12 +158,35 @@ jobs:
         working-directory: ${{ runner.temp }}/release-artifact
         run: |
           set -euo pipefail
+          ACTUAL_MANIFEST_SHA256=$(sha256sum artifact.sha256 | cut -d' ' -f1)
+          if [ "$ACTUAL_MANIFEST_SHA256" != "$EXPECTED_ARTIFACT_MANIFEST_SHA256" ]; then
+            echo "::error::Release artifact manifest does not match the unprivileged verify job"
+            exit 1
+          fi
           sha256sum -c artifact.sha256
+
+          NPM_CLI_FILE=$(jq -er '.filename' npm-cli-metadata.json)
+          VERIFIED_NPM_INTEGRITY=$(jq -er '.integrity' npm-cli-metadata.json)
+          if [ "$VERIFIED_NPM_INTEGRITY" != "$NPM_CLI_INTEGRITY" ]; then
+            echo "::error::Verified npm CLI integrity does not match the pinned release policy"
+            exit 1
+          fi
+          echo "$NPM_CLI_SHA256  $NPM_CLI_FILE" | sha256sum -c -
+          mkdir npm-cli
+          tar -xzf "$NPM_CLI_FILE" -C npm-cli
+          NPM_CLI="$PWD/npm-cli/package/bin/npm-cli.js"
+          test -f "$NPM_CLI"
+          if [ "$(node "$NPM_CLI" --version)" != "$NPM_CLI_VERSION" ]; then
+            echo "::error::Verified npm CLI version does not match the pinned release policy"
+            exit 1
+          fi
+
           PACKAGE_FILE=$(jq -er '.filename' pack-metadata.json)
           EXPECTED_INTEGRITY=$(jq -er '.integrity' pack-metadata.json)
           NAME=$(tar -xOf "$PACKAGE_FILE" package/package.json | jq -er '.name')
           VERSION=$(tar -xOf "$PACKAGE_FILE" package/package.json | jq -er '.version')
-          EXISTING_INTEGRITY=$(timeout 30s npm view "$NAME@$VERSION" dist.integrity --json 2>/dev/null | jq -r '. // empty' || true)
+          SOURCE_COMMIT=$(tar -xOf "$PACKAGE_FILE" package/build/build-metadata.json | jq -er '.sourceCommit | select(test("^[0-9a-f]{40}$"))')
+          EXISTING_INTEGRITY=$(timeout 30s node "$NPM_CLI" view "$NAME@$VERSION" dist.integrity --json 2>/dev/null | jq -r '. // empty' || true)
           if [ -n "$EXISTING_INTEGRITY" ]; then
             if [ "$EXISTING_INTEGRITY" != "$EXPECTED_INTEGRITY" ]; then
               echo "::error::npm $NAME@$VERSION exists with unexpected integrity"
@@ -147,12 +194,13 @@ jobs:
             fi
             echo "npm $NAME@$VERSION already matches the verified tarball; continuing recovery."
           else
-            timeout 10m npm publish "$PACKAGE_FILE" --ignore-scripts --provenance --access public
+            timeout 10m node "$NPM_CLI" publish "$PACKAGE_FILE" --ignore-scripts --provenance --access public
           fi
 
           NPM_RELEASE_EXPECTED_NAME="$NAME" \
           NPM_RELEASE_EXPECTED_VERSION="$VERSION" \
           NPM_RELEASE_EXPECTED_INTEGRITY="$EXPECTED_INTEGRITY" \
+          NPM_RELEASE_EXPECTED_SOURCE_COMMIT="$SOURCE_COMMIT" \
             node verify-npm-release.mjs
 
   # Publish to the official MCP registry (registry.modelcontextprotocol.io)

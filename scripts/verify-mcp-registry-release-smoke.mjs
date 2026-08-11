@@ -70,6 +70,15 @@ for (const payload of [
     server.packages[0].environmentVariables[0].description = "Drifted";
   }),
   withServerMutation((server) => {
+    server.packages[0].environmentVariables[1].isRequired = "false";
+  }),
+  withServerMutation((server) => {
+    server.packages[0].environmentVariables[1].isSecret = "true";
+  }),
+  withServerMutation((server) => {
+    server.packages[0].environmentVariables[1].isRequired = 0;
+  }),
+  withServerMutation((server) => {
     server.unreviewedField = true;
   }),
   {

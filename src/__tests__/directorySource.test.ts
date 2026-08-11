@@ -84,7 +84,7 @@ describe("directory-facing source metadata", () => {
       -1,
     );
     expect(publishWorkflow.indexOf("mcp-publisher validate")).toBeLessThan(
-      publishWorkflow.indexOf("npm publish \"$PACKAGE_FILE\""),
+      publishWorkflow.indexOf('node "$NPM_CLI" publish "$PACKAGE_FILE"'),
     );
     expect(publishWorkflow.indexOf("mcp-publisher publish")).toBeLessThan(
       publishWorkflow.lastIndexOf("verify:mcp-registry-release"),
@@ -111,12 +111,21 @@ describe("directory-facing source metadata", () => {
     expect(verifyJob).toContain("npm ci");
     expect(verifyJob).not.toContain("id-token: write");
     expect(npmPublishJob).toContain("id-token: write");
-    expect(npmPublishJob).not.toContain("npm ci");
-    expect(npmPublishJob).not.toContain("npm test");
+    expect(npmPublishJob).not.toMatch(
+      /\b(?:npm|npx|pnpm|yarn)\s+(?:ci|exec|install)\b/,
+    );
     expect(npmPublishJob).toContain("--ignore-scripts --provenance");
     expect(npmPublishJob).toContain("artifact.sha256");
+    expect(npmPublishJob).toContain("EXPECTED_ARTIFACT_MANIFEST_SHA256");
+    expect(npmPublishJob).toContain("npm-cli-metadata.json");
+    expect(npmPublishJob).toContain('node "$NPM_CLI" publish');
     expect(npmPublishJob).toContain("NPM_RELEASE_EXPECTED_INTEGRITY");
+    expect(npmPublishJob).toContain("NPM_RELEASE_EXPECTED_SOURCE_COMMIT");
     expect(npmPublishJob).toContain("node verify-npm-release.mjs");
+    expect(verifyJob).toContain('npm pack "npm@$NPM_CLI_VERSION"');
+    expect(verifyJob).toContain("$NPM_CLI_INTEGRITY");
+    expect(verifyJob).toContain("$NPM_CLI_SHA256");
+    expect(npmPublishJob).toContain("$NPM_CLI_SHA256");
     expect(verifyJob).toContain("npm run smoke:npm-verifier");
   });
 

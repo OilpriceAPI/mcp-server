@@ -29,6 +29,11 @@ function normalizeEnvironmentVariable(value, name) {
     ["description", "format", "isRequired", "isSecret", "name"],
     name,
   );
+  for (const booleanKey of ["isRequired", "isSecret"]) {
+    if (booleanKey in entry && typeof entry[booleanKey] !== "boolean") {
+      throw new Error(`${name}.${booleanKey} must be a boolean when present`);
+    }
+  }
   return {
     description: entry.description,
     format: entry.format,

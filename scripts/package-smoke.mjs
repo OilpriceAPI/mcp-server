@@ -54,12 +54,22 @@ function transportEnvironment(extra = {}) {
   return { ...environment, ...extra };
 }
 
-async function assertProtocolScope(entryPoint, baseUrl, scope, expectedCount) {
+async function assertProtocolScope(
+  entryPoint,
+  baseUrl,
+  scope,
+  expectedCount,
+  expectedRegisteredCount,
+) {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [entryPoint, "--scope", scope],
     env: transportEnvironment({ OILPRICEAPI_BASE_URL: baseUrl }),
     stderr: "pipe",
+  });
+  let stderrOutput = "";
+  transport.stderr?.on("data", (chunk) => {
+    stderrOutput += chunk.toString();
   });
   const client = new Client({
     name: `oilpriceapi-package-${scope}-smoke`,
@@ -71,6 +81,15 @@ async function assertProtocolScope(entryPoint, baseUrl, scope, expectedCount) {
     if (listed.tools.length !== expectedCount) {
       throw new Error(
         `${scope} scope listed ${listed.tools.length} tools; expected ${expectedCount}`,
+      );
+    }
+    if (
+      !stderrOutput.includes(
+        `scope=${scope} profile=all tools=${expectedCount}/${expectedRegisteredCount}`,
+      )
+    ) {
+      throw new Error(
+        `${scope} scope startup inventory did not match the packaged capability artifact: ${stderrOutput.trim()}`,
       );
     }
     const writeName = "opa_create_price_alert";
@@ -290,8 +309,20 @@ try {
     throw new Error("Packaged doctor --demo did not pass.");
   }
 
-  await assertProtocolScope(entryPoint, baseUrl, "read", 32);
-  await assertProtocolScope(entryPoint, baseUrl, "write", 36);
+  await assertProtocolScope(
+    entryPoint,
+    baseUrl,
+    "read",
+    32,
+    capabilities.tools.length,
+  );
+  await assertProtocolScope(
+    entryPoint,
+    baseUrl,
+    "write",
+    36,
+    capabilities.tools.length,
+  );
 
   process.stdout.write(
     "packaged MCP smoke passed: version, configs, doctor, capabilities, scopes, and protocol blocking\n",

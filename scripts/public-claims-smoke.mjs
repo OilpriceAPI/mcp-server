@@ -27,7 +27,8 @@ const MUTABLE_CLAIMS = [
   },
   {
     label: "hard-coded tool inventory",
-    pattern: /\b\d+(?:,\d{3})*\+?\s+(?:MCP\s+)?tools?\b/gi,
+    pattern:
+      /\b\d+(?:,\d{3})*\+?\s+(?:MCP\s+)?tools?\b|\b(?:MCP\s+)?tools?\s*[:=]\s*\d+(?:\s*\/\s*\d+)?\b|\b\d+[- ]tool\s+inventory\b|\btool[- ]count\s*[:=]\s*\d+\b/gi,
   },
   {
     label: "hard-coded Free feature entitlement",
@@ -148,6 +149,12 @@ function assertDetectorContract() {
     "Complete energy catalog",
     "174+ commodities",
     "26 MCP tools",
+    "tools=36",
+    "tools=32/36",
+    "MCP tools: 36",
+    "36-tool inventory",
+    "tool count: 36",
+    "tool-count=36",
     "100 API calls/month",
     "10,000 requests over 7 days",
     "Returns the series as it was knowable then",
