@@ -1,8 +1,12 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
+const liveSmokePath = fileURLToPath(
+  new URL("../../scripts/live-smoke.mjs", import.meta.url),
+);
 const readRepositoryFile = (path: string) =>
   readFileSync(new URL(path, `file://${repositoryRoot}/`), "utf8");
 
@@ -155,6 +159,34 @@ describe("directory-facing source metadata", () => {
     expect(liveJob).toContain(
       "OILPRICEAPI_TEST_KEY: ${{ secrets.OILPRICEAPI_TEST_KEY }}",
     );
+    expect(liveJob).toContain('OILPRICEAPI_LIVE_REQUIRED: "1"');
+  });
+
+  it("fails closed when the protected-main live key is absent", () => {
+    const required = spawnSync(process.execPath, [liveSmokePath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OILPRICEAPI_TEST_KEY: "",
+        OILPRICEAPI_LIVE_REQUIRED: "1",
+      },
+    });
+
+    expect(required.status).not.toBe(0);
+    expect(`${required.stdout}${required.stderr}`).toContain(
+      "OILPRICEAPI_TEST_KEY is required",
+    );
+
+    const optional = spawnSync(process.execPath, [liveSmokePath], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OILPRICEAPI_TEST_KEY: "",
+        OILPRICEAPI_LIVE_REQUIRED: "",
+      },
+    });
+    expect(optional.status).toBe(0);
+    expect(optional.stdout).toContain("SKIP: OILPRICEAPI_TEST_KEY not set");
   });
 
   it("runs built-in-only registry gates directly in OIDC jobs", () => {

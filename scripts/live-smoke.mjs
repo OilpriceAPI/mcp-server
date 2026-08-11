@@ -24,8 +24,8 @@
  * state, NOT a failure — the smoke passes on it. The smoke only fails on a
  * real error: non-200 HTTP, an auth failure, or a malformed/unexpected body.
  *
- * Auth: OILPRICEAPI_TEST_KEY (Bearer). SKIPS cleanly (exit 0) if absent so
- * forks / contributors without the secret are not blocked.
+ * Auth: OILPRICEAPI_TEST_KEY (Bearer). Local runs skip cleanly when absent;
+ * protected-main CI sets OILPRICEAPI_LIVE_REQUIRED=1 and fails closed.
  *
  * The key belongs to a dedicated synthetic smoke identity. A quota preflight
  * warns before 80% usage and refuses to start if the remaining allowance cannot
@@ -36,6 +36,7 @@
 const API_BASE =
   process.env.OILPRICEAPI_BASE_URL || "https://api.oilpriceapi.com";
 const KEY = process.env.OILPRICEAPI_TEST_KEY;
+const REQUIRE_KEY = process.env.OILPRICEAPI_LIVE_REQUIRED === "1";
 const SLUG = "ice-brent";
 const RATE_LIMIT_MS = 1100; // > 1 req/sec
 const RATE_LIMIT_RETRIES = 1;
@@ -46,8 +47,14 @@ const EXPECTED_REQUESTS = WRITE_SUBSCRIPTIONS ? 12 : 8;
 const QUOTA_WARNING_PERCENT = 80;
 
 if (!KEY) {
+  if (REQUIRE_KEY) {
+    console.error(
+      "ERROR: OILPRICEAPI_TEST_KEY is required for the protected-main live smoke test.",
+    );
+    process.exit(1);
+  }
   console.log(
-    "SKIP: OILPRICEAPI_TEST_KEY not set — skipping live smoke test (this is OK for forks).",
+    "SKIP: OILPRICEAPI_TEST_KEY not set; set OILPRICEAPI_LIVE_REQUIRED=1 to fail closed.",
   );
   process.exit(0);
 }

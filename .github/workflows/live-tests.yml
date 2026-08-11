@@ -96,4 +96,5 @@ jobs:
       - name: Live smoke test (ice-brent latest + curve)
         env:
           OILPRICEAPI_TEST_KEY: ${{ secrets.OILPRICEAPI_TEST_KEY }}
+          OILPRICEAPI_LIVE_REQUIRED: "1"
         run: npm run test:live
