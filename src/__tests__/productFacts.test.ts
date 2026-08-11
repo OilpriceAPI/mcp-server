@@ -96,16 +96,48 @@ describe("pinned product-facts contract", () => {
     const changedWording = legacyV1Facts();
     (changedWording.catalog as Record<string, unknown>).publicWording =
       "Changed without a new reviewed v2 contract.";
+    const unknownRoot = legacyV1Facts();
+    unknownRoot.publicExtension = "not part of the reviewed bridge";
+    const unknownNested = legacyV1Facts();
+    (unknownNested.offer as Record<string, unknown>).resetTimezone = "UTC";
 
     for (const body of [
       staleLimit,
       changedReview,
       changedWording,
+      unknownRoot,
+      unknownNested,
       { ...legacyV1Facts(), schemaVersion: "1foo" },
       { ...legacyV1Facts(), schemaVersion: "01.0.0" },
       { ...nativeV2Facts(), schemaVersion: "2foo" },
       { ...nativeV2Facts(), schemaVersion: "02.0.0" },
       { ...nativeV2Facts(), schemaVersion: "3.0.0" },
+    ]) {
+      expect(() => validateAndSanitizeProductFacts(body)).toThrow(
+        ProductFactsContractError,
+      );
+    }
+  });
+
+  it("requires exact native schema identity and rejects unknown v2 fields", () => {
+    const wrongSchema = nativeV2Facts();
+    wrongSchema.schemaUrl = "https://example.com/product-facts-v2.schema.json";
+    const wrongCanonical = nativeV2Facts();
+    wrongCanonical.canonicalUrl = "https://example.com/product-facts.json";
+    const wrongApiIdentity = nativeV2Facts();
+    (wrongApiIdentity.product as Record<string, unknown>).apiBaseUrl =
+      "https://example.com";
+    const unknownRoot = nativeV2Facts();
+    unknownRoot.publicExtension = "not in schema v2";
+    const unknownNested = nativeV2Facts();
+    (unknownNested.catalog as Record<string, unknown>).marketingCount = 174;
+
+    for (const body of [
+      wrongSchema,
+      wrongCanonical,
+      wrongApiIdentity,
+      unknownRoot,
+      unknownNested,
     ]) {
       expect(() => validateAndSanitizeProductFacts(body)).toThrow(
         ProductFactsContractError,
@@ -181,10 +213,7 @@ describe("ProductFactsProvider", () => {
       const headers = init?.headers as Record<string, string>;
       expect(headers.Accept).toBe("application/json");
       expect(headers.Authorization).toBeUndefined();
-      return jsonResponse(
-        { ...nativeV2Facts(), ignoredPublicExtension: "not projected" },
-        { etag: '"facts-v2"' },
-      );
+      return jsonResponse(nativeV2Facts(), { etag: '"facts-v2"' });
     }) as unknown as typeof fetch;
     const provider = new ProductFactsProvider({
       fetchImpl,
@@ -209,7 +238,6 @@ describe("ProductFactsProvider", () => {
     expect(result.facts.developer.authenticationHeader).toBe(
       "Authorization: Token YOUR_API_KEY",
     );
-    expect(result.facts).not.toHaveProperty("ignoredPublicExtension");
   });
 
   it("labels checksum-bound legacy v1 normalization", async () => {
@@ -296,6 +324,51 @@ describe("ProductFactsProvider", () => {
     );
   });
 
+  it("preserves reviewed v1 bridge provenance only inside the stale bound", async () => {
+    let now = 0;
+    let fail = false;
+    const fetchImpl = vi.fn(async () => {
+      if (fail) throw new Error("upstream unavailable");
+      return jsonResponse(legacyV1Facts());
+    }) as unknown as typeof fetch;
+    const provider = new ProductFactsProvider({
+      fetchImpl,
+      now: () => now,
+      freshTtlMs: 1_000,
+      maxStaleMs: 5_000,
+    });
+
+    const canonical = await provider.get();
+    expect(canonical.delivery).toMatchObject({
+      source: "canonical",
+      sourceSchemaVersion: "1.0.0",
+      normalization: "reviewed-v1-daily-bridge",
+    });
+
+    fail = true;
+    now = 2_000;
+    const stale = await provider.get();
+    expect(stale.delivery).toMatchObject({
+      source: "cache",
+      stale: true,
+      sourceSchemaVersion: "1.0.0",
+      normalization: "reviewed-v1-daily-bridge",
+    });
+    expect(stale.facts.offer).toMatchObject({
+      freeRequestLimit: 50,
+      freeRequestWindow: "day",
+    });
+
+    now = 6_000;
+    const expired = await provider.get();
+    expect(expired.delivery).toMatchObject({
+      source: "pinned",
+      stale: false,
+      sourceSchemaVersion: "2.0.0",
+      normalization: "native-v2",
+    });
+  });
+
   it("returns the explicit pinned fallback on timeout", async () => {
     const timeout = Object.assign(new Error("request aborted"), {
       name: "AbortError",
@@ -319,6 +392,8 @@ describe("ProductFactsProvider", () => {
     for (const body of [
       { schemaVersion: "1.0.0" },
       { ...nativeV2Facts(), schemaVersion: "9.0.0" },
+      { ...nativeV2Facts(), schemaUrl: "https://example.com/schema.json" },
+      { ...nativeV2Facts(), ignoredPublicExtension: "not projected" },
       { ...nativeV2Facts(), internalPlanId: "price_do_not_publish" },
     ]) {
       const provider = new ProductFactsProvider({

@@ -1,23 +1,36 @@
 #!/usr/bin/env node
 
+import { readFile } from "node:fs/promises";
 import {
   validateRegistryPayload,
   verifyRegistryRelease,
 } from "./verify-mcp-registry-release.mjs";
 
-const version = "3.2.1";
+const expectedServer = JSON.parse(
+  await readFile(new URL("../server.json", import.meta.url), "utf8"),
+);
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function registryNormalizedServer() {
+  const server = clone(expectedServer);
+  for (const packageEntry of server.packages) {
+    for (const environmentVariable of packageEntry.environmentVariables ?? []) {
+      if (environmentVariable.isRequired === false) {
+        delete environmentVariable.isRequired;
+      }
+      if (environmentVariable.isSecret === false) {
+        delete environmentVariable.isSecret;
+      }
+    }
+  }
+  return server;
+}
+
 const valid = {
-  server: {
-    name: "io.github.OilpriceAPI/mcp-server",
-    version,
-    packages: [
-      {
-        registryType: "npm",
-        identifier: "oilpriceapi-mcp",
-        version,
-      },
-    ],
-  },
+  server: registryNormalizedServer(),
   _meta: {
     "io.modelcontextprotocol.registry/official": {
       status: "active",
@@ -26,17 +39,39 @@ const valid = {
   },
 };
 
-validateRegistryPayload(valid, version);
+validateRegistryPayload(valid, expectedServer);
+
+function withServerMutation(mutator) {
+  const payload = clone(valid);
+  mutator(payload.server);
+  return payload;
+}
+
 for (const payload of [
-  { ...valid, server: { ...valid.server, name: "wrong/server" } },
-  { ...valid, server: { ...valid.server, version: "3.2.0" } },
-  {
-    ...valid,
-    server: {
-      ...valid.server,
-      packages: [{ ...valid.server.packages[0], version: "3.2.0" }],
-    },
-  },
+  withServerMutation((server) => {
+    server.name = "wrong/server";
+  }),
+  withServerMutation((server) => {
+    server.version = "3.2.0";
+  }),
+  withServerMutation((server) => {
+    server.description = "Drifted description";
+  }),
+  withServerMutation((server) => {
+    server.repository.url = "https://example.com/wrong";
+  }),
+  withServerMutation((server) => {
+    server.packages[0].version = "3.2.0";
+  }),
+  withServerMutation((server) => {
+    server.packages[0].transport.type = "streamable-http";
+  }),
+  withServerMutation((server) => {
+    server.packages[0].environmentVariables[0].description = "Drifted";
+  }),
+  withServerMutation((server) => {
+    server.unreviewedField = true;
+  }),
   {
     ...valid,
     _meta: {
@@ -49,7 +84,7 @@ for (const payload of [
 ]) {
   let rejected = false;
   try {
-    validateRegistryPayload(payload, version);
+    validateRegistryPayload(payload, expectedServer);
   } catch {
     rejected = true;
   }
@@ -58,7 +93,7 @@ for (const payload of [
 
 let calls = 0;
 await verifyRegistryRelease({
-  expectedVersion: version,
+  expectedServer,
   attempts: 2,
   delayMs: 0,
   fetchImpl: async (_url, init) => {
@@ -71,7 +106,9 @@ await verifyRegistryRelease({
       status: 200,
       json: async () =>
         calls === 1
-          ? { ...valid, server: { ...valid.server, version: "3.2.0" } }
+          ? withServerMutation((server) => {
+              server.description = "Drifted description";
+            })
           : valid,
     };
   },

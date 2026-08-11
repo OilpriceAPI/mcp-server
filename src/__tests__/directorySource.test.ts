@@ -114,7 +114,25 @@ describe("directory-facing source metadata", () => {
     expect(npmPublishJob).not.toContain("npm ci");
     expect(npmPublishJob).not.toContain("npm test");
     expect(npmPublishJob).toContain("--ignore-scripts --provenance");
-    expect(npmPublishJob).toContain("EXPECTED_INTEGRITY");
-    expect(npmPublishJob).toContain("Public npm readback verified");
+    expect(npmPublishJob).toContain("artifact.sha256");
+    expect(npmPublishJob).toContain("NPM_RELEASE_EXPECTED_INTEGRITY");
+    expect(npmPublishJob).toContain("node verify-npm-release.mjs");
+    expect(verifyJob).toContain("npm run smoke:npm-verifier");
+  });
+
+  it("pins every workflow action that participates in release proof", () => {
+    for (const workflow of [publishWorkflow, backfillWorkflow, liveWorkflow]) {
+      expect(workflow).not.toMatch(/uses:\s+actions\/[^@\s]+@v\d+/);
+      for (const match of workflow.matchAll(/uses:\s+actions\/[^@\s]+@([^\s#]+)/g)) {
+        expect(match[1]).toMatch(/^[0-9a-f]{40}$/);
+      }
+    }
+  });
+
+  it("proves the packed engine contract on every supported Node line", () => {
+    expect(liveWorkflow).toContain('node: ["18", "20", "22", "24"]');
+    expect(liveWorkflow).toContain("node-version: ${{ matrix.node }}");
+    expect(liveWorkflow).toContain("npm run smoke:package");
+    expect(liveWorkflow).toContain("npm run smoke:product-facts");
   });
 });

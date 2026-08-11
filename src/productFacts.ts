@@ -139,6 +139,22 @@ function requiredBoolean(record: JsonRecord, key: string): boolean {
   return value;
 }
 
+function assertExactKeys(
+  record: JsonRecord,
+  expectedKeys: readonly string[],
+  name: string,
+): void {
+  const expected = new Set(expectedKeys);
+  const unexpected = Object.keys(record)
+    .filter((key) => !expected.has(key))
+    .sort();
+  if (unexpected.length > 0) {
+    throw new ProductFactsContractError(
+      `${name} contains unsupported fields (${unexpected.length})`,
+    );
+  }
+}
+
 function assertHttps(value: string, key: string): string {
   let parsed: URL;
   try {
@@ -153,6 +169,7 @@ function assertHttps(value: string, key: string): string {
   ) {
     throw new ProductFactsContractError(key + " must use HTTPS");
   }
+
   return value;
 }
 
@@ -222,6 +239,83 @@ function validateProductFacts(input: unknown): ValidatedProductFacts {
       "unsupported product-facts schema " + schemaVersion,
     );
   }
+
+  assertExactKeys(
+    root,
+    [
+      "schemaVersion",
+      "contractVersion",
+      "reviewedAt",
+      "reviewOwner",
+      "schemaUrl",
+      "canonicalUrl",
+      "product",
+      "offer",
+      "catalog",
+      "freshness",
+      "dataRights",
+      "developer",
+    ],
+    "product-facts",
+  );
+  assertExactKeys(
+    product,
+    [
+      "name",
+      "website",
+      "apiBaseUrl",
+      "documentationUrl",
+      "description",
+    ],
+    "product",
+  );
+  assertExactKeys(
+    offer,
+    schemaMajor === 2
+      ? [
+          "trialScope",
+          "creditCardRequiredForTrial",
+          "pricingUrl",
+          "qualification",
+          "trialDays",
+          "trialRequests",
+          "freeRequestLimit",
+          "freeRequestWindow",
+        ]
+      : [
+          "trialScope",
+          "creditCardRequiredForTrial",
+          "pricingUrl",
+          "qualification",
+          "trialDays",
+          "trialRequests",
+          "freeRequestsPerMonth",
+        ],
+    "offer",
+  );
+  assertExactKeys(
+    catalog,
+    ["publicWording", "exactCountPublished", "catalogUrl"],
+    "catalog",
+  );
+  assertExactKeys(
+    freshness,
+    ["publicWording", "fixedSitewideCadence"],
+    "freshness",
+  );
+  assertExactKeys(dataRights, ["publicWording", "policyUrl"], "dataRights");
+  assertExactKeys(
+    developer,
+    [
+      "authenticationHeader",
+      "environmentVariable",
+      "firstRequestMethod",
+      "firstRequestPath",
+      "firstRequestUrl",
+      "demoRequestUrl",
+    ],
+    "developer",
+  );
 
   const contractVersion = requiredIsoDate(root, "contractVersion");
   const reviewedAt = requiredIsoDate(root, "reviewedAt");
@@ -301,6 +395,23 @@ function validateProductFacts(input: unknown): ValidatedProductFacts {
       ),
     },
   } satisfies Omit<ProductFacts, "offer">;
+
+  const expectedSchemaUrl = `https://api.oilpriceapi.com/schemas/product-facts-v${schemaMajor}.schema.json`;
+  if (commonFacts.schemaUrl !== expectedSchemaUrl) {
+    throw new ProductFactsContractError(
+      `schemaUrl must match reviewed schema major ${schemaMajor}`,
+    );
+  }
+  if (
+    commonFacts.canonicalUrl !==
+      "https://api.oilpriceapi.com/product-facts.json" ||
+    commonFacts.product.name !== "OilPriceAPI" ||
+    commonFacts.product.apiBaseUrl !== "https://api.oilpriceapi.com"
+  ) {
+    throw new ProductFactsContractError(
+      "product-facts canonical identity is incompatible",
+    );
+  }
 
   const commonOffer = {
     trialScope: requiredString(offer, "trialScope"),

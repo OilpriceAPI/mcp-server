@@ -176,6 +176,24 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 npm install -g oilpriceapi-mcp
 ```
 
+### Build the Container
+
+Container builds require the source revision and commit timestamp so the image,
+capability manifest, and build metadata are traceable to the same checkout:
+
+```bash
+docker build \
+  --build-arg SOURCE_COMMIT="$(git rev-parse HEAD)" \
+  --build-arg SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" \
+  -t oilpriceapi-mcp .
+docker run --rm oilpriceapi-mcp --version
+docker run --rm oilpriceapi-mcp --capabilities --json
+```
+
+The runtime image uses the unprivileged `node` user. Omit `OILPRICEAPI_KEY` for
+the limited keyless demo, or inject it with your container platform's secret
+manager. Do not bake credentials into the image.
+
 ## Environment Variables
 
 | Variable                     | Required | Description                                                                                                                                                                                                                                                                                            |
@@ -400,7 +418,7 @@ Questions: [support@oilpriceapi.com](mailto:support@oilpriceapi.com)
 Where the free/paid line sits for this server (#10):
 
 - **Always open**: the MCP server itself (MIT), setup, docs, discovery (tool listing), and keyless demo mode for low-volume evaluation.
-- **Free API key**: the core trial includes 10,000 requests over 7 days with no credit card; afterward, use the [public product facts](https://api.oilpriceapi.com/product-facts.json) or your account response for the current Free allowance and reset window. Dataset access varies by plan and entitlement.
+- **API key**: use the [public product facts](https://api.oilpriceapi.com/product-facts.json) and your account response for the current trial, allowance, reset window, and dataset entitlement. Keyless demo mode remains available for a limited dataset.
 - **Behind the paywall**: high-volume usage and premium datasets (futures, energy intelligence, well permits/production, alerts at scale). When a request crosses that boundary the API returns a standard **HTTP 402/403/429 with the exact limit or feature gate in the body**, and this server surfaces that message plus an upgrade link — agents get a machine-readable stop, never a silent failure.
 - **x402 protocol**: per-request crypto micropayments via the [x402 protocol](https://www.x402.org/) are **not currently supported** — payment is by account plan (Stripe), authenticated with your API key.
 

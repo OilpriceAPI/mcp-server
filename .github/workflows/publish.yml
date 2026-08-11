@@ -13,17 +13,18 @@ jobs:
   verify:
     name: Verify release candidate
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
@@ -63,6 +64,12 @@ jobs:
       - name: Smoke packed CLI, capability, scope, and protocol contracts
         run: npm run smoke:package
 
+      - name: Smoke deterministic non-root container and live keyless stdio
+        run: npm run smoke:docker
+
+      - name: Smoke npm latest, integrity, and provenance verifier
+        run: npm run smoke:npm-verifier
+
       - name: Install pinned MCP registry publisher
         run: |
           ARCHIVE="$RUNNER_TEMP/$MCP_PUBLISHER_ARCHIVE"
@@ -85,9 +92,10 @@ jobs:
           jq -e '.[0] | {filename, integrity, shasum}' \
             "$RUNNER_TEMP/npm-pack.json" > "$ARTIFACT_DIR/pack-metadata.json"
           mv "$PACKAGE_FILE" "$ARTIFACT_DIR/$PACKAGE_FILE"
-          (cd "$ARTIFACT_DIR" && sha256sum "$PACKAGE_FILE" > package.sha256)
+          cp "$GITHUB_WORKSPACE/scripts/verify-npm-release.mjs" "$ARTIFACT_DIR/"
+          (cd "$ARTIFACT_DIR" && sha256sum "$PACKAGE_FILE" pack-metadata.json verify-npm-release.mjs > artifact.sha256)
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: verified-npm-package
           path: ${{ runner.temp }}/release-artifact/
@@ -97,19 +105,20 @@ jobs:
   publish:
     name: Publish verified package to npm
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: verify
     permissions:
       contents: read
       id-token: write
 
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: verified-npm-package
           path: ${{ runner.temp }}/release-artifact
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
@@ -125,7 +134,7 @@ jobs:
         working-directory: ${{ runner.temp }}/release-artifact
         run: |
           set -euo pipefail
-          sha256sum -c package.sha256
+          sha256sum -c artifact.sha256
           PACKAGE_FILE=$(jq -er '.filename' pack-metadata.json)
           EXPECTED_INTEGRITY=$(jq -er '.integrity' pack-metadata.json)
           NAME=$(tar -xOf "$PACKAGE_FILE" package/package.json | jq -er '.name')
@@ -141,20 +150,10 @@ jobs:
             timeout 10m npm publish "$PACKAGE_FILE" --ignore-scripts --provenance --access public
           fi
 
-          for ATTEMPT in $(seq 1 12); do
-            PUBLIC_INTEGRITY=$(timeout 30s npm view "$NAME@$VERSION" dist.integrity --json 2>/dev/null | jq -r '. // empty' || true)
-            if [ "$PUBLIC_INTEGRITY" = "$EXPECTED_INTEGRITY" ]; then
-              echo "Public npm readback verified for $NAME@$VERSION."
-              exit 0
-            fi
-            if [ -n "$PUBLIC_INTEGRITY" ]; then
-              echo "::error::public npm integrity does not match the verified tarball"
-              exit 1
-            fi
-            sleep 5
-          done
-          echo "::error::npm did not expose $NAME@$VERSION within the bounded readback window"
-          exit 1
+          NPM_RELEASE_EXPECTED_NAME="$NAME" \
+          NPM_RELEASE_EXPECTED_VERSION="$VERSION" \
+          NPM_RELEASE_EXPECTED_INTEGRITY="$EXPECTED_INTEGRITY" \
+            node verify-npm-release.mjs
 
   # Publish to the official MCP registry (registry.modelcontextprotocol.io)
   # after npm succeeds. Pre-validation protects npm from known metadata drift;
@@ -164,17 +163,18 @@ jobs:
   registry:
     name: Publish to MCP registry
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: publish
     permissions:
       contents: read
       id-token: write
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
 

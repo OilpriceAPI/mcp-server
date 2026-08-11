@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * OilPriceAPI MCP Server v3.0.0
+ * OilPriceAPI MCP Server
  *
  * Source-timestamped oil, gas, and related energy data for Claude, Cursor,
  * VS Code, and any MCP-compatible client.
@@ -17,19 +17,19 @@
  * limit/feature gate hit by the API plus an upgrade link (see ApiGateError in
  * makeApiRequest and alertHttpError for the authenticated tools).
  *
- * 32 tools total (opa_ prefixed):
+ * Tools are registered with the opa_ prefix and exposed by scope:
  *
- * 23 read-only tools: reviewed product facts, prices, history, futures, marine
+ * Read-only tools cover reviewed product facts, prices, history, futures, marine
  * fuels, rig counts, drilling, diesel-by-state, LTL and parcel fuel
  * surcharges, storage, OPEC production, forecasts, EIA oil inventories, well
  * permits, well production, and refining spreads.
  *
- * 4 authenticated price-alert tools (opa_*_price_alert / opa_get_alert_triggers):
+ * Authenticated price-alert tools (opa_*_price_alert / opa_get_alert_triggers):
  * create/list/delete persistent price alerts tied to the user's account and read
  * recent trigger activity. These wrap the existing /v1/alerts engine and REQUIRE
  * an API key (OILPRICEAPI_KEY).
  *
- * 5 authenticated agent-subscription + market-brief tools (#3245 Phase 2):
+ * Authenticated agent-subscription and market-brief tools include:
  * opa_get_market_brief (multi-commodity structured + narrative summary) and
  * opa_create_price_subscription / opa_list_subscriptions /
  * opa_delete_subscription / opa_get_subscription_events. Subscriptions

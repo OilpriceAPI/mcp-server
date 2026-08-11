@@ -18,22 +18,36 @@ const MUTABLE_CLAIMS = [
   {
     label: "absolute commodity-catalog coverage",
     pattern:
-      /\b(?:all|every)\s+(?:tracked\s+|available\s+)?(?:commodity|commodities|energy commodities)\s+(?:prices|catalog)\b|\bfull\s+(?:commodity\s+)?catalog\b/gi,
+      /\b(?:all|every)\s+(?:(?:tracked|available|supported|known)\s+)?(?:commodity|commodities|energy commodities)\s+(?:prices|catalog|data)\b|\b(?:full|complete|entire)\s+(?:(?:commodity|energy)\s+)?catalog\b/gi,
+  },
+  {
+    label: "hard-coded commodity-catalog size",
+    pattern:
+      /\b\d+(?:,\d{3})*(?:\.\d+)?\+\s+(?:tracked\s+|available\s+|supported\s+)?(?:commodities|commodity\s+(?:codes|prices))\b|\b(?:demo|catalog|dataset|set|supports?|includes?|covers?|offers?|tracks?)\b[^\n.]{0,60}\b\d+(?:,\d{3})*(?:\.\d+)?\+?\s+(?:commodities|commodity\s+(?:codes|prices))\b|\b\d+\s+commodities\s+(?:vs\.?|versus)\s+\d+\+?/gi,
+  },
+  {
+    label: "hard-coded tool inventory",
+    pattern: /\b\d+(?:,\d{3})*\+?\s+(?:MCP\s+)?tools?\b/gi,
   },
   {
     label: "hard-coded Free feature entitlement",
     pattern:
-      /\bfree(?:\s+tier|\s+plan)?\b[^\n.]{0,120}(?:\b\d+\s*(?:active\s+)?(?:watches?|codes?|commodit(?:y|ies)|hours?|minutes?)\b|\b\d+\s*[hm]\b|\b(?:serves|allows|limited to)\b)/gi,
+      /\bfree(?:\s+tier|\s+plan|\s+users?)?\b[^\n.]{0,120}(?:\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s*(?:active\s+)?(?:watch(?:es)?|codes?|commodit(?:y|ies)|hours?|minutes?)\b|\b\d+\s*[hm]\b|\b(?:serves|allows|includes|supports|limited to|comes with)\b)/gi,
   },
   {
-    label: "hard-coded paid-plan price",
+    label: "hard-coded paid-plan entitlement",
     pattern:
-      /\b(?:Developer|Starter|Professional|Scale)\b[^\n.]{0,80}\$\d+(?:\.\d+)?(?:\s*\/\s*(?:mo|month)|\s+per\s+month)?/gi,
+      /\b(?:Developer|Starter|Professional|Scale)\b[^\n.]{0,80}(?:\$\d+(?:\.\d+)?(?:\s*\/\s*(?:mo|month)|\s+per\s+month)?|\b(?:plan|tier)\b)|\bReservoir Mastery\b/gi,
+  },
+  {
+    label: "hard-coded request-rate claim",
+    pattern:
+      /\b\d[\d,]*(?:\.\d+)?\s*(?:API\s+)?(?:requests?|calls?|queries?|hits?|credits?)\s*(?:\/\s*|per\s+|a\s+|every\s+|(?:over|within|in|during)\s+)(?:a\s+|an\s+|\d+\s*)?(?:seconds?|minutes?|hours?|days?|weeks?|months?|years?|sec|min|hr|mo|yr)\b/gi,
   },
   {
     label: "absolute as-of knowability",
     pattern:
-      /\bas it was knowable\b|\blater[- ]collected rows (?:are )?absent\b/gi,
+      /\bas it was knowable\b|\blater[- ]collected rows (?:are )?absent\b|\bno[- ]lookahead\b|\blater revisions (?:are )?rolled back\b/gi,
   },
 ];
 
@@ -69,13 +83,35 @@ export function findMutableClaims(text) {
 }
 
 function sourceSurfaces() {
-  const roots = ["README.md", "package.json", "server.json", "manifest.json"]
-    .map((path) => join(repositoryRoot, path));
+  const publicExtensions = new Set([
+    ".json",
+    ".md",
+    ".txt",
+    ".html",
+    ".yml",
+    ".yaml",
+  ]);
+  const roots = readdirSync(repositoryRoot, { withFileTypes: true })
+    .filter(
+      (entry) =>
+        entry.isFile() &&
+        entry.name !== "package-lock.json" &&
+        publicExtensions.has(extname(entry.name)),
+    )
+    .map((entry) => join(repositoryRoot, entry.name));
   const source = walkFiles(join(repositoryRoot, "src")).filter((path) => {
     const rel = relative(repositoryRoot, path);
-    return !rel.includes("/__tests__/") && [".ts", ".json"].includes(extname(path));
+    return (
+      !rel.includes("/__tests__/") &&
+      !/\.(?:test|spec)\.[^.]+$/.test(rel) &&
+      [".ts", ".tsx", ".js", ".mjs", ".cjs"].includes(extname(path)) ||
+      publicExtensions.has(extname(path))
+    );
   });
-  return [...roots, ...source];
+  const docs = walkFiles(join(repositoryRoot, "docs")).filter((path) =>
+    publicExtensions.has(extname(path)),
+  );
+  return [...new Set([...roots, ...source, ...docs])];
 }
 
 function packedSurfaces() {
@@ -105,10 +141,18 @@ function assertDetectorContract() {
     "All commodity prices in one call",
     "Full commodity catalog",
     "Free tier allows 3 codes",
+    "Free users can create one watch",
     "free: 1 watch, 3 codes, 1h minimum interval",
     "Developer, $19/mo",
+    "Professional plan required",
+    "Complete energy catalog",
+    "174+ commodities",
+    "26 MCP tools",
+    "100 API calls/month",
+    "10,000 requests over 7 days",
     "Returns the series as it was knowable then",
     "later-collected rows are absent",
+    "no lookahead bias",
   ];
   for (const value of positives) {
     if (findMutableClaims(value).length === 0) {
@@ -119,6 +163,7 @@ function assertDetectorContract() {
     "All tools are prefixed with opa_",
     "The API returns account-specific entitlements",
     "50 states plus DC",
+    "The suite ran 174 tests",
     "Free tier: ${freeLimit} requests/${freeWindow}",
     "Dataset access varies by plan and account entitlement",
   ];
