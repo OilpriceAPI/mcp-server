@@ -147,8 +147,9 @@ describe("directory-facing source metadata", () => {
     const liveJobStart = liveWorkflow.indexOf("\n  live:\n");
     expect(liveJobStart).toBeGreaterThan(-1);
     const liveJob = liveWorkflow.slice(liveJobStart);
+    expect(liveJob).toContain("github.event_name != 'pull_request'");
     expect(liveJob).toContain(
-      "if: ${{ github.event_name != 'pull_request' }}",
+      "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
     );
     expect(liveJob).not.toContain("github.event.pull_request.head.repo.full_name");
     expect(liveJob).toContain(

@@ -5,8 +5,8 @@ name: Live API tests
 # (/v1/futures/latest?contract= — a route that does not exist). The unit
 # suite (vitest) mocks fetch, so only this job exercises the real endpoints.
 #
-# The secret-bearing smoke runs only after merge or by an explicit manual
-# dispatch. Pull-request code never receives the production synthetic key.
+# The secret-bearing smoke runs only from the repository's default branch.
+# Pull-request and manually dispatched feature-branch code never receive it.
 
 on:
   push:
@@ -82,8 +82,8 @@ jobs:
     name: Live API smoke test
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Never expose the production synthetic key to pull-request code.
-    if: ${{ github.event_name != 'pull_request' }}
+    # Never expose the production synthetic key to unmerged code.
+    if: ${{ github.event_name != 'pull_request' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
