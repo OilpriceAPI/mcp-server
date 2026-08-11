@@ -72,6 +72,28 @@ try {
     "requires tag v3.2.1",
   );
 
+  const validBackfill = runVerifier({
+    ...validEnv,
+    MCP_PROVENANCE_MODE: "registry-backfill",
+    GITHUB_REF_TYPE: "branch",
+    GITHUB_REF_NAME: "main",
+  });
+  if (
+    validBackfill.status !== 0 ||
+    !validBackfill.stdout.includes("Release provenance verified: main")
+  ) {
+    throw new Error("release verifier did not accept exact protected main");
+  }
+  expectFailure(
+    {
+      ...validEnv,
+      MCP_PROVENANCE_MODE: "registry-backfill",
+      GITHUB_REF_TYPE: "branch",
+      GITHUB_REF_NAME: "feature",
+    },
+    "requires branch main",
+  );
+
   writeFileSync(join(temp, "unmerged.txt"), "unmerged\n");
   git("add", "unmerged.txt");
   git("commit", "-m", "unmerged release candidate");
@@ -80,6 +102,16 @@ try {
   expectFailure(
     { ...validEnv, GITHUB_SHA: unmergedSha },
     "is not an ancestor of protected origin/main",
+  );
+  expectFailure(
+    {
+      ...validEnv,
+      MCP_PROVENANCE_MODE: "registry-backfill",
+      GITHUB_REF_TYPE: "branch",
+      GITHUB_REF_NAME: "main",
+      GITHUB_SHA: unmergedSha,
+    },
+    "release ref, event, and checkout must resolve to one commit",
   );
 } finally {
   rmSync(temp, { recursive: true, force: true });

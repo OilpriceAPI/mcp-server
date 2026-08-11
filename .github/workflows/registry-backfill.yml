@@ -25,11 +25,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
+
+      - name: Verify dispatch is exact protected main
+        env:
+          MCP_PROVENANCE_MODE: registry-backfill
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          npm run verify:release-provenance
 
       - name: Verify release metadata
         run: npm run verify:release-metadata
@@ -37,7 +45,11 @@ jobs:
       - name: Verify version exists on npm (registry must never lead npm)
         run: |
           PKG=$(jq -r .version package.json)
-          npm view "oilpriceapi-mcp@$PKG" version
+          PUBLISHED=$(timeout 30s npm view "oilpriceapi-mcp@$PKG" version)
+          if [ "$PUBLISHED" != "$PKG" ]; then
+            echo "::error::npm returned $PUBLISHED instead of $PKG"
+            exit 1
+          fi
 
       - name: Install pinned MCP registry publisher
         run: |
@@ -53,7 +65,7 @@ jobs:
         run: timeout 2m mcp-publisher validate
 
       - name: Check whether the public registry already matches
-        id: registry-state
+        id: registry_state
         env:
           MCP_REGISTRY_ATTEMPTS: "1"
           MCP_REGISTRY_DELAY_MS: "0"
@@ -65,11 +77,11 @@ jobs:
           fi
 
       - name: Login to MCP registry (GitHub OIDC)
-        if: steps.registry-state.outputs.current != 'true'
+        if: steps.registry_state.outputs.current != 'true'
         run: timeout 2m mcp-publisher login github-oidc
 
       - name: Publish server.json
-        if: steps.registry-state.outputs.current != 'true'
+        if: steps.registry_state.outputs.current != 'true'
         run: timeout 5m mcp-publisher publish
 
       - name: Verify public MCP registry readback

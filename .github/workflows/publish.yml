@@ -211,7 +211,7 @@ jobs:
         run: timeout 2m mcp-publisher validate
 
       - name: Check whether the public registry already matches
-        id: registry-state
+        id: registry_state
         env:
           MCP_REGISTRY_ATTEMPTS: "1"
           MCP_REGISTRY_DELAY_MS: "0"
@@ -223,11 +223,11 @@ jobs:
           fi
 
       - name: Login to MCP registry (GitHub OIDC)
-        if: steps.registry-state.outputs.current != 'true'
+        if: steps.registry_state.outputs.current != 'true'
         run: timeout 2m mcp-publisher login github-oidc
 
       - name: Publish server.json
-        if: steps.registry-state.outputs.current != 'true'
+        if: steps.registry_state.outputs.current != 'true'
         run: timeout 5m mcp-publisher publish
 
       - name: Verify public MCP registry readback

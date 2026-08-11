@@ -91,6 +91,11 @@ describe("directory-facing source metadata", () => {
     );
     expect(packageJson.scripts).toHaveProperty("smoke:release-provenance");
     expect(liveWorkflow).toContain("npm run smoke:release-provenance");
+    expect(backfillWorkflow).toContain("fetch-depth: 0");
+    expect(backfillWorkflow).toContain(
+      "MCP_PROVENANCE_MODE: registry-backfill",
+    );
+    expect(backfillWorkflow).toContain("npm run verify:release-provenance");
   });
 
   it("keeps dependency execution outside OIDC publication jobs", () => {

@@ -15,10 +15,20 @@ const expectedTag = `v${packageJson.version}`;
 const refType = process.env.GITHUB_REF_TYPE;
 const refName = process.env.GITHUB_REF_NAME;
 const eventSha = process.env.GITHUB_SHA;
+const mode = process.env.MCP_PROVENANCE_MODE || "release";
 
-if (refType !== "tag" || refName !== expectedTag) {
+if (!["release", "registry-backfill"].includes(mode)) {
+  throw new Error(`unsupported release provenance mode: ${mode}`);
+}
+if (
+  (mode === "release" && (refType !== "tag" || refName !== expectedTag)) ||
+  (mode === "registry-backfill" &&
+    (refType !== "branch" || refName !== "main"))
+) {
+  const expectedRef =
+    mode === "release" ? `tag ${expectedTag}` : "branch main";
   throw new Error(
-    `release provenance requires tag ${expectedTag}; received ${refType ?? "missing"} ${refName ?? "missing"}`,
+    `release provenance requires ${expectedRef}; received ${refType ?? "missing"} ${refName ?? "missing"}`,
   );
 }
 if (!/^[0-9a-f]{40}$/.test(eventSha || "")) {
@@ -26,10 +36,13 @@ if (!/^[0-9a-f]{40}$/.test(eventSha || "")) {
 }
 
 const headSha = git("rev-parse", "HEAD");
-const tagSha = git("rev-parse", `${expectedTag}^{commit}`);
-if (headSha !== eventSha || tagSha !== eventSha) {
+const refSha =
+  mode === "release"
+    ? git("rev-parse", `${expectedTag}^{commit}`)
+    : git("rev-parse", "refs/remotes/origin/main");
+if (headSha !== eventSha || refSha !== eventSha) {
   throw new Error(
-    `release tag, event, and checkout must resolve to one commit: tag=${tagSha} event=${eventSha} head=${headSha}`,
+    `release ref, event, and checkout must resolve to one commit: ref=${refSha} event=${eventSha} head=${headSha}`,
   );
 }
 
@@ -45,6 +58,7 @@ try {
   );
 }
 
+const verifiedRef = mode === "release" ? expectedTag : "main";
 process.stdout.write(
-  `Release provenance verified: ${expectedTag} -> ${eventSha} on origin/main.\n`,
+  `Release provenance verified: ${verifiedRef} -> ${eventSha} on origin/main.\n`,
 );
