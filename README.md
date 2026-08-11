@@ -235,9 +235,9 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | ------------------------- | ----------------------------------------------------------------------------------------------- |
 | `opa_get_product_facts`   | Reviewed product, offer, freshness, auth, integration, entitlement, and data-rights contract    |
 | `opa_get_price`           | Current spot price for a single commodity                                                       |
-| `opa_market_overview`     | All commodity prices in one call, grouped by category                                           |
+| `opa_market_overview`     | Account-visible current prices returned by the API, grouped by category                         |
 | `opa_compare_prices`      | Side-by-side comparison of 2-5 commodities with spread                                          |
-| `opa_list_commodities`    | Full commodity catalog (fetched live from API)                                                  |
+| `opa_list_commodities`    | Account-visible commodity catalog returned by the live API                                      |
 | `opa_get_history`         | Historical prices with high/low/avg/change (day/week/month/year)                                |
 | `opa_get_futures`         | Front-month futures (Brent BZ, WTI CL, ICE Gasoil, TTF, JKM, EUA)                               |
 | `opa_get_futures_curve`   | Full forward curve with contango/backwardation analysis                                         |
@@ -270,7 +270,7 @@ These tools create and manage **persistent** price alerts tied to your OilPriceA
 
 ### Market Brief & Subscription Tools (authenticated)
 
-The market brief gives a multi-commodity snapshot in one call. Subscriptions ("watches") are **persistent, recurring** snapshots tied to your account — the API records an event every interval, and the agent **polls** for new events via a per-user cursor (events are polled, not pushed — there is no always-on connection). These **require an API key** (`OILPRICEAPI_KEY`). A subscription differs from an alert: a watch always emits an event each interval (a running log), whereas an alert fires only on a threshold crossing. Per-tier limits apply (free: 1 watch, 3 codes, 1h minimum interval); the API returns the exact limit if exceeded.
+The market brief gives a multi-commodity snapshot in one call. Subscriptions ("watches") are **persistent, recurring** snapshots tied to your account — the API records an event every interval, and the agent **polls** for new events via a per-user cursor (events are polled, not pushed — there is no always-on connection). These **require an API key** (`OILPRICEAPI_KEY`). A subscription differs from an alert: a watch always emits an event each interval (a running log), whereas an alert fires only on a threshold crossing. Per-account code, watch, and cadence limits apply; the API response is authoritative and returns the current limit when exceeded.
 
 | Tool                            | Description                                                                           |
 | ------------------------------- | ------------------------------------------------------------------------------------- |
@@ -311,7 +311,7 @@ Subscribable price data (JSON):
 | WTI Crude     | `price://wti`                 | US benchmark crude oil price                |
 | Natural Gas   | `price://natural-gas`         | US Henry Hub natural gas price              |
 | Diesel        | `price://diesel`              | US national average diesel price            |
-| All Prices    | `price://all`                 | All tracked commodity prices                |
+| Market View   | `price://all`                 | Account-visible current prices from the API |
 
 ### Product Facts and Model Knowledge
 

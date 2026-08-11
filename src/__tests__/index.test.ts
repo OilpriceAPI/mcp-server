@@ -1281,24 +1281,24 @@ describe("tool registration metadata", () => {
     expect(tools.opa_get_data_quality).toBeDefined();
   });
 
-  // #63 — agents read schemas, not pricing pages: every plan-gated tool must
-  // state its required plan in the description, so discovery does not cost 402s.
+  // #63 — agents read schemas, not pricing pages: every gated tool must explain
+  // how to retrieve current entitlement details without freezing mutable prices.
   const GATED_TOOL_LABELS: Record<string, RegExp> = {
-    opa_get_history: /Developer, \$19\/mo/,
-    opa_get_futures: /Professional plan \(\$99\/mo\)/,
-    opa_get_futures_curve: /Professional plan \(\$99\/mo\)/,
-    opa_get_marine_fuels: /Professional plan \(\$99\/mo\)/,
-    opa_get_spread: /Professional plan \(\$99\/mo\)/,
-    opa_get_storage: /Reservoir Mastery/,
-    opa_get_rig_counts: /Reservoir Mastery/,
-    opa_get_opec_production: /Reservoir Mastery/,
-    opa_get_oil_inventories: /Reservoir Mastery/,
-    opa_get_forecasts: /Reservoir Mastery/,
-    opa_get_drilling: /Scale plan \(\$299\/mo\)/,
-    opa_get_well_permits: /well-permits add-on or an enterprise plan/,
-    opa_get_well_production: /well-permits add-on or an enterprise plan/,
-    opa_get_natural_gas_hubs: /Developer, \$19\/mo/,
-    opa_get_data_quality: /Developer, \$19\/mo/,
+    opa_get_history: /eligible account entitlement.*opa_get_plans/,
+    opa_get_futures: /eligible account entitlement.*opa_get_plans/,
+    opa_get_futures_curve: /eligible account entitlement.*opa_get_plans/,
+    opa_get_marine_fuels: /eligible account entitlement.*opa_get_plans/,
+    opa_get_spread: /eligible account entitlement.*opa_get_plans/,
+    opa_get_storage: /eligible account entitlement.*opa_get_plans/,
+    opa_get_rig_counts: /eligible account entitlement.*opa_get_plans/,
+    opa_get_opec_production: /eligible account entitlement.*opa_get_plans/,
+    opa_get_oil_inventories: /eligible account entitlement.*opa_get_plans/,
+    opa_get_forecasts: /eligible account entitlement.*opa_get_plans/,
+    opa_get_drilling: /eligible account entitlement.*opa_get_plans/,
+    opa_get_well_permits: /eligible account entitlement.*opa_get_plans/,
+    opa_get_well_production: /eligible account entitlement.*opa_get_plans/,
+    opa_get_natural_gas_hubs: /eligible account entitlement.*opa_get_plans/,
+    opa_get_data_quality: /eligible account entitlement.*opa_get_plans/,
   };
 
   it("every plan-gated tool states its required plan in the description (#63)", () => {
@@ -1306,6 +1306,26 @@ describe("tool registration metadata", () => {
       expect(tools[name], name).toBeDefined();
       expect(tools[name].description, `${name} description`).toMatch(pattern);
     }
+  });
+
+  it("keeps mutable prices and Free feature limits out of every tool schema", () => {
+    for (const [name, tool] of Object.entries(tools)) {
+      expect(tool.description, name).not.toMatch(
+        /(?:Developer|Starter|Professional|Scale)[^\n.]{0,80}\$\d+/i,
+      );
+      expect(tool.description, name).not.toMatch(
+        /\bfree(?: tier| plan)?\b[^\n.]{0,120}\d+\s*(?:watches?|codes?|hours?|minutes?|[hm]\b)/i,
+      );
+    }
+  });
+
+  it("qualifies historical as_of behavior for observation-dated backfills", () => {
+    const description = tools.opa_get_history.description || "";
+    expect(description).toContain("stored observation and revision timestamps");
+    expect(description).toContain(
+      "Observation-dated bulk backfills may appear in an earlier as_of result",
+    );
+    expect(description).not.toMatch(/as it was knowable|later-collected rows absent/i);
   });
 
   it("registers all four write tools (creates + deletes)", () => {

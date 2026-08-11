@@ -24,12 +24,15 @@ jobs:
         with:
           node-version: "22"
       - run: npm ci
-      - run: npm audit --audit-level=moderate
+      - run: npm audit --audit-level=low
       - run: npm run verify:release-metadata
       - run: npm test
       - run: npm run build
+      - run: npm run smoke:public-claims
       - run: npm run smoke:product-facts
       - run: npm run smoke:package
+      - run: npm run smoke:registry-verifier
+      - run: npm run smoke:release-provenance
       - run: npm pack --dry-run
 
   public-product-facts:
@@ -55,7 +58,7 @@ jobs:
         with:
           node-version: "22"
       - run: npm ci
-      - run: npm audit --audit-level=moderate
+      - run: npm audit --audit-level=low
       - name: Live smoke test (ice-brent latest + curve)
         env:
           OILPRICEAPI_TEST_KEY: ${{ secrets.OILPRICEAPI_TEST_KEY }}

@@ -15,11 +15,16 @@
     "test": "vitest run",
     "test:live": "node scripts/live-smoke.mjs",
     "smoke:product-facts:live": "node scripts/live-product-facts-smoke.mjs",
+    "smoke:registry-verifier": "node scripts/verify-mcp-registry-release-smoke.mjs",
+    "smoke:release-provenance": "node scripts/verify-release-provenance-smoke.mjs",
+    "smoke:public-claims": "node scripts/public-claims-smoke.mjs",
     "smoke:product-facts": "node scripts/product-facts-smoke.mjs",
     "smoke:package": "node scripts/package-smoke.mjs",
     "test:product-facts": "npm run build && npm run smoke:product-facts",
     "verify:release-metadata": "node scripts/verify-release-metadata.mjs",
-    "prepublishOnly": "npm audit --audit-level=moderate && npm run verify:release-metadata && npm run build"
+    "verify:release-provenance": "node scripts/verify-release-provenance.mjs",
+    "verify:mcp-registry-release": "node scripts/verify-mcp-registry-release.mjs",
+    "prepublishOnly": "npm audit --audit-level=low && npm run verify:release-metadata && npm run build && npm run smoke:public-claims"
   },
   "files": [
     "build/*.d.ts",
