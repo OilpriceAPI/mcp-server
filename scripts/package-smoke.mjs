@@ -54,12 +54,22 @@ function transportEnvironment(extra = {}) {
   return { ...environment, ...extra };
 }
 
-async function assertProtocolScope(entryPoint, baseUrl, scope, expectedCount) {
+async function assertProtocolScope(
+  entryPoint,
+  baseUrl,
+  scope,
+  expectedCount,
+  expectedRegisteredCount,
+) {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [entryPoint, "--scope", scope],
     env: transportEnvironment({ OILPRICEAPI_BASE_URL: baseUrl }),
     stderr: "pipe",
+  });
+  let stderrOutput = "";
+  transport.stderr?.on("data", (chunk) => {
+    stderrOutput += chunk.toString();
   });
   const client = new Client({
     name: `oilpriceapi-package-${scope}-smoke`,
@@ -71,6 +81,15 @@ async function assertProtocolScope(entryPoint, baseUrl, scope, expectedCount) {
     if (listed.tools.length !== expectedCount) {
       throw new Error(
         `${scope} scope listed ${listed.tools.length} tools; expected ${expectedCount}`,
+      );
+    }
+    if (
+      !stderrOutput.includes(
+        `scope=${scope} profile=all tools=${expectedCount}/${expectedRegisteredCount}`,
+      )
+    ) {
+      throw new Error(
+        `${scope} scope startup inventory did not match the packaged capability artifact: ${stderrOutput.trim()}`,
       );
     }
     const writeName = "opa_create_price_alert";
@@ -118,6 +137,21 @@ try {
   const packed = parsePackedPackage(packOutput);
   if (packed.files.some((file) => file.path.includes("/__tests__/"))) {
     throw new Error("The npm tarball contains compiled test artifacts.");
+  }
+  const packedPaths = new Set(packed.files.map((file) => file.path));
+  if (
+    packedPaths.has("build/product-facts.v1.json") ||
+    packedPaths.has("build/product-facts.v1.sha256")
+  ) {
+    throw new Error("The npm tarball contains the retired v1 product facts.");
+  }
+  for (const required of [
+    "build/product-facts.v2.json",
+    "build/product-facts.v2.sha256",
+  ]) {
+    if (!packedPaths.has(required)) {
+      throw new Error(`The npm tarball is missing ${required}.`);
+    }
   }
   const tarball = join(temporary, packed.filename);
   await execFileAsync(
@@ -275,8 +309,20 @@ try {
     throw new Error("Packaged doctor --demo did not pass.");
   }
 
-  await assertProtocolScope(entryPoint, baseUrl, "read", 32);
-  await assertProtocolScope(entryPoint, baseUrl, "write", 36);
+  await assertProtocolScope(
+    entryPoint,
+    baseUrl,
+    "read",
+    32,
+    capabilities.tools.length,
+  );
+  await assertProtocolScope(
+    entryPoint,
+    baseUrl,
+    "write",
+    36,
+    capabilities.tools.length,
+  );
 
   process.stdout.write(
     "packaged MCP smoke passed: version, configs, doctor, capabilities, scopes, and protocol blocking\n",

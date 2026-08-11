@@ -8,11 +8,13 @@ async function readJson(path) {
   );
 }
 
-const [packageJson, packageLock, server, manifest] = await Promise.all([
+const [packageJson, packageLock, server, manifest, mcpConfiguration] =
+  await Promise.all([
   readJson("package.json"),
   readJson("package-lock.json"),
   readJson("server.json"),
   readJson("manifest.json"),
+  readJson(".mcp.json"),
 ]);
 const source = await readFile(
   new URL("../src/index.ts", import.meta.url),
@@ -26,6 +28,7 @@ const versions = new Map([
   ["server.json", server.version],
   ["server.json npm package", server.packages?.[0]?.version],
   ["manifest.json", manifest.version],
+  [".mcp.json", mcpConfiguration.version],
 ]);
 
 const mismatches = [...versions].filter(([, version]) => version !== expected);
@@ -42,6 +45,25 @@ const sourceVersion = source.match(/export const MCP_VERSION = "([^"]+)"/)?.[1];
 if (sourceVersion !== expected) {
   throw new Error(
     `src/index.ts MCP_VERSION=${sourceVersion ?? "missing"} must match package.json=${expected}.`,
+  );
+}
+
+const expectedNpxPackage = `${packageJson.name}@${expected}`;
+const publicNpxArgs = mcpConfiguration.mcpServers?.oilpriceapi?.args;
+if (
+  mcpConfiguration.mcpServers?.oilpriceapi?.command !== "npx" ||
+  !Array.isArray(publicNpxArgs) ||
+  publicNpxArgs.length !== 2 ||
+  publicNpxArgs[0] !== "-y" ||
+  publicNpxArgs[1] !== expectedNpxPackage
+) {
+  throw new Error(
+    `.mcp.json must invoke the exact release package ${expectedNpxPackage}.`,
+  );
+}
+if ("env" in mcpConfiguration.mcpServers.oilpriceapi) {
+  throw new Error(
+    ".mcp.json must keep keyless demo usable instead of injecting a placeholder key.",
   );
 }
 

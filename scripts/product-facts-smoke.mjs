@@ -56,10 +56,13 @@ try {
   });
   const toolPayload = JSON.parse(textContent(toolResult));
   if (
-    toolPayload.facts?.schemaVersion !== "1.0.0" ||
+    toolPayload.facts?.schemaVersion !== "2.0.0" ||
+    toolPayload.facts?.offer?.freeRequestLimit !== 50 ||
+    toolPayload.facts?.offer?.freeRequestWindow !== "day" ||
+    "freeRequestsPerMonth" in (toolPayload.facts?.offer || {}) ||
     toolPayload.delivery?.source !== "pinned"
   ) {
-    throw new Error("product-facts tool did not return the pinned v1 contract");
+    throw new Error("product-facts tool did not return the typed pinned v2 contract");
   }
 
   const resourceResult = await client.readResource({

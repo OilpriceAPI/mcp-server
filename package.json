@@ -1,6 +1,6 @@
 {
   "name": "oilpriceapi-mcp",
-  "version": "3.2.0",
+  "version": "3.2.1",
   "mcpName": "io.github.OilpriceAPI/mcp-server",
   "description": "Source-timestamped oil, gas, and related energy data plus reviewed product facts for MCP clients.",
   "type": "module",
@@ -9,16 +9,24 @@
   },
   "main": "./build/index.js",
   "scripts": {
-    "build": "tsc && node scripts/copy-product-facts.mjs && node scripts/generate-build-metadata.mjs && node scripts/generate-capabilities.mjs && chmod 755 build/index.js",
+    "build": "node scripts/clean-build.mjs && tsc && node scripts/copy-product-facts.mjs && node scripts/generate-build-metadata.mjs && node scripts/generate-capabilities.mjs && chmod 755 build/index.js",
     "dev": "tsc --watch",
     "start": "node build/index.js",
     "test": "vitest run",
     "test:live": "node scripts/live-smoke.mjs",
+    "smoke:product-facts:live": "node scripts/live-product-facts-smoke.mjs",
+    "smoke:registry-verifier": "node scripts/verify-mcp-registry-release-smoke.mjs",
+    "smoke:npm-verifier": "node scripts/verify-npm-release-smoke.mjs",
+    "smoke:release-provenance": "node scripts/verify-release-provenance-smoke.mjs",
+    "smoke:public-claims": "node scripts/public-claims-smoke.mjs",
     "smoke:product-facts": "node scripts/product-facts-smoke.mjs",
     "smoke:package": "node scripts/package-smoke.mjs",
+    "smoke:docker": "node scripts/docker-smoke.mjs",
     "test:product-facts": "npm run build && npm run smoke:product-facts",
     "verify:release-metadata": "node scripts/verify-release-metadata.mjs",
-    "prepublishOnly": "npm run verify:release-metadata && npm run build"
+    "verify:release-provenance": "node scripts/verify-release-provenance.mjs",
+    "verify:mcp-registry-release": "node scripts/verify-mcp-registry-release.mjs",
+    "prepublishOnly": "npm audit --audit-level=low && npm run verify:release-metadata && npm run build && npm run smoke:public-claims"
   },
   "files": [
     "build/*.d.ts",

@@ -176,11 +176,29 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 npm install -g oilpriceapi-mcp
 ```
 
+### Build the Container
+
+Container builds require the source revision and commit timestamp so the image,
+capability manifest, and build metadata are traceable to the same checkout:
+
+```bash
+docker build \
+  --build-arg SOURCE_COMMIT="$(git rev-parse HEAD)" \
+  --build-arg SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)" \
+  -t oilpriceapi-mcp .
+docker run --rm oilpriceapi-mcp --version
+docker run --rm oilpriceapi-mcp --capabilities --json
+```
+
+The runtime image uses the unprivileged `node` user. Omit `OILPRICEAPI_KEY` for
+the limited keyless demo, or inject it with your container platform's secret
+manager. Do not bake credentials into the image.
+
 ## Environment Variables
 
 | Variable                     | Required | Description                                                                                                                                                                                                                                                                                            |
 | ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `OILPRICEAPI_KEY`            | No       | API key from [oilpriceapi.com/auth/signup](https://www.oilpriceapi.com/auth/signup?utm_source=npm&utm_medium=mcp&utm_campaign=readme). After the core trial, the Free plan includes 200 requests/month. Dataset access and limits vary by plan and entitlement. Without a key, the server uses the limited demo. |
+| `OILPRICEAPI_KEY`            | No       | API key from [oilpriceapi.com/auth/signup](https://www.oilpriceapi.com/auth/signup?utm_source=npm&utm_medium=mcp&utm_campaign=readme). After the core trial, use the [public product facts](https://api.oilpriceapi.com/product-facts.json) or your account response for the current Free allowance and reset window. Dataset access and limits vary by plan and entitlement. Without a key, the server uses the limited demo. |
 | `OILPRICEAPI_BASE_URL`       | No       | Override API base URL (for staging/testing). Default: `https://api.oilpriceapi.com`                                                                                                                                                                                                                    |
 | `OILPRICEAPI_MCP_SCOPE`      | No       | `read` (default) hides and blocks create/delete tools. Set `write` only when account mutations are intended.                                                                                                                                                                                           |
 | `OILPRICEAPI_MCP_PROFILE`    | No       | Stable inventory profile: `all` (default), `core`, `market`, or `automation`.                                                                                                                                                                                                                          |
@@ -235,9 +253,9 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | ------------------------- | ----------------------------------------------------------------------------------------------- |
 | `opa_get_product_facts`   | Reviewed product, offer, freshness, auth, integration, entitlement, and data-rights contract    |
 | `opa_get_price`           | Current spot price for a single commodity                                                       |
-| `opa_market_overview`     | All commodity prices in one call, grouped by category                                           |
+| `opa_market_overview`     | Account-visible current prices returned by the API, grouped by category                         |
 | `opa_compare_prices`      | Side-by-side comparison of 2-5 commodities with spread                                          |
-| `opa_list_commodities`    | Full commodity catalog (fetched live from API)                                                  |
+| `opa_list_commodities`    | Account-visible commodity catalog returned by the live API                                      |
 | `opa_get_history`         | Historical prices with high/low/avg/change (day/week/month/year)                                |
 | `opa_get_futures`         | Front-month futures (Brent BZ, WTI CL, ICE Gasoil, TTF, JKM, EUA)                               |
 | `opa_get_futures_curve`   | Full forward curve with contango/backwardation analysis                                         |
@@ -270,7 +288,7 @@ These tools create and manage **persistent** price alerts tied to your OilPriceA
 
 ### Market Brief & Subscription Tools (authenticated)
 
-The market brief gives a multi-commodity snapshot in one call. Subscriptions ("watches") are **persistent, recurring** snapshots tied to your account — the API records an event every interval, and the agent **polls** for new events via a per-user cursor (events are polled, not pushed — there is no always-on connection). These **require an API key** (`OILPRICEAPI_KEY`). A subscription differs from an alert: a watch always emits an event each interval (a running log), whereas an alert fires only on a threshold crossing. Per-tier limits apply (free: 1 watch, 3 codes, 1h minimum interval); the API returns the exact limit if exceeded.
+The market brief gives a multi-commodity snapshot in one call. Subscriptions ("watches") are **persistent, recurring** snapshots tied to your account — the API records an event every interval, and the agent **polls** for new events via a per-user cursor (events are polled, not pushed — there is no always-on connection). These **require an API key** (`OILPRICEAPI_KEY`). A subscription differs from an alert: a watch always emits an event each interval (a running log), whereas an alert fires only on a threshold crossing. Per-account code, watch, and cadence limits apply; the API response is authoritative and returns the current limit when exceeded.
 
 | Tool                            | Description                                                                           |
 | ------------------------------- | ------------------------------------------------------------------------------------- |
@@ -311,7 +329,7 @@ Subscribable price data (JSON):
 | WTI Crude     | `price://wti`                 | US benchmark crude oil price                |
 | Natural Gas   | `price://natural-gas`         | US Henry Hub natural gas price              |
 | Diesel        | `price://diesel`              | US national average diesel price            |
-| All Prices    | `price://all`                 | All tracked commodity prices                |
+| Market View   | `price://all`                 | Account-visible current prices from the API |
 
 ### Product Facts and Model Knowledge
 
@@ -400,7 +418,7 @@ Questions: [support@oilpriceapi.com](mailto:support@oilpriceapi.com)
 Where the free/paid line sits for this server (#10):
 
 - **Always open**: the MCP server itself (MIT), setup, docs, discovery (tool listing), and keyless demo mode for low-volume evaluation.
-- **Free API key**: the core trial includes 10,000 requests over 7 days with no credit card; afterward the Free plan includes 200 requests per month. Dataset access varies by plan and entitlement.
+- **API key**: use the [public product facts](https://api.oilpriceapi.com/product-facts.json) and your account response for the current trial, allowance, reset window, and dataset entitlement. Keyless demo mode remains available for a limited dataset.
 - **Behind the paywall**: high-volume usage and premium datasets (futures, energy intelligence, well permits/production, alerts at scale). When a request crosses that boundary the API returns a standard **HTTP 402/403/429 with the exact limit or feature gate in the body**, and this server surfaces that message plus an upgrade link — agents get a machine-readable stop, never a silent failure.
 - **x402 protocol**: per-request crypto micropayments via the [x402 protocol](https://www.x402.org/) are **not currently supported** — payment is by account plan (Stripe), authenticated with your API key.
 

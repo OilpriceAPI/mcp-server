@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
 export const PRODUCT_FACTS_URI = "oilpriceapi://product-facts";
-export const PRODUCT_FACTS_SCHEMA_MAJOR = 1;
+export const PRODUCT_FACTS_SCHEMA_MAJOR = 2;
+export const SUPPORTED_PRODUCT_FACTS_SCHEMA_MAJORS = [1, 2] as const;
 export const DEFAULT_PRODUCT_FACTS_TTL_MS = 60 * 60 * 1000;
 export const DEFAULT_PRODUCT_FACTS_MAX_STALE_MS = 24 * 60 * 60 * 1000;
 export const DEFAULT_PRODUCT_FACTS_TIMEOUT_MS = 3_000;
@@ -28,7 +29,8 @@ export interface ProductFacts {
     qualification: string;
     trialDays: number;
     trialRequests: number;
-    freeRequestsPerMonth: number;
+    freeRequestLimit: number;
+    freeRequestWindow: "day" | "month";
   };
   catalog: {
     publicWording: string;
@@ -62,11 +64,33 @@ export interface ProductFactsDelivery {
     stale: boolean;
     contractChecksum: string;
     contractEtag: string;
+    sourceSchemaVersion: string;
+    normalization: "native-v2" | "reviewed-v1-daily-bridge";
     warning?: string;
   };
 }
 
 type JsonRecord = Record<string, unknown>;
+type ProductFactsNormalization = ProductFactsDelivery["delivery"]["normalization"];
+
+interface LegacyV1ProductFacts extends Omit<ProductFacts, "offer"> {
+  offer: Omit<
+    ProductFacts["offer"],
+    "freeRequestLimit" | "freeRequestWindow"
+  > & {
+    freeRequestsPerMonth: number;
+  };
+}
+
+interface ValidatedProductFacts {
+  facts: ProductFacts;
+  contractChecksum: string;
+  sourceSchemaVersion: string;
+  normalization: ProductFactsNormalization;
+}
+
+const LEGACY_V1_DAILY_BRIDGE_CHECKSUM =
+  "580bcf6434c97befc773f0be9b304e898cbb6709ee8d831505ea7695125bf1d4";
 
 const SENSITIVE_KEY =
   /api[_-]?key|secret|password|customer|account[_-]?state|internal|stripe|plan[_-]?id|unpublished/i;
@@ -95,10 +119,14 @@ function requiredString(record: JsonRecord, key: string): string {
   return value;
 }
 
-function requiredNumber(record: JsonRecord, key: string): number {
+function requiredPositiveInteger(record: JsonRecord, key: string): number {
   const value = record[key];
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    throw new ProductFactsContractError(key + " must be a positive number");
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value <= 0
+  ) {
+    throw new ProductFactsContractError(key + " must be a positive integer");
   }
   return value;
 }
@@ -111,9 +139,58 @@ function requiredBoolean(record: JsonRecord, key: string): boolean {
   return value;
 }
 
+function assertExactKeys(
+  record: JsonRecord,
+  expectedKeys: readonly string[],
+  name: string,
+): void {
+  const expected = new Set(expectedKeys);
+  const unexpected = Object.keys(record)
+    .filter((key) => !expected.has(key))
+    .sort();
+  if (unexpected.length > 0) {
+    throw new ProductFactsContractError(
+      `${name} contains unsupported fields (${unexpected.length})`,
+    );
+  }
+}
+
 function assertHttps(value: string, key: string): string {
-  if (!value.startsWith("https://")) {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new ProductFactsContractError(key + " must be a valid HTTPS URL");
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username.length > 0 ||
+    parsed.password.length > 0
+  ) {
     throw new ProductFactsContractError(key + " must use HTTPS");
+  }
+
+  return value;
+}
+
+function requiredIsoDate(
+  record: JsonRecord,
+  key: string,
+  maximumDate?: string,
+): string {
+  const value = requiredString(record, key);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new ProductFactsContractError(key + " must be an ISO date");
+  }
+  const parsed = new Date(value + "T00:00:00.000Z");
+  if (
+    Number.isNaN(parsed.getTime()) ||
+    parsed.toISOString().slice(0, 10) !== value
+  ) {
+    throw new ProductFactsContractError(key + " must be a valid ISO date");
+  }
+  if (maximumDate !== undefined && value > maximumDate) {
+    throw new ProductFactsContractError(key + " cannot be in the future");
   }
   return value;
 }
@@ -143,7 +220,10 @@ function assertNoSensitiveData(value: unknown, path = "root"): void {
   }
 }
 
-export function validateAndSanitizeProductFacts(input: unknown): ProductFacts {
+function validateProductFacts(
+  input: unknown,
+  maximumDate?: string,
+): ValidatedProductFacts {
   assertNoSensitiveData(input);
   const root = asRecord(input, "product-facts");
   const product = asRecord(root.product, "product");
@@ -154,20 +234,102 @@ export function validateAndSanitizeProductFacts(input: unknown): ProductFacts {
   const developer = asRecord(root.developer, "developer");
 
   const schemaVersion = requiredString(root, "schemaVersion");
+  const schemaMatch =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(schemaVersion);
+  const schemaMajor = schemaMatch ? Number(schemaMatch[1]) : Number.NaN;
   if (
-    Number.parseInt(schemaVersion.split(".")[0] || "", 10) !==
-    PRODUCT_FACTS_SCHEMA_MAJOR
+    !SUPPORTED_PRODUCT_FACTS_SCHEMA_MAJORS.includes(
+      schemaMajor as (typeof SUPPORTED_PRODUCT_FACTS_SCHEMA_MAJORS)[number],
+    )
   ) {
     throw new ProductFactsContractError(
       "unsupported product-facts schema " + schemaVersion,
     );
   }
 
-  const contractVersion = requiredString(root, "contractVersion");
-  const reviewedAt = requiredString(root, "reviewedAt");
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(contractVersion)) {
-    throw new ProductFactsContractError("contractVersion must be an ISO date");
-  }
+  assertExactKeys(
+    root,
+    [
+      "schemaVersion",
+      "contractVersion",
+      "reviewedAt",
+      "reviewOwner",
+      "schemaUrl",
+      "canonicalUrl",
+      "product",
+      "offer",
+      "catalog",
+      "freshness",
+      "dataRights",
+      "developer",
+    ],
+    "product-facts",
+  );
+  assertExactKeys(
+    product,
+    [
+      "name",
+      "website",
+      "apiBaseUrl",
+      "documentationUrl",
+      "description",
+    ],
+    "product",
+  );
+  assertExactKeys(
+    offer,
+    schemaMajor === 2
+      ? [
+          "trialScope",
+          "creditCardRequiredForTrial",
+          "pricingUrl",
+          "qualification",
+          "trialDays",
+          "trialRequests",
+          "freeRequestLimit",
+          "freeRequestWindow",
+        ]
+      : [
+          "trialScope",
+          "creditCardRequiredForTrial",
+          "pricingUrl",
+          "qualification",
+          "trialDays",
+          "trialRequests",
+          "freeRequestsPerMonth",
+        ],
+    "offer",
+  );
+  assertExactKeys(
+    catalog,
+    ["publicWording", "exactCountPublished", "catalogUrl"],
+    "catalog",
+  );
+  assertExactKeys(
+    freshness,
+    ["publicWording", "fixedSitewideCadence"],
+    "freshness",
+  );
+  assertExactKeys(dataRights, ["publicWording", "policyUrl"], "dataRights");
+  assertExactKeys(
+    developer,
+    [
+      "authenticationHeader",
+      "environmentVariable",
+      "firstRequestMethod",
+      "firstRequestPath",
+      "firstRequestUrl",
+      "demoRequestUrl",
+    ],
+    "developer",
+  );
+
+  const contractVersion = requiredIsoDate(
+    root,
+    "contractVersion",
+    maximumDate,
+  );
+  const reviewedAt = requiredIsoDate(root, "reviewedAt", maximumDate);
   if (contractVersion !== reviewedAt) {
     throw new ProductFactsContractError(
       "contractVersion and reviewedAt must match",
@@ -184,7 +346,7 @@ export function validateAndSanitizeProductFacts(input: unknown): ProductFacts {
     );
   }
 
-  const facts: ProductFacts = {
+  const commonFacts = {
     schemaVersion,
     contractVersion,
     reviewedAt,
@@ -209,21 +371,6 @@ export function validateAndSanitizeProductFacts(input: unknown): ProductFacts {
         "product.documentationUrl",
       ),
       description: requiredString(product, "description"),
-    },
-    offer: {
-      trialScope: requiredString(offer, "trialScope"),
-      creditCardRequiredForTrial: requiredBoolean(
-        offer,
-        "creditCardRequiredForTrial",
-      ),
-      pricingUrl: assertHttps(
-        requiredString(offer, "pricingUrl"),
-        "offer.pricingUrl",
-      ),
-      qualification: requiredString(offer, "qualification"),
-      trialDays: requiredNumber(offer, "trialDays"),
-      trialRequests: requiredNumber(offer, "trialRequests"),
-      freeRequestsPerMonth: requiredNumber(offer, "freeRequestsPerMonth"),
     },
     catalog: {
       publicWording: requiredString(catalog, "publicWording"),
@@ -258,7 +405,99 @@ export function validateAndSanitizeProductFacts(input: unknown): ProductFacts {
         "developer.demoRequestUrl",
       ),
     },
+  } satisfies Omit<ProductFacts, "offer">;
+
+  const expectedSchemaUrl = `https://api.oilpriceapi.com/schemas/product-facts-v${schemaMajor}.schema.json`;
+  if (commonFacts.schemaUrl !== expectedSchemaUrl) {
+    throw new ProductFactsContractError(
+      `schemaUrl must match reviewed schema major ${schemaMajor}`,
+    );
+  }
+  if (
+    commonFacts.canonicalUrl !==
+      "https://api.oilpriceapi.com/product-facts.json" ||
+    commonFacts.product.name !== "OilPriceAPI" ||
+    commonFacts.product.apiBaseUrl !== "https://api.oilpriceapi.com"
+  ) {
+    throw new ProductFactsContractError(
+      "product-facts canonical identity is incompatible",
+    );
+  }
+
+  const commonOffer = {
+    trialScope: requiredString(offer, "trialScope"),
+    creditCardRequiredForTrial: requiredBoolean(
+      offer,
+      "creditCardRequiredForTrial",
+    ),
+    pricingUrl: assertHttps(
+      requiredString(offer, "pricingUrl"),
+      "offer.pricingUrl",
+    ),
+    qualification: requiredString(offer, "qualification"),
+    trialDays: requiredPositiveInteger(offer, "trialDays"),
+    trialRequests: requiredPositiveInteger(offer, "trialRequests"),
   };
+
+  let facts: ProductFacts;
+  let normalization: ProductFactsNormalization;
+
+  if (schemaMajor === 2) {
+    if ("freeRequestsPerMonth" in offer) {
+      throw new ProductFactsContractError(
+        "native v2 offer cannot include freeRequestsPerMonth",
+      );
+    }
+    const freeRequestWindow = requiredString(offer, "freeRequestWindow");
+    if (freeRequestWindow !== "day" && freeRequestWindow !== "month") {
+      throw new ProductFactsContractError(
+        "freeRequestWindow must be day or month",
+      );
+    }
+    facts = {
+      ...commonFacts,
+      offer: {
+        ...commonOffer,
+        freeRequestLimit: requiredPositiveInteger(offer, "freeRequestLimit"),
+        freeRequestWindow,
+      },
+    };
+    normalization = "native-v2";
+  } else {
+    if ("freeRequestLimit" in offer || "freeRequestWindow" in offer) {
+      throw new ProductFactsContractError(
+        "legacy v1 offer cannot include typed v2 allowance fields",
+      );
+    }
+    const legacyFacts: LegacyV1ProductFacts = {
+      ...commonFacts,
+      offer: {
+        ...commonOffer,
+        freeRequestsPerMonth: requiredPositiveInteger(
+          offer,
+          "freeRequestsPerMonth",
+        ),
+      },
+    };
+    const sourceFactsChecksum = stableFactsDigest(legacyFacts);
+    if (sourceFactsChecksum !== LEGACY_V1_DAILY_BRIDGE_CHECKSUM) {
+      throw new ProductFactsContractError(
+        "legacy v1 product-facts contract is not the reviewed daily bridge",
+      );
+    }
+    facts = {
+      ...commonFacts,
+      schemaVersion: "2.0.0",
+      schemaUrl:
+        "https://api.oilpriceapi.com/schemas/product-facts-v2.schema.json",
+      offer: {
+        ...commonOffer,
+        freeRequestLimit: 50,
+        freeRequestWindow: "day",
+      },
+    };
+    normalization = "reviewed-v1-daily-bridge";
+  }
 
   if (
     facts.developer.authenticationHeader !==
@@ -271,26 +510,66 @@ export function validateAndSanitizeProductFacts(input: unknown): ProductFacts {
     );
   }
 
-  return facts;
+  return {
+    facts,
+    contractChecksum: stableFactsDigest(facts),
+    sourceSchemaVersion: schemaVersion,
+    normalization,
+  };
+}
+
+export function validateAndSanitizeProductFacts(input: unknown): ProductFacts {
+  return validateProductFacts(
+    input,
+    new Date().toISOString().slice(0, 10),
+  ).facts;
 }
 
 function digest(content: string | Buffer): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-function stableFactsDigest(facts: ProductFacts): string {
-  return digest(JSON.stringify(facts));
+function stableFactsDigest(facts: ProductFacts | LegacyV1ProductFacts): string {
+  return digest(JSON.stringify(canonicalize(facts)));
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(canonicalize);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as JsonRecord)
+        .sort(([left], [right]) =>
+          left < right ? -1 : left > right ? 1 : 0,
+        )
+        .map(([key, child]) => [key, canonicalize(child)]),
+    );
+  }
+  return value;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    for (const child of Object.values(value as Record<string, unknown>)) {
+      deepFreeze(child);
+    }
+    Object.freeze(value);
+  }
+  return value;
 }
 
 function loadPinnedProductFacts(): {
   facts: ProductFacts;
   checksum: string;
+  sourceSchemaVersion: string;
+  normalization: ProductFactsNormalization;
 } {
   const artifact = readFileSync(
-    new URL("./product-facts.v1.json", import.meta.url),
+    new URL("./product-facts.v2.json", import.meta.url),
   );
   const expected = readFileSync(
-    new URL("./product-facts.v1.sha256", import.meta.url),
+    new URL("./product-facts.v2.sha256", import.meta.url),
     "utf8",
   ).trim();
   const actual = digest(artifact);
@@ -300,23 +579,35 @@ function loadPinnedProductFacts(): {
     );
   }
 
+  const validated = validateProductFacts(
+    JSON.parse(artifact.toString("utf8")) as unknown,
+  );
+  if (validated.normalization !== "native-v2") {
+    throw new ProductFactsContractError("pinned product-facts must be native v2");
+  }
+
   return {
-    facts: validateAndSanitizeProductFacts(
-      JSON.parse(artifact.toString("utf8")) as unknown,
-    ),
+    facts: validated.facts,
     checksum: actual,
+    sourceSchemaVersion: validated.sourceSchemaVersion,
+    normalization: validated.normalization,
   };
 }
 
 const pinned = loadPinnedProductFacts();
-export const PINNED_PRODUCT_FACTS = pinned.facts;
+export const PINNED_PRODUCT_FACTS = deepFreeze(pinned.facts);
 export const PINNED_PRODUCT_FACTS_CHECKSUM = pinned.checksum;
+export const PINNED_PRODUCT_FACTS_CONTRACT_CHECKSUM = stableFactsDigest(
+  pinned.facts,
+);
 
 interface CachedProductFacts {
   facts: ProductFacts;
   fetchedAtMs: number;
   checksum: string;
   etag: string;
+  sourceSchemaVersion: string;
+  normalization: ProductFactsNormalization;
 }
 
 export interface ProductFactsProviderOptions {
@@ -341,6 +632,8 @@ export class ProductFactsProvider {
   private readonly requestHeaders: Record<string, string>;
   private readonly pinnedFacts: ProductFacts;
   private readonly pinnedChecksum: string;
+  private readonly pinnedSourceSchemaVersion: string;
+  private readonly pinnedNormalization: ProductFactsNormalization;
   private cache?: CachedProductFacts;
 
   constructor(options: ProductFactsProviderOptions = {}) {
@@ -354,11 +647,39 @@ export class ProductFactsProvider {
       Accept: "application/json",
       ...options.requestHeaders,
     };
-    this.pinnedFacts = validateAndSanitizeProductFacts(
+    const pinnedValidation = validateProductFacts(
       options.pinnedFacts ?? PINNED_PRODUCT_FACTS,
     );
-    this.pinnedChecksum =
-      options.pinnedChecksum ?? PINNED_PRODUCT_FACTS_CHECKSUM;
+    if (pinnedValidation.normalization !== "native-v2") {
+      throw new ProductFactsContractError(
+        "provider pinned product-facts must be native v2",
+      );
+    }
+    this.pinnedFacts = deepFreeze(pinnedValidation.facts);
+    if (
+      options.pinnedChecksum !== undefined &&
+      !/^[a-f0-9]{64}$/.test(options.pinnedChecksum)
+    ) {
+      throw new ProductFactsContractError(
+        "provider pinned checksum must be a lowercase SHA-256 digest",
+      );
+    }
+    const projectedChecksum = stableFactsDigest(pinnedValidation.facts);
+    const matchesVerifiedBuiltInArtifact =
+      options.pinnedFacts === undefined &&
+      options.pinnedChecksum === PINNED_PRODUCT_FACTS_CHECKSUM;
+    if (
+      options.pinnedChecksum !== undefined &&
+      options.pinnedChecksum !== projectedChecksum &&
+      !matchesVerifiedBuiltInArtifact
+    ) {
+      throw new ProductFactsContractError(
+        "provider pinned facts do not match the supplied checksum",
+      );
+    }
+    this.pinnedChecksum = projectedChecksum;
+    this.pinnedSourceSchemaVersion = pinnedValidation.sourceSchemaVersion;
+    this.pinnedNormalization = pinnedValidation.normalization;
   }
 
   clearCache(): void {
@@ -383,6 +704,8 @@ export class ProductFactsProvider {
           stale: false,
           contractChecksum: remote.checksum,
           contractEtag: remote.etag,
+          sourceSchemaVersion: remote.sourceSchemaVersion,
+          normalization: remote.normalization,
         },
       };
     } catch (error) {
@@ -403,6 +726,8 @@ export class ProductFactsProvider {
           stale: false,
           contractChecksum: this.pinnedChecksum,
           contractEtag: "sha256:" + this.pinnedChecksum,
+          sourceSchemaVersion: this.pinnedSourceSchemaVersion,
+          normalization: this.pinnedNormalization,
           warning:
             warning +
             expiredCacheWarning +
@@ -429,6 +754,8 @@ export class ProductFactsProvider {
         stale,
         contractChecksum: cached.checksum,
         contractEtag: cached.etag,
+        sourceSchemaVersion: cached.sourceSchemaVersion,
+        normalization: cached.normalization,
         ...(warning
           ? {
               warning:
@@ -454,10 +781,21 @@ export class ProductFactsProvider {
       if (!response.ok) {
         throw new Error("HTTP " + response.status);
       }
-      const facts = validateAndSanitizeProductFacts(await response.json());
-      const checksum = stableFactsDigest(facts);
+      const maximumDate = new Date(now).toISOString().slice(0, 10);
+      const validated = validateProductFacts(
+        await response.json(),
+        maximumDate,
+      );
+      const checksum = validated.contractChecksum;
       const etag = response.headers?.get("etag") || "sha256:" + checksum;
-      return { facts, fetchedAtMs: now, checksum, etag };
+      return {
+        facts: deepFreeze(validated.facts),
+        fetchedAtMs: now,
+        checksum,
+        etag,
+        sourceSchemaVersion: validated.sourceSchemaVersion,
+        normalization: validated.normalization,
+      };
     } finally {
       clearTimeout(timer);
     }

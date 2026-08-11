@@ -1,31 +1,49 @@
 name: Publish to npm + MCP registry
 
+env:
+  MCP_PUBLISHER_VERSION: v1.8.1
+  MCP_PUBLISHER_ARCHIVE: mcp-publisher_linux_amd64.tar.gz
+  MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+  NPM_CLI_VERSION: 11.12.1
+  NPM_CLI_INTEGRITY: sha512-zcoUuF1kezGSAo0CqtvoLXX3mkRqzuqYdL6Y5tdo8g69NVV3CkjQ6ZBhBgB4d7vGkPcV6TcvLi3GRKPDFX+xTA==
+  NPM_CLI_SHA256: e679850e663b16f5f146ee425d0eb0e3442c1d2bda3d513bbfd7c81f5ee5db38
+
 on:
   release:
     types: [published]
 
 jobs:
-  publish:
-    name: Publish
+  verify:
+    name: Verify release candidate
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
-      id-token: write
+    outputs:
+      artifact_manifest_sha256: ${{ steps.pack.outputs.artifact_manifest_sha256 }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Install verified npm (OIDC trusted publishing needs npm >= 11.5.1)
-        run: npm install -g npm@11.12.1
-
       - name: Install dependencies
         run: npm ci
+
+      - name: Reject known dependency vulnerabilities
+        run: npm audit --audit-level=low
+
+      - name: Verify release tag is on protected main
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          npm run verify:release-provenance
 
       - name: Verify release metadata
         run: npm run verify:release-metadata
@@ -36,34 +54,177 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Reject mutable claims in source and packed artifacts
+        run: npm run smoke:public-claims
+
       - name: Smoke packaged product-facts discovery
         run: npm run smoke:product-facts
 
+      - name: Smoke the live canonical product-facts contract
+        run: npm run smoke:product-facts:live
+
       - name: Smoke packed CLI, capability, scope, and protocol contracts
         run: npm run smoke:package
+
+      - name: Smoke deterministic non-root container and live keyless stdio
+        run: npm run smoke:docker
+
+      - name: Smoke npm latest, integrity, and provenance verifier
+        run: npm run smoke:npm-verifier
+
+      - name: Install pinned MCP registry publisher
+        run: |
+          ARCHIVE="$RUNNER_TEMP/$MCP_PUBLISHER_ARCHIVE"
+          curl --fail --location --silent --show-error --max-time 60 --retry 3 \
+            --output "$ARCHIVE" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION/$MCP_PUBLISHER_ARCHIVE"
+          echo "$MCP_PUBLISHER_SHA256  $ARCHIVE" | sha256sum -c -
+          tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP" mcp-publisher
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Validate MCP registry metadata before npm publication
+        run: timeout 2m mcp-publisher validate
+
+      - name: Pack the verified release candidate
+        id: pack
+        run: |
+          set -euo pipefail
+          ARTIFACT_DIR="$RUNNER_TEMP/release-artifact"
+          mkdir -p "$ARTIFACT_DIR"
+          npm pack --ignore-scripts --json > "$RUNNER_TEMP/npm-pack.json"
+          PACKAGE_FILE=$(jq -er '.[0].filename' "$RUNNER_TEMP/npm-pack.json")
+          jq -e '.[0] | {filename, integrity, shasum}' \
+            "$RUNNER_TEMP/npm-pack.json" > "$ARTIFACT_DIR/pack-metadata.json"
+          mv "$PACKAGE_FILE" "$ARTIFACT_DIR/$PACKAGE_FILE"
+
+          npm pack "npm@$NPM_CLI_VERSION" --ignore-scripts --json \
+            --pack-destination "$ARTIFACT_DIR" > "$RUNNER_TEMP/npm-cli-pack.json"
+          jq -e \
+            --arg version "$NPM_CLI_VERSION" \
+            --arg integrity "$NPM_CLI_INTEGRITY" \
+            '.[0] | select(.name == "npm" and .version == $version and .integrity == $integrity) | {filename, integrity, shasum}' \
+            "$RUNNER_TEMP/npm-cli-pack.json" > "$ARTIFACT_DIR/npm-cli-metadata.json"
+          NPM_CLI_FILE=$(jq -er '.filename' "$ARTIFACT_DIR/npm-cli-metadata.json")
+          test -f "$ARTIFACT_DIR/$NPM_CLI_FILE"
+          echo "$NPM_CLI_SHA256  $ARTIFACT_DIR/$NPM_CLI_FILE" | sha256sum -c -
+
+          cp "$GITHUB_WORKSPACE/scripts/verify-npm-release.mjs" "$ARTIFACT_DIR/"
+          (
+            cd "$ARTIFACT_DIR"
+            sha256sum \
+              "$PACKAGE_FILE" \
+              "$NPM_CLI_FILE" \
+              pack-metadata.json \
+              npm-cli-metadata.json \
+              verify-npm-release.mjs > artifact.sha256
+            echo "artifact_manifest_sha256=$(sha256sum artifact.sha256 | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          )
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: verified-npm-package
+          path: ${{ runner.temp }}/release-artifact/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish verified package to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: verify
+    env:
+      EXPECTED_ARTIFACT_MANIFEST_SHA256: ${{ needs.verify.outputs.artifact_manifest_sha256 }}
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: verified-npm-package
+          path: ${{ runner.temp }}/release-artifact
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
 
       # Authentication via OIDC Trusted Publishing (configured on npmjs.com for
       # repo OilpriceAPI/mcp-server, workflow publish.yml, no environment).
       # No NODE_AUTH_TOKEN needed; OIDC also satisfies the package 2FA requirement
       # and produces provenance automatically.
-      - name: Publish to npm
-        run: npm publish --provenance --access public
+      - name: Publish the exact verified tarball to npm
+        working-directory: ${{ runner.temp }}/release-artifact
+        run: |
+          set -euo pipefail
+          ACTUAL_MANIFEST_SHA256=$(sha256sum artifact.sha256 | cut -d' ' -f1)
+          if [ "$ACTUAL_MANIFEST_SHA256" != "$EXPECTED_ARTIFACT_MANIFEST_SHA256" ]; then
+            echo "::error::Release artifact manifest does not match the unprivileged verify job"
+            exit 1
+          fi
+          sha256sum -c artifact.sha256
+
+          NPM_CLI_FILE=$(jq -er '.filename' npm-cli-metadata.json)
+          VERIFIED_NPM_INTEGRITY=$(jq -er '.integrity' npm-cli-metadata.json)
+          if [ "$VERIFIED_NPM_INTEGRITY" != "$NPM_CLI_INTEGRITY" ]; then
+            echo "::error::Verified npm CLI integrity does not match the pinned release policy"
+            exit 1
+          fi
+          echo "$NPM_CLI_SHA256  $NPM_CLI_FILE" | sha256sum -c -
+          mkdir npm-cli
+          tar -xzf "$NPM_CLI_FILE" -C npm-cli
+          NPM_CLI="$PWD/npm-cli/package/bin/npm-cli.js"
+          test -f "$NPM_CLI"
+          if [ "$(node "$NPM_CLI" --version)" != "$NPM_CLI_VERSION" ]; then
+            echo "::error::Verified npm CLI version does not match the pinned release policy"
+            exit 1
+          fi
+
+          PACKAGE_FILE=$(jq -er '.filename' pack-metadata.json)
+          EXPECTED_INTEGRITY=$(jq -er '.integrity' pack-metadata.json)
+          NAME=$(tar -xOf "$PACKAGE_FILE" package/package.json | jq -er '.name')
+          VERSION=$(tar -xOf "$PACKAGE_FILE" package/package.json | jq -er '.version')
+          SOURCE_COMMIT=$(tar -xOf "$PACKAGE_FILE" package/build/build-metadata.json | jq -er '.sourceCommit | select(test("^[0-9a-f]{40}$"))')
+          EXISTING_INTEGRITY=$(timeout 30s node "$NPM_CLI" view "$NAME@$VERSION" dist.integrity --json 2>/dev/null | jq -r '. // empty' || true)
+          if [ -n "$EXISTING_INTEGRITY" ]; then
+            if [ "$EXISTING_INTEGRITY" != "$EXPECTED_INTEGRITY" ]; then
+              echo "::error::npm $NAME@$VERSION exists with unexpected integrity"
+              exit 1
+            fi
+            echo "npm $NAME@$VERSION already matches the verified tarball; continuing recovery."
+          else
+            timeout 10m node "$NPM_CLI" publish "$PACKAGE_FILE" --ignore-scripts --provenance --access public
+          fi
+
+          NPM_RELEASE_EXPECTED_NAME="$NAME" \
+          NPM_RELEASE_EXPECTED_VERSION="$VERSION" \
+          NPM_RELEASE_EXPECTED_INTEGRITY="$EXPECTED_INTEGRITY" \
+          NPM_RELEASE_EXPECTED_SOURCE_COMMIT="$SOURCE_COMMIT" \
+            node verify-npm-release.mjs
 
   # Publish to the official MCP registry (registry.modelcontextprotocol.io)
-  # atomically with the npm release, so the registry can never go stale again
-  # (it sat at 2.0.0 for 3 months while npm advanced to 2.3.0 — issue #15).
+  # after npm succeeds. Pre-validation protects npm from known metadata drift;
+  # public readback below makes any later registry failure visible.
   # Auth: GitHub OIDC proves this repo belongs to the OilpriceAPI org, which
   # grants the io.github.OilpriceAPI/* namespace. No secrets needed.
   registry:
     name: Publish to MCP registry
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: publish
     permissions:
       contents: read
       id-token: write
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
 
       - name: Verify server.json version matches package.json
         run: |
@@ -84,12 +245,38 @@ jobs:
           fi
           echo "Description length OK: $DLEN"
 
-      - name: Install mcp-publisher
+      - name: Install pinned MCP registry publisher
         run: |
-          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ARCHIVE="$RUNNER_TEMP/$MCP_PUBLISHER_ARCHIVE"
+          curl --fail --location --silent --show-error --max-time 60 --retry 3 \
+            --output "$ARCHIVE" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION/$MCP_PUBLISHER_ARCHIVE"
+          echo "$MCP_PUBLISHER_SHA256  $ARCHIVE" | sha256sum -c -
+          tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP" mcp-publisher
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Validate MCP registry metadata
+        run: timeout 2m mcp-publisher validate
+
+      - name: Check whether the public registry already matches
+        id: registry_state
+        env:
+          MCP_REGISTRY_ATTEMPTS: "1"
+          MCP_REGISTRY_DELAY_MS: "0"
+        run: |
+          if node scripts/verify-mcp-registry-release.mjs; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Login to MCP registry (GitHub OIDC)
-        run: ./mcp-publisher login github-oidc
+        if: steps.registry_state.outputs.current != 'true'
+        run: timeout 2m mcp-publisher login github-oidc
 
       - name: Publish server.json
-        run: ./mcp-publisher publish
+        if: steps.registry_state.outputs.current != 'true'
+        run: timeout 5m mcp-publisher publish
+
+      - name: Verify public MCP registry readback
+        run: node scripts/verify-mcp-registry-release.mjs

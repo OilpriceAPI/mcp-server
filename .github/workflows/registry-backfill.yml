@@ -1,5 +1,10 @@
 name: MCP registry backfill
 
+env:
+  MCP_PUBLISHER_VERSION: v1.8.1
+  MCP_PUBLISHER_ARCHIVE: mcp-publisher_linux_amd64.tar.gz
+  MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+
 # Manual re-publish of server.json to the official MCP registry
 # (registry.modelcontextprotocol.io) WITHOUT cutting a release or touching
 # npm. Use when the registry has drifted behind npm — e.g. the 2.0.0→2.3.0
@@ -13,27 +18,72 @@ jobs:
   registry:
     name: Publish to MCP registry
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       id-token: write
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+
+      - name: Verify dispatch is exact protected main
+        env:
+          MCP_PROVENANCE_MODE: registry-backfill
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          node scripts/verify-release-provenance.mjs
 
       - name: Verify release metadata
-        run: npm run verify:release-metadata
+        run: node scripts/verify-release-metadata.mjs
 
       - name: Verify version exists on npm (registry must never lead npm)
         run: |
           PKG=$(jq -r .version package.json)
-          npm view "oilpriceapi-mcp@$PKG" version
+          PUBLISHED=$(timeout 30s npm view "oilpriceapi-mcp@$PKG" version)
+          if [ "$PUBLISHED" != "$PKG" ]; then
+            echo "::error::npm returned $PUBLISHED instead of $PKG"
+            exit 1
+          fi
 
-      - name: Install mcp-publisher
+      - name: Install pinned MCP registry publisher
         run: |
-          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ARCHIVE="$RUNNER_TEMP/$MCP_PUBLISHER_ARCHIVE"
+          curl --fail --location --silent --show-error --max-time 60 --retry 3 \
+            --output "$ARCHIVE" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION/$MCP_PUBLISHER_ARCHIVE"
+          echo "$MCP_PUBLISHER_SHA256  $ARCHIVE" | sha256sum -c -
+          tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP" mcp-publisher
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Validate MCP registry metadata
+        run: timeout 2m mcp-publisher validate
+
+      - name: Check whether the public registry already matches
+        id: registry_state
+        env:
+          MCP_REGISTRY_ATTEMPTS: "1"
+          MCP_REGISTRY_DELAY_MS: "0"
+        run: |
+          if node scripts/verify-mcp-registry-release.mjs; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Login to MCP registry (GitHub OIDC)
-        run: ./mcp-publisher login github-oidc
+        if: steps.registry_state.outputs.current != 'true'
+        run: timeout 2m mcp-publisher login github-oidc
 
       - name: Publish server.json
-        run: ./mcp-publisher publish
+        if: steps.registry_state.outputs.current != 'true'
+        run: timeout 5m mcp-publisher publish
+
+      - name: Verify public MCP registry readback
+        run: node scripts/verify-mcp-registry-release.mjs

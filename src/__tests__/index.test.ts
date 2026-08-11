@@ -35,7 +35,37 @@ import {
   PRODUCT_FACTS_URI,
   SERVER_INSTRUCTIONS,
   productFactsProvider,
+  formatStartupInventory,
 } from "../index.js";
+
+describe("startup inventory", () => {
+  it("reports enabled and registered counts without a fixed denominator", () => {
+    expect(
+      formatStartupInventory(
+        {
+          scope: "read",
+          profile: "all",
+          categories: ["core", "market", "automation"],
+          categoriesSource: "profile",
+        },
+        32,
+        36,
+      ),
+    ).toContain("tools=32/36");
+    expect(
+      formatStartupInventory(
+        {
+          scope: "write",
+          profile: "all",
+          categories: ["core", "market", "automation"],
+          categoriesSource: "profile",
+        },
+        36,
+        36,
+      ),
+    ).toContain("tools=36/36");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // #57 — well permit search and API-number lookup
@@ -1281,24 +1311,24 @@ describe("tool registration metadata", () => {
     expect(tools.opa_get_data_quality).toBeDefined();
   });
 
-  // #63 — agents read schemas, not pricing pages: every plan-gated tool must
-  // state its required plan in the description, so discovery does not cost 402s.
+  // #63 — agents read schemas, not pricing pages: every gated tool must explain
+  // how to retrieve current entitlement details without freezing mutable prices.
   const GATED_TOOL_LABELS: Record<string, RegExp> = {
-    opa_get_history: /Developer, \$19\/mo/,
-    opa_get_futures: /Professional plan \(\$99\/mo\)/,
-    opa_get_futures_curve: /Professional plan \(\$99\/mo\)/,
-    opa_get_marine_fuels: /Professional plan \(\$99\/mo\)/,
-    opa_get_spread: /Professional plan \(\$99\/mo\)/,
-    opa_get_storage: /Reservoir Mastery/,
-    opa_get_rig_counts: /Reservoir Mastery/,
-    opa_get_opec_production: /Reservoir Mastery/,
-    opa_get_oil_inventories: /Reservoir Mastery/,
-    opa_get_forecasts: /Reservoir Mastery/,
-    opa_get_drilling: /Scale plan \(\$299\/mo\)/,
-    opa_get_well_permits: /well-permits add-on or an enterprise plan/,
-    opa_get_well_production: /well-permits add-on or an enterprise plan/,
-    opa_get_natural_gas_hubs: /Developer, \$19\/mo/,
-    opa_get_data_quality: /Developer, \$19\/mo/,
+    opa_get_history: /eligible account entitlement.*opa_get_plans/,
+    opa_get_futures: /eligible account entitlement.*opa_get_plans/,
+    opa_get_futures_curve: /eligible account entitlement.*opa_get_plans/,
+    opa_get_marine_fuels: /eligible account entitlement.*opa_get_plans/,
+    opa_get_spread: /eligible account entitlement.*opa_get_plans/,
+    opa_get_storage: /eligible account entitlement.*opa_get_plans/,
+    opa_get_rig_counts: /eligible account entitlement.*opa_get_plans/,
+    opa_get_opec_production: /eligible account entitlement.*opa_get_plans/,
+    opa_get_oil_inventories: /eligible account entitlement.*opa_get_plans/,
+    opa_get_forecasts: /eligible account entitlement.*opa_get_plans/,
+    opa_get_drilling: /eligible account entitlement.*opa_get_plans/,
+    opa_get_well_permits: /eligible account entitlement.*opa_get_plans/,
+    opa_get_well_production: /eligible account entitlement.*opa_get_plans/,
+    opa_get_natural_gas_hubs: /eligible account entitlement.*opa_get_plans/,
+    opa_get_data_quality: /eligible account entitlement.*opa_get_plans/,
   };
 
   it("every plan-gated tool states its required plan in the description (#63)", () => {
@@ -1306,6 +1336,26 @@ describe("tool registration metadata", () => {
       expect(tools[name], name).toBeDefined();
       expect(tools[name].description, `${name} description`).toMatch(pattern);
     }
+  });
+
+  it("keeps mutable prices and Free feature limits out of every tool schema", () => {
+    for (const [name, tool] of Object.entries(tools)) {
+      expect(tool.description, name).not.toMatch(
+        /(?:Developer|Starter|Professional|Scale)[^\n.]{0,80}\$\d+/i,
+      );
+      expect(tool.description, name).not.toMatch(
+        /\bfree(?: tier| plan)?\b[^\n.]{0,120}\d+\s*(?:watches?|codes?|hours?|minutes?|[hm]\b)/i,
+      );
+    }
+  });
+
+  it("qualifies historical as_of behavior for observation-dated backfills", () => {
+    const description = tools.opa_get_history.description || "";
+    expect(description).toContain("stored observation and revision timestamps");
+    expect(description).toContain(
+      "Observation-dated bulk backfills may appear in an earlier as_of result",
+    );
+    expect(description).not.toMatch(/as it was knowable|later-collected rows absent/i);
   });
 
   it("registers all four write tools (creates + deletes)", () => {
@@ -1419,7 +1469,12 @@ describe("reviewed product-facts discovery", () => {
     const result = await tool.handler({}, {});
     const payload = JSON.parse(result.content[0].text);
 
-    expect(payload.facts.contractVersion).toBe("2026-07-18");
+    expect(payload.facts.contractVersion).toBe("2026-08-11");
+    expect(payload.facts.offer).toMatchObject({
+      freeRequestLimit: 50,
+      freeRequestWindow: "day",
+    });
+    expect(payload.facts.offer).not.toHaveProperty("freeRequestsPerMonth");
     expect(payload.facts.developer.authenticationHeader).toBe(
       "Authorization: Token YOUR_API_KEY",
     );
@@ -1444,12 +1499,74 @@ describe("reviewed product-facts discovery", () => {
     const payload = JSON.parse(result.contents[0].text || "{}");
 
     expect(result.contents[0].uri).toBe(PRODUCT_FACTS_URI);
-    expect(payload.facts.schemaVersion).toBe("1.0.0");
+    expect(payload.facts.schemaVersion).toBe("2.0.0");
     expect(payload.delivery.warning).toContain(
       "checksum-verified package contract",
     );
 
     vi.unstubAllGlobals();
+  });
+});
+
+describe("reviewed plan allowance copy", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const server = createSandboxServer();
+  const tools = (
+    server as unknown as {
+      _registeredTools: Record<
+        string,
+        {
+          handler: (
+            args: Record<string, unknown>,
+            extra: Record<string, unknown>,
+          ) => Promise<{ content: Array<{ type: string; text: string }> }>;
+        }
+      >;
+    }
+  )._registeredTools;
+
+  it("renders the post-trial allowance from reviewed product facts", async () => {
+    productFactsProvider.clearCache();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.includes("/v1/pricing")) {
+          return {
+            ok: true,
+            status: 200,
+            headers: { get: () => null },
+            json: async () => ({
+              status: "success",
+              data: {
+                plans: [
+                  {
+                    name: "Developer",
+                    monthlyPrice: 19,
+                    yearlyPrice: 190,
+                    requestLimit: 10_000,
+                    features: ["Latest prices"],
+                  },
+                ],
+              },
+            }),
+          } as unknown as Response;
+        }
+        throw new Error("canonical facts unavailable in isolated test");
+      }),
+    );
+
+    const result = await tools.opa_get_plans.handler({}, {});
+    const text = result.content[0].text;
+
+    expect(text).toContain("Free tier: 50 requests/day");
+    expect(text).toContain("Dataset access and limits vary by plan");
+    expect(text).not.toContain("latest prices only");
+    expect(text).not.toMatch(/200 requests?\/(?:mo|month)/i);
+
   });
 });
 
