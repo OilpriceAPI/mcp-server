@@ -23,3 +23,16 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 1
+    ignore:
+      # Track the Node LTS line only. Odd-numbered Node majors are "Current"
+      # releases with a ~7-month support window; Dependabot happily proposes
+      # them and has already offered one that was ALREADY end-of-life (PR #72
+      # proposed node:25-alpine on 2026-08-17; Node 25 reached EOL 2026-06-01
+      # per https://github.com/nodejs/Release/blob/main/schedule.json).
+      #
+      # Pinning the published image to an EOL runtime means no upstream
+      # security patches, so ignore majors and bump this deliberately when the
+      # next LTS (v26, Active LTS from 2026-10-28) is cut. Minor/patch digest
+      # refreshes on the pinned major still come through.
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
