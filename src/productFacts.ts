@@ -79,6 +79,7 @@ interface LegacyV1ProductFacts extends Omit<ProductFacts, "offer"> {
     "freeRequestLimit" | "freeRequestWindow"
   > & {
     freeRequestsPerMonth: number;
+    freeRequestsWindow: "day" | "month";
   };
 }
 
@@ -90,7 +91,7 @@ interface ValidatedProductFacts {
 }
 
 const LEGACY_V1_DAILY_BRIDGE_CHECKSUM =
-  "580bcf6434c97befc773f0be9b304e898cbb6709ee8d831505ea7695125bf1d4";
+  "f9c67acc4c3ebb44aabff2e6c66fed012c4d551987a1e62f88e43a3aa1ebcf66";
 
 const SENSITIVE_KEY =
   /api[_-]?key|secret|password|customer|account[_-]?state|internal|stripe|plan[_-]?id|unpublished/i;
@@ -297,6 +298,7 @@ function validateProductFacts(
           "trialDays",
           "trialRequests",
           "freeRequestsPerMonth",
+          "freeRequestsWindow",
         ],
     "offer",
   );
@@ -469,6 +471,12 @@ function validateProductFacts(
         "legacy v1 offer cannot include typed v2 allowance fields",
       );
     }
+    const freeRequestsWindow = requiredString(offer, "freeRequestsWindow");
+    if (freeRequestsWindow !== "day" && freeRequestsWindow !== "month") {
+      throw new ProductFactsContractError(
+        "freeRequestsWindow must be day or month",
+      );
+    }
     const legacyFacts: LegacyV1ProductFacts = {
       ...commonFacts,
       offer: {
@@ -477,6 +485,7 @@ function validateProductFacts(
           offer,
           "freeRequestsPerMonth",
         ),
+        freeRequestsWindow,
       },
     };
     const sourceFactsChecksum = stableFactsDigest(legacyFacts);
@@ -493,7 +502,7 @@ function validateProductFacts(
       offer: {
         ...commonOffer,
         freeRequestLimit: 50,
-        freeRequestWindow: "day",
+        freeRequestWindow: freeRequestsWindow,
       },
     };
     normalization = "reviewed-v1-daily-bridge";

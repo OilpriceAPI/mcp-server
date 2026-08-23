@@ -21,9 +21,10 @@ function legacyV1Facts(): Record<string, unknown> {
   delete offer.freeRequestLimit;
   delete offer.freeRequestWindow;
   offer.freeRequestsPerMonth = 50;
+  offer.freeRequestsWindow = "day";
   facts.schemaVersion = "1.0.0";
-  facts.contractVersion = "2026-07-18";
-  facts.reviewedAt = "2026-07-18";
+  facts.contractVersion = "2026-08-21";
+  facts.reviewedAt = "2026-08-21";
   facts.schemaUrl =
     "https://api.oilpriceapi.com/schemas/product-facts-v1.schema.json";
   return facts;
@@ -50,10 +51,10 @@ function jsonResponse(
 describe("pinned product-facts contract", () => {
   it("loads only after verifying the reviewed artifact checksum", () => {
     expect(PINNED_PRODUCT_FACTS_CHECKSUM).toBe(
-      "2f2a3a7a0e64177485a583a2bf143dc19486821bd5c21141deae64fc7f3ad529",
+      "62a30d5645a6b50ef81800806af4885169abc2e124d00ada2ca469e8aa71015d",
     );
     expect(PINNED_PRODUCT_FACTS.schemaVersion).toBe("2.0.0");
-    expect(PINNED_PRODUCT_FACTS.contractVersion).toBe("2026-08-11");
+    expect(PINNED_PRODUCT_FACTS.contractVersion).toBe("2026-08-21");
     expect(PINNED_PRODUCT_FACTS.offer).toMatchObject({
       freeRequestLimit: 50,
       freeRequestWindow: "day",
@@ -89,8 +90,8 @@ describe("pinned product-facts contract", () => {
     const staleLimit = legacyV1Facts();
     (staleLimit.offer as Record<string, unknown>).freeRequestsPerMonth = 200;
     const changedReview = legacyV1Facts();
-    changedReview.contractVersion = "2026-08-11";
-    changedReview.reviewedAt = "2026-08-11";
+    changedReview.contractVersion = "2026-08-22";
+    changedReview.reviewedAt = "2026-08-22";
     const changedWording = legacyV1Facts();
     (changedWording.catalog as Record<string, unknown>).publicWording =
       "Changed without a new reviewed v2 contract.";
@@ -98,6 +99,11 @@ describe("pinned product-facts contract", () => {
     unknownRoot.publicExtension = "not part of the reviewed bridge";
     const unknownNested = legacyV1Facts();
     (unknownNested.offer as Record<string, unknown>).resetTimezone = "UTC";
+    const missingWindow = legacyV1Facts();
+    delete (missingWindow.offer as Record<string, unknown>).freeRequestsWindow;
+    const mismatchedWindow = legacyV1Facts();
+    (mismatchedWindow.offer as Record<string, unknown>).freeRequestsWindow =
+      "month";
 
     for (const body of [
       staleLimit,
@@ -105,6 +111,8 @@ describe("pinned product-facts contract", () => {
       changedWording,
       unknownRoot,
       unknownNested,
+      missingWindow,
+      mismatchedWindow,
       { ...legacyV1Facts(), schemaVersion: "1foo" },
       { ...legacyV1Facts(), schemaVersion: "01.0.0" },
       { ...nativeV2Facts(), schemaVersion: "2foo" },
@@ -218,7 +226,7 @@ describe("ProductFactsProvider", () => {
       fetchImpl: vi.fn(async () =>
         jsonResponse(nativeV2Facts()),
       ) as unknown as typeof fetch,
-      now: () => Date.parse("2026-08-11T20:00:00Z"),
+      now: () => Date.parse("2026-08-21T20:00:00Z"),
     });
 
     const canonical = await provider.get();
@@ -238,7 +246,7 @@ describe("ProductFactsProvider", () => {
       fetchImpl: vi.fn(async () =>
         jsonResponse(nativeV2Facts()),
       ) as unknown as typeof fetch,
-      now: () => Date.parse("2026-08-11T20:00:00Z"),
+      now: () => Date.parse("2026-08-21T20:00:00Z"),
     }).get();
     const fallback = await new ProductFactsProvider({
       fetchImpl: vi.fn(async () => {
@@ -296,7 +304,7 @@ describe("ProductFactsProvider", () => {
     }) as unknown as typeof fetch;
     const provider = new ProductFactsProvider({
       fetchImpl,
-      now: () => Date.parse("2026-08-11T20:00:00Z"),
+      now: () => Date.parse("2026-08-21T20:00:00Z"),
     });
 
     const result = await provider.get();
@@ -309,7 +317,7 @@ describe("ProductFactsProvider", () => {
       sourceSchemaVersion: "2.0.0",
       normalization: "native-v2",
     });
-    expect(result.facts.contractVersion).toBe("2026-08-11");
+    expect(result.facts.contractVersion).toBe("2026-08-21");
     expect(result.facts.offer).toMatchObject({
       freeRequestLimit: 50,
       freeRequestWindow: "day",
@@ -342,7 +350,7 @@ describe("ProductFactsProvider", () => {
   });
 
   it("uses a fresh cache without another upstream request", async () => {
-    const base = Date.parse("2026-08-11T20:00:00Z");
+    const base = Date.parse("2026-08-21T20:00:00Z");
     let now = base + 1_000;
     const fetchImpl = vi.fn(async () =>
       jsonResponse(nativeV2Facts()),
@@ -366,7 +374,7 @@ describe("ProductFactsProvider", () => {
   });
 
   it("labels a bounded stale cache and rejects an expired cache", async () => {
-    const base = Date.parse("2026-08-11T20:00:00Z");
+    const base = Date.parse("2026-08-21T20:00:00Z");
     let now = base;
     let fail = false;
     const fetchImpl = vi.fn(async () => {
@@ -407,7 +415,7 @@ describe("ProductFactsProvider", () => {
   });
 
   it("preserves reviewed v1 bridge provenance only inside the stale bound", async () => {
-    const base = Date.parse("2026-08-11T20:00:00Z");
+    const base = Date.parse("2026-08-21T20:00:00Z");
     let now = base;
     let fail = false;
     const fetchImpl = vi.fn(async () => {

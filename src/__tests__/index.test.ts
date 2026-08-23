@@ -1602,7 +1602,7 @@ describe("reviewed product-facts discovery", () => {
     const result = await tool.handler({}, {});
     const payload = JSON.parse(result.content[0].text);
 
-    expect(payload.facts.contractVersion).toBe("2026-08-11");
+    expect(payload.facts.contractVersion).toBe("2026-08-21");
     expect(payload.facts.offer).toMatchObject({
       freeRequestLimit: 50,
       freeRequestWindow: "day",
