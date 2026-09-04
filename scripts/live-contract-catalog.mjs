@@ -47,7 +47,7 @@ export const LIVE_CONTRACT_CATALOG = {
   opa_get_rig_counts: read("/v1/rig-counts/latest", "success-envelope"),
   opa_get_drilling: read("/v1/drilling/latest", "success-envelope"),
   opa_get_diesel_by_state: read(
-    "/v1/prices/latest?by_code=DIESEL_USD_TX",
+    "/v1/prices/latest?by_code=DIESEL_RETAIL_STATE_TX_USD",
     "success-envelope",
   ),
   opa_get_fuel_surcharge: read(
@@ -57,12 +57,12 @@ export const LIVE_CONTRACT_CATALOG = {
   opa_get_storage: read("/v1/storage/cushing", "success-envelope"),
   opa_get_opec_production: read(
     "/v1/ei/opec_productions/latest",
-    "success-envelope",
+    "data-envelope",
   ),
-  opa_get_forecasts: read("/v1/ei/forecasts/latest", "success-envelope"),
+  opa_get_forecasts: read("/v1/ei/forecasts/latest", "data-envelope"),
   opa_get_oil_inventories: read(
     "/v1/ei/oil_inventories/latest",
-    "success-envelope",
+    "data-envelope",
   ),
   opa_get_well_permits: read(
     "/v1/ei/well-permits/latest",
@@ -73,8 +73,8 @@ export const LIVE_CONTRACT_CATALOG = {
     "success-envelope",
   ),
   opa_lookup_well: read(
-    "/v1/well-lifecycle/wells/42329447130000",
-    "success-envelope",
+    "/v1/well-lifecycle/wells/:promoted-sample",
+    "well-lifecycle-lookup",
   ),
   opa_get_well_activity: read(
     "/v1/ei/well-permits/summary?days=30",

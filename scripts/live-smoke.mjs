@@ -85,6 +85,11 @@ function validateShape(shape, body) {
     assert(body.data !== undefined && body.data !== null, "success envelope is missing data");
     return;
   }
+  if (shape === "data-envelope") {
+    assert(!Array.isArray(body), "expected an object envelope");
+    assert(body.data !== undefined && body.data !== null, "data envelope is missing data");
+    return;
+  }
   if (shape === "futures-latest") {
     const front = body.front_month ?? body.contracts?.[0];
     assert(front && Number.isFinite(front.last_price), "futures response has no numeric front-month last_price");
@@ -124,6 +129,30 @@ async function quotaPreflight(expectedRequests) {
 }
 
 async function checkRead(contract) {
+  if (contract.shape === "well-lifecycle-lookup") {
+    const discovery = await request(
+      "/v1/well-lifecycle/states/TX?api_limit=1000&sample_limit=10",
+      { headers: { "X-OPA-Tool": contract.name } },
+    );
+    assert(discovery.status === 200, `fixture discovery returned HTTP ${discovery.status}`);
+    const apiNumber = discovery.body?.data?.samples?.lifecycle_smoke_candidates?.[0]?.api_number;
+    assert(apiNumber, "fixture discovery returned no lifecycle_smoke_candidates API number");
+    const path = `/v1/well-lifecycle/wells/${encodeURIComponent(apiNumber)}?state=TX`;
+    const response = await request(path, { headers: { "X-OPA-Tool": contract.name } });
+    if ([401, 404].includes(response.status)) throw new Error(`HTTP ${response.status} is never skippable`);
+    if ([402, 403].includes(response.status)) {
+      if (contract.entitlement !== "conditional") throw new Error(`unexpected HTTP ${response.status}`);
+      record(contract.name, "covered-plan-gate", `HTTP ${response.status}`, { method: "GET", path });
+      return;
+    }
+    assert(response.status === 200, `expected HTTP 200, received ${response.status}`);
+    validateShape("data-envelope", response.body);
+    record(contract.name, "passed", "discovered promoted sample returned HTTP 200 data-envelope", {
+      method: "GET",
+      path: contract.path,
+    });
+    return;
+  }
   const response = await request(contract.path, {
     headers: { "X-OPA-Tool": contract.name },
   });
@@ -202,7 +231,7 @@ async function subscriptionLifecycle() {
       body: { codes: ["BRENT_CRUDE_USD"], interval_seconds: 3600, name: `mcp-live-contract-${Date.now()}` },
     });
     assert([200, 201].includes(created.status), `create subscription returned HTTP ${created.status}`);
-    id = created.body?.subscription?.id;
+    id = created.body?.subscription?.id ?? created.body?.data?.subscription?.id;
     assert(id, "create subscription did not return subscription.id");
     record("opa_create_price_subscription", "passed", "synthetic subscription created", { method: "POST", path: "/v1/subscriptions" });
 

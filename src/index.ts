@@ -344,8 +344,9 @@ interface PriceData {
 }
 
 export interface ApiResponse<T> {
-  status: string;
+  status?: string;
   data: T;
+  meta?: Record<string, unknown>;
 }
 
 interface AllPricesData {
@@ -1237,6 +1238,19 @@ export interface AuthRequestResult {
   ok: boolean;
   status: number;
   body: unknown;
+}
+
+/** Accept current { status, data } responses and legacy direct CRUD bodies. */
+export function unwrapSuccessData(body: unknown): unknown {
+  if (
+    body &&
+    typeof body === "object" &&
+    !Array.isArray(body) &&
+    "data" in body
+  ) {
+    return (body as { data: unknown }).data;
+  }
+  return body;
 }
 
 /**
@@ -2921,7 +2935,7 @@ server.registerTool(
       "/v1/ei/opec_productions/latest",
     );
 
-    if (!response || response.status !== "success") {
+    if (!response || !response.data) {
       return errorResult(
         "OPEC production data not available. Check opa_get_plans for the account's current energy-intelligence entitlement, then retry.",
       );
@@ -2952,7 +2966,7 @@ server.registerTool(
       "/v1/ei/forecasts/latest",
     );
 
-    if (!response || response.status !== "success") {
+    if (!response || !response.data) {
       return errorResult(
         "Forecast data not available. Check opa_get_plans for the account's current forecast-data entitlement, then retry.",
       );
@@ -3001,7 +3015,7 @@ server.registerTool(
       endpointByView[view],
     );
 
-    if (!response || response.status !== "success") {
+    if (!response || !response.data) {
       return errorResult(
         "EIA oil inventory data not available. Check opa_get_plans for the account's current inventory-data entitlement, then retry.",
       );
@@ -4609,7 +4623,7 @@ server.registerTool(
       );
     }
 
-    const created = (result.body as { subscription?: WatchRecord } | null)
+    const created = (unwrapSuccessData(result.body) as { subscription?: WatchRecord } | null)
       ?.subscription;
     let text = "# Price Subscription Created\n\n";
     text += created
@@ -4652,7 +4666,7 @@ server.registerTool(
     }
 
     const watches =
-      (result.body as { subscriptions?: WatchRecord[] } | null)
+      (unwrapSuccessData(result.body) as { subscriptions?: WatchRecord[] } | null)
         ?.subscriptions ?? [];
 
     if (watches.length === 0) {
