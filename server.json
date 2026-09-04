@@ -6,12 +6,12 @@
     "url": "https://github.com/OilpriceAPI/mcp-server",
     "source": "github"
   },
-  "version": "3.2.3",
+  "version": "3.2.4",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "oilpriceapi-mcp",
-      "version": "3.2.3",
+      "version": "3.2.4",
       "transport": {
         "type": "stdio"
       },
