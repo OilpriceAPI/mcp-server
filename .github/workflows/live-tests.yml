@@ -34,6 +34,13 @@ jobs:
       - run: npm run verify:release-metadata
       - run: npm test
       - run: npm run build
+      - run: npm run generate:live-contracts
+      - run: npm run smoke:live-contract-matrix
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: live-contract-matrix
+          path: artifacts/live-contract-matrix.json
+          if-no-files-found: error
       - run: npm run smoke:public-claims
       - run: npm run smoke:product-facts
       - run: npm run smoke:package
@@ -93,8 +100,15 @@ jobs:
           node-version: "22"
       - run: npm ci
       - run: npm audit --audit-level=low
-      - name: Live smoke test (generic Brent latest + curve)
+      - name: Live contract test (complete published tool registry)
         env:
           OILPRICEAPI_TEST_KEY: ${{ secrets.OILPRICEAPI_TEST_KEY }}
           OILPRICEAPI_LIVE_REQUIRED: "1"
+          SMOKE_WRITE_CONTRACTS: "1"
         run: npm run test:live
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: ${{ always() }}
+        with:
+          name: live-contract-results
+          path: artifacts/live-contract-results.json
+          if-no-files-found: error
