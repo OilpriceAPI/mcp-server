@@ -5,6 +5,7 @@ import {
   formatPrice,
   makeApiRequest,
   makeAuthRequest,
+  unwrapSuccessData,
   resolveIntervalSeconds,
   SUBSCRIPTION_INTERVAL_PRESETS,
   COMMODITY_ALIASES,
@@ -954,6 +955,15 @@ describe("resolveIntervalSeconds", () => {
 describe("makeAuthRequest - request shaping", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("unwraps current success envelopes while retaining legacy direct bodies", () => {
+    const data = { subscription: { id: "watch-123" } };
+    expect(unwrapSuccessData({ status: "success", data })).toEqual(data);
+    expect(unwrapSuccessData(data)).toEqual(data);
+    expect(unwrapSuccessData([{ id: "alert-123" }])).toEqual([
+      { id: "alert-123" },
+    ]);
   });
 
   it("POSTs a JSON body and merges custom headers (X-OPA-Source/Tool)", async () => {
