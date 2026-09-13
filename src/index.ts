@@ -1878,6 +1878,45 @@ export function describeRequestFailure(
   return `${label} could not be read: the API returned HTTP ${outcome.status}${detail}.`;
 }
 
+/**
+ * The single renderer every read tool uses when it has no data to show (#103).
+ *
+ * Two genuinely different things reach this point and they had been collapsed
+ * into one sentence that blamed the account's plan for both:
+ *
+ *   - the API ANSWERED (`outcome.data` is present) but the payload holds no
+ *     usable record. That is a data-availability fact about the dataset.
+ *   - the request FAILED (no body at all): 401, 404, 5xx or transport.
+ *     {@link describeRequestFailure} names which one.
+ *
+ * Neither can be an entitlement problem. 402 and 403 throw ApiGateError inside
+ * requestApi, and a durable-quota 429 throws its own gate error (#101), so a
+ * plan limit never reaches here — it is answered where it actually happens,
+ * with the API's own limit text and the upgrade link. Telling a customer whose
+ * key is simply wrong that they need a bigger plan is the defect (#103); #94
+ * fixed it for opa_get_storage and this closes the rest.
+ */
+export function describeUnavailable(
+  label: string,
+  outcome: ApiRequestOutcome<unknown>,
+  answeredButEmpty: string,
+  coverageHint?: string,
+): string {
+  if (outcome.data) {
+    return coverageHint
+      ? `${answeredButEmpty} ${coverageHint}`
+      : answeredButEmpty;
+  }
+  const described = describeRequestFailure(label, outcome);
+  // A coverage hint ("beta coverage is limited to…", "valid slugs are…")
+  // explains a MISSING DATASET. It is true for a 404 and for an empty answer,
+  // and it is noise — or worse, a second wrong cause — on a 401, a 5xx or a
+  // dropped connection, so it is withheld there.
+  return coverageHint && outcome.status === 404
+    ? `${described} ${coverageHint}`
+    : described;
+}
+
 // ---------------------------------------------------------------------------
 // Authenticated request helper (price alerts)
 //
@@ -2949,9 +2988,10 @@ server.registerTool(
     if ("error" in resolved) return resolved.error;
 
     const asOfQuery = as_of ? `&as_of=${encodeURIComponent(as_of)}` : "";
-    const response = await makeApiRequest<ApiResponse<HistoricalPriceData>>(
+    const outcome = await requestApi<ApiResponse<HistoricalPriceData>>(
       `/v1/prices/past_${period}?by_code=${resolved.code}${asOfQuery}`,
     );
+    const response = outcome.data;
 
     if (
       !response ||
@@ -2959,7 +2999,11 @@ server.registerTool(
       !response.data.prices?.length
     ) {
       return errorResult(
-        `No historical data found for '${commodity}' (code: ${resolved.code}) over the past ${period}. The series may lack data for this period or this account may lack access. Use opa_get_plans for current entitlement details.`,
+        describeUnavailable(
+          `Historical data for '${commodity}' (code: ${resolved.code}) over the past ${period}`,
+          outcome,
+          `No historical data found for '${commodity}' (code: ${resolved.code}) over the past ${period}. The API answered but the series has no observations in this window.`,
+        ),
       );
     }
 
@@ -3019,13 +3063,16 @@ server.registerTool(
 
     const slug = FUTURES_CONTRACT_SLUGS[contract];
     // Latest = GET /v1/futures/{slug} (no /latest, no ?contract= query param).
-    const response = await makeApiRequest<FuturesLatestData>(
-      `/v1/futures/${slug}`,
-    );
+    const outcome = await requestApi<FuturesLatestData>(`/v1/futures/${slug}`);
+    const response = outcome.data;
 
     if (!response || !response.contracts?.length) {
       return errorResult(
-        `No futures data available for ${FUTURES_CONTRACT_NAMES[contract]} (${contract}). Check opa_get_plans for the account's current futures entitlement.`,
+        describeUnavailable(
+          `Futures data for ${FUTURES_CONTRACT_NAMES[contract]} (${contract})`,
+          outcome,
+          `No futures data available for ${FUTURES_CONTRACT_NAMES[contract]} (${contract}). The API answered but returned no contracts for this instrument.`,
+        ),
       );
     }
 
@@ -3072,13 +3119,18 @@ server.registerTool(
 
     const slug = FUTURES_CONTRACT_SLUGS[contract];
     // Curve = GET /v1/futures/{slug}/curve (no generic ?contract= route).
-    const response = await makeApiRequest<FuturesCurveData>(
+    const outcome = await requestApi<FuturesCurveData>(
       `/v1/futures/${slug}/curve`,
     );
+    const response = outcome.data;
 
     if (!response || !response.contracts?.length) {
       return errorResult(
-        `No futures curve data available for ${FUTURES_CONTRACT_NAMES[contract]} (${contract}). Check opa_get_plans for the account's current futures entitlement.`,
+        describeUnavailable(
+          `Futures curve data for ${FUTURES_CONTRACT_NAMES[contract]} (${contract})`,
+          outcome,
+          `No futures curve data available for ${FUTURES_CONTRACT_NAMES[contract]} (${contract}). The API answered but returned no curve points for this instrument.`,
+        ),
       );
     }
 
@@ -3172,12 +3224,18 @@ server.registerTool(
 
     if (hub) {
       const query = past ? `?past=${encodeURIComponent(past)}` : "";
-      const response = await makeApiRequest<ApiResponse<HubQuote>>(
+      const outcome = await requestApi<ApiResponse<HubQuote>>(
         `/v1/natural-gas/hubs/${encodeURIComponent(hub.toLowerCase())}${query}`,
       );
+      const response = outcome.data;
       if (!response || response.status !== "success") {
         return errorResult(
-          `No data for natural gas hub '${hub}'. Valid slugs: waha, socal, chicago, algonquin, eastern-gas-south, houston-ship-channel. Check opa_get_plans for the account's current hub-data entitlement.`,
+          describeUnavailable(
+            `Natural gas hub data for '${hub}'`,
+            outcome,
+            `No data for natural gas hub '${hub}'.`,
+            "Valid slugs: waha, socal, chicago, algonquin, eastern-gas-south, houston-ship-channel.",
+          ),
         );
       }
       const q = response.data;
@@ -3188,12 +3246,17 @@ server.registerTool(
       return textResult(text);
     }
 
-    const response = await makeApiRequest<ApiResponse<HubsIndexData>>(
+    const outcome = await requestApi<ApiResponse<HubsIndexData>>(
       "/v1/natural-gas/hubs",
     );
+    const response = outcome.data;
     if (!response || response.status !== "success") {
       return errorResult(
-        "Natural gas hub data not available. Check opa_get_plans for the account's current hub-data entitlement.",
+        describeUnavailable(
+          "Natural gas hub data",
+          outcome,
+          "Natural gas hub data is not available: the API answered but returned no hub index.",
+        ),
       );
     }
     const { benchmark, hubs } = response.data;
@@ -3246,8 +3309,8 @@ server.registerTool(
     if (fuel_type) params.push(`fuel_type=${encodeURIComponent(fuel_type)}`);
     if (params.length) endpoint += `?${params.join("&")}`;
 
-    const response =
-      await makeApiRequest<ApiResponse<MarineFuelsData>>(endpoint);
+    const outcome = await requestApi<ApiResponse<MarineFuelsData>>(endpoint);
+    const response = outcome.data;
 
     if (
       !response ||
@@ -3255,7 +3318,11 @@ server.registerTool(
       !response.data.prices?.length
     ) {
       return errorResult(
-        "No marine fuel price data available. Check opa_get_plans for the account's current bunker-fuel entitlement.",
+        describeUnavailable(
+          "Marine fuel price data",
+          outcome,
+          "No marine fuel price data available: the API answered but returned no bunker prices for this request.",
+        ),
       );
     }
 
@@ -3287,13 +3354,18 @@ server.registerTool(
   async () => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_rig_counts");
 
-    const response = await makeApiRequest<ApiResponse<RigCountData>>(
+    const outcome = await requestApi<ApiResponse<RigCountData>>(
       "/v1/rig-counts/latest",
     );
+    const response = outcome.data;
 
     if (!response || response.status !== "success") {
       return errorResult(
-        "Rig count data not available. Check opa_get_plans for the account's current energy-intelligence entitlement, then retry.",
+        describeUnavailable(
+          "Rig count data",
+          outcome,
+          "Rig count data is not available: the API answered but returned no rig count record.",
+        ),
       );
     }
 
@@ -3382,13 +3454,18 @@ server.registerTool(
   async () => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_drilling");
 
-    const response = await makeApiRequest<ApiResponse<DrillingData>>(
+    const outcome = await requestApi<ApiResponse<DrillingData>>(
       "/v1/drilling/latest",
     );
+    const response = outcome.data;
 
     if (!response || response.status !== "success") {
       return errorResult(
-        "Drilling activity data not available. Check opa_get_plans for the account's current energy-intelligence entitlement, then retry.",
+        describeUnavailable(
+          "Drilling activity data",
+          outcome,
+          "Drilling activity data is not available: the API answered but returned no drilling snapshot.",
+        ),
       );
     }
 
@@ -3643,13 +3720,18 @@ server.registerTool(
   async () => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_opec_production");
 
-    const response = await makeApiRequest<ApiResponse<Record<string, unknown>>>(
+    const outcome = await requestApi<ApiResponse<Record<string, unknown>>>(
       "/v1/ei/opec_productions/latest",
     );
+    const response = outcome.data;
 
     if (!response || !response.data) {
       return errorResult(
-        "OPEC production data not available. Check opa_get_plans for the account's current energy-intelligence entitlement, then retry.",
+        describeUnavailable(
+          "OPEC production data",
+          outcome,
+          "OPEC production data is not available: the API answered but returned no production record.",
+        ),
       );
     }
 
@@ -3674,13 +3756,18 @@ server.registerTool(
   async () => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_forecasts");
 
-    const response = await makeApiRequest<ApiResponse<Record<string, unknown>>>(
+    const outcome = await requestApi<ApiResponse<Record<string, unknown>>>(
       "/v1/ei/forecasts/latest",
     );
+    const response = outcome.data;
 
     if (!response || !response.data) {
       return errorResult(
-        "Forecast data not available. Check opa_get_plans for the account's current forecast-data entitlement, then retry.",
+        describeUnavailable(
+          "Forecast data",
+          outcome,
+          "Forecast data is not available: the API answered but returned no forecast record.",
+        ),
       );
     }
 
@@ -3723,13 +3810,18 @@ server.registerTool(
       by_product: "/v1/ei/oil_inventories/by_product",
     };
 
-    const response = await makeApiRequest<ApiResponse<Record<string, unknown>>>(
+    const outcome = await requestApi<ApiResponse<Record<string, unknown>>>(
       endpointByView[view],
     );
+    const response = outcome.data;
 
     if (!response || !response.data) {
       return errorResult(
-        "EIA oil inventory data not available. Check opa_get_plans for the account's current inventory-data entitlement, then retry.",
+        describeUnavailable(
+          "EIA oil inventory data",
+          outcome,
+          "EIA oil inventory data is not available: the API answered but returned no inventory record for this view.",
+        ),
       );
     }
 
@@ -3808,12 +3900,17 @@ server.registerTool(
     const queryString = query.toString();
     if (queryString) endpoint += `?${queryString}`;
 
-    const response =
-      await makeApiRequest<ApiResponse<Record<string, unknown>>>(endpoint);
+    const outcome =
+      await requestApi<ApiResponse<Record<string, unknown>>>(endpoint);
+    const response = outcome.data;
 
     if (!response || response.status !== "success") {
       return errorResult(
-        "Well permit data not available. Check opa_get_plans for the account's current well-data entitlement, then retry.",
+        describeUnavailable(
+          "Well permit data",
+          outcome,
+          "Well permit data is not available: the API answered but returned no permit records for this request.",
+        ),
       );
     }
 
@@ -4003,12 +4100,17 @@ server.registerTool(
       );
     }
 
-    const response = await makeApiRequest<ApiResponse<Record<string, unknown>>>(
+    const outcome = await requestApi<ApiResponse<Record<string, unknown>>>(
       mapped.endpoint,
     );
+    const response = outcome.data;
     if (!response || response.status !== "success") {
       return errorResult(
-        `No safe well-permit search result is available for ${mapped.stateCode}. Check account entitlement and retry.`,
+        describeUnavailable(
+          `Well-permit search for ${mapped.stateCode}`,
+          outcome,
+          `No safe well-permit search result is available for ${mapped.stateCode}: the API answered but returned no matching permits.`,
+        ),
       );
     }
 
@@ -4491,23 +4593,38 @@ server.registerTool(
     const mapped = wellProductionEndpoint(view, { state, api_number });
     if ("error" in mapped) return errorResult(mapped.error);
 
-    const response = await makeApiRequest<ApiResponse<Record<string, unknown>>>(
+    const outcome = await requestApi<ApiResponse<Record<string, unknown>>>(
       mapped.endpoint,
     );
+    const response = outcome.data;
 
     if (!response || response.status !== "success") {
       if (view === "state") {
         return errorResult(
-          `No well production data available for '${state}'. Beta coverage is limited to states reporting via EIA or selected state regulators — try the states view to see which states currently report. Check opa_get_plans for the account's current well-data entitlement.`,
+          describeUnavailable(
+            `Well production data for '${state}'`,
+            outcome,
+            `No well production data available for '${state}'.`,
+            "Beta coverage is limited to states reporting via EIA or selected state regulators — try the states view to see which states currently report.",
+          ),
         );
       }
       if (view === "well") {
         return errorResult(
-          `No production history found for API number '${api_number}'. Well-level coverage is beta and limited to selected states — the number may be valid but outside current coverage. Check opa_get_plans for the account's current well-data entitlement.`,
+          describeUnavailable(
+            `Production history for API number '${api_number}'`,
+            outcome,
+            `No production history found for API number '${api_number}'.`,
+            "Well-level coverage is beta and limited to selected states — the number may be valid but outside current coverage.",
+          ),
         );
       }
       return errorResult(
-        "Well production data not available. Check opa_get_plans for the account's current well-data entitlement, then retry.",
+        describeUnavailable(
+          "Well production data",
+          outcome,
+          "Well production data is not available: the API answered but returned no production records for this view.",
+        ),
       );
     }
 
@@ -4534,13 +4651,19 @@ server.registerTool(
   async ({ type }) => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_spread");
 
-    const response = await makeApiRequest<ApiResponse<Record<string, unknown>>>(
+    const outcome = await requestApi<ApiResponse<Record<string, unknown>>>(
       `/v1/spreads/${type}`,
     );
+    const response = outcome.data;
 
     if (!response || response.status !== "success") {
+      const label = `${type.charAt(0).toUpperCase() + type.slice(1)} spread data`;
       return errorResult(
-        `${type.charAt(0).toUpperCase() + type.slice(1)} spread data not available. Check opa_get_plans for the account's current spread-data entitlement, then retry.`,
+        describeUnavailable(
+          label,
+          outcome,
+          `${label} is not available: the API answered but returned no spread records.`,
+        ),
       );
     }
 
@@ -4730,12 +4853,17 @@ server.registerTool(
     if (commodity) {
       const resolved = resolveOrError(commodity);
       if ("error" in resolved) return resolved.error;
-      const response = await makeApiRequest<
+      const outcome = await requestApi<
         ApiResponse<{ report?: Record<string, unknown> }>
       >(`/v1/data-quality/reports/${encodeURIComponent(resolved.code)}`);
+      const response = outcome.data;
       if (!response || response.status !== "success" || !response.data.report) {
         return errorResult(
-          `No data-quality report for '${commodity}' (code: ${resolved.code}). Check opa_get_plans for the account's current per-commodity report entitlement.`,
+          describeUnavailable(
+            `Data-quality report for '${commodity}' (code: ${resolved.code})`,
+            outcome,
+            `No data-quality report for '${commodity}' (code: ${resolved.code}). The API answered but has not published a report for this series.`,
+          ),
         );
       }
       let text = `# Data Quality — ${resolved.code}\n\n`;
