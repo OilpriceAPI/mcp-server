@@ -162,9 +162,14 @@ describe("#105.3 no `undefined` interpolated into data tables", () => {
 
   it("opa_get_rig_counts: absent counts are not printed as undefined", async () => {
     vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    // Fixture rewritten for #115. This case was written against an
+    // oil/gas/total/date shape /v1/rig-counts/latest has never served, so it
+    // passed while the tool reported "not reported" on every real call. The
+    // live record carries `count`/`region`/`observed_at`; here `region` and
+    // `observed_at` are absent so the guard still has something to guard.
     stubJson({
       status: "success",
-      data: { oil: 480, date: "2026-09-12" },
+      data: { code: "US_RIG_COUNT", count: 480, unit: "rigs" },
     });
 
     const result = await tools.opa_get_rig_counts.handler({}, {});

@@ -260,7 +260,7 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_get_futures`         | Front-month futures (Brent, WTI, gasoil, TTF, JKM, EU carbon)                                   |
 | `opa_get_futures_curve`   | Full forward curve with contango/backwardation analysis                                         |
 | `opa_get_marine_fuels`    | Bunker fuel prices by port and fuel type (VLSFO/MGO/IFO380)                                     |
-| `opa_get_rig_counts`      | Baker Hughes US rig count with week-over-week change                                            |
+| `opa_get_rig_counts`      | Baker Hughes US total rig count with region and observation date                                |
 | `opa_get_drilling`        | Drilling snapshot: rig counts, frac spreads, 30-day permits, DUCs                               |
 | `opa_get_diesel_by_state` | AAA retail diesel price for any US state (50 states + DC)                                       |
 | `opa_get_fuel_surcharge`  | LTL and parcel carrier fuel surcharge percentages with effective dates and source provenance    |
@@ -307,7 +307,7 @@ The market brief gives a multi-commodity snapshot in one call. Subscriptions ("w
 "What's diesel cost in California vs Texas?"
 "Give me a market overview of refined products"
 "What's the Brent futures curve look like?"
-"How many oil rigs are active in the US?"
+"How many rigs are active in the US?"
 "What are OPEC production levels?"
 "What are bunker fuel prices in Singapore?"
 "Show me Cushing storage levels"

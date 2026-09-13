@@ -597,14 +597,43 @@ interface MarineFuelsData {
   prices: MarineFuelPrice[];
 }
 
+// Shape of GET /v1/rig-counts/latest as served by the current API (verified
+// live 2026-09-13). The pre-#115 formatter read oil/gas/total/date — four
+// fields this envelope has never carried — so every line of the answer was
+// rendered from an absent field while the API was returning a usable count
+// (#115). There is no oil/gas split and no week-over-week delta on this
+// endpoint; do not reintroduce either without a source that carries it.
 interface RigCountData {
-  oil: number;
-  gas: number;
-  total: number;
-  misc?: number;
-  change_from_prior_week?: number;
-  date: string;
+  code?: string;
+  region?: string;
+  count?: number;
+  unit?: string;
   source?: string;
+  observed_at?: string;
+  source_date?: string;
+  formatted_date?: string;
+}
+
+/**
+ * Format the CURRENT live /v1/rig-counts/latest payload (#115). Exported for
+ * tests. Every field goes through reportedValue, so an API rename shows up as
+ * a stated absence rather than as `undefined` presented as data.
+ */
+export function formatRigCountData(data: RigCountData): string {
+  const unit = typeof data.unit === "string" ? data.unit.trim() : "";
+  const count = reportedValue(data.count, (v) =>
+    typeof v === "number" ? v.toLocaleString() : String(v),
+  );
+
+  let text = `# US Rig Count (Baker Hughes)\n\n`;
+  text += `- **Region**: ${reportedValue(data.region)}\n`;
+  text += `- **Rig Count**: ${count}${count !== NOT_REPORTED && unit ? ` ${unit}` : ""}\n`;
+  text += `- **As Of**: ${reportedValue(data.observed_at ?? data.source_date)}\n`;
+  if (data.source !== undefined) {
+    text += `- **Source**: ${reportedValue(data.source)}\n`;
+  }
+  text += `\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
+  return text;
 }
 
 // Shape of GET /v1/drilling/latest as served by the current API (verified
@@ -2552,8 +2581,8 @@ const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
       example: "SINGAPORE | VLSFO | $XXX.XX | USD | metric ton",
     },
     opa_get_rig_counts: {
-      does: "Returns the latest Baker Hughes US oil & gas rig counts with week-over-week change.",
-      example: "Oil Rigs: NNN · Gas Rigs: NNN · Total: NNN (±N vs prior week)",
+      does: "Returns the latest Baker Hughes US total rig count with its region and observation date. No oil/gas split and no prior-week delta — that is opa_get_drilling.",
+      example: "United States · Rig Count: NNN rigs · As Of: YYYY-MM-DDTHH:MM:SSZ",
     },
     opa_get_drilling: {
       does: "Returns a drilling activity snapshot: US/Canada/international rig counts, frac spread count, well permits (last 30 days, by state), and DUC well totals.",
@@ -3515,7 +3544,7 @@ server.registerTool(
   {
     title: "Get US Rig Counts",
     description:
-      "Get the latest US oil and gas rig count data (Baker Hughes). Use when the user asks about drilling activity, rig counts, or oil field operations. Returns oil rigs, gas rigs, total count, and week-over-week change. No parameters needed. " +
+      "Get the latest US rig count (Baker Hughes). Use when the user asks about drilling activity, rig counts, or oil field operations. Returns a single US total rig count with its region and observation date — this source carries no oil/gas split and no prior-week delta. For rigs broken out by US/Canada/international alongside frac spreads and permits, use opa_get_drilling. No parameters needed. " +
       ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {},
     annotations: READ_TOOL_ANNOTATIONS,
@@ -3538,19 +3567,7 @@ server.registerTool(
       );
     }
 
-    const data = response.data;
-    let text = `# US Rig Count (Baker Hughes)\n\n`;
-    text += `- **Oil Rigs**: ${reportedValue(data.oil)}\n`;
-    text += `- **Gas Rigs**: ${reportedValue(data.gas)}\n`;
-    text += `- **Total**: ${reportedValue(data.total)}\n`;
-    if (data.change_from_prior_week !== undefined) {
-      const sign = data.change_from_prior_week >= 0 ? "+" : "";
-      text += `- **Change from Prior Week**: ${sign}${data.change_from_prior_week}\n`;
-    }
-    text += `- **Date**: ${reportedValue(data.date)}\n`;
-    text += `\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
-
-    return textResult(text);
+    return textResult(formatRigCountData(response.data));
   },
 );
 
