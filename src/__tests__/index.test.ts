@@ -2378,9 +2378,14 @@ describe("opa_get_well_production (#31) - negative paths via tool handler", () =
     );
 
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toContain(
-      "Well production data not available",
-    );
+    // #103: this assertion used to read "Well production data not available",
+    // the first half of a sentence whose second half was "Check opa_get_plans
+    // for the account's current well-data entitlement" — for an HTTP 404. The
+    // tool now names the status it actually got and says in terms that this is
+    // not a plan restriction.
+    expect(result.content[0].text).toContain("Well production data");
+    expect(result.content[0].text).toContain("HTTP 404");
+    expect(result.content[0].text).not.toMatch(/entitlement|opa_get_plans/i);
   });
 });
 
