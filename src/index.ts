@@ -907,7 +907,7 @@ server.registerTool = ((
         undefined,
         // The MCP SDK hands handlers the host's cancellation signal. Parking
         // it on the tool-call context means every request helper honours it
-        // without threading a parameter through all 36 handlers (#84).
+        // without threading a parameter through every handler (#84).
         (extra as { signal?: AbortSignal } | undefined)?.signal,
       )) as never,
   )) as typeof server.registerTool;

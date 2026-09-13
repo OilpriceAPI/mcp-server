@@ -309,7 +309,7 @@ export async function withToolTelemetry<T>(
  *
  * Carried on the same AsyncLocalStorage context that already carries
  * attribution, so every request helper picks it up without threading a
- * parameter through all 36 tool handlers (#84).
+ * parameter through every tool handler (#84).
  */
 export function currentToolAbortSignal(): AbortSignal | undefined {
   return toolCallContext.getStore()?.signal;
