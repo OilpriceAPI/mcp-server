@@ -31,6 +31,15 @@ export function buildLiveContractMatrix(capabilities, catalog) {
     if (contract.mode === "network-read" && !["ungated", "conditional"].includes(contract.entitlement)) {
       throw new Error(`${tool.name} has no explicit entitlement classification`);
     }
+    if (
+      contract.mode === "network-read" &&
+      contract.shape === "success-envelope" &&
+      (!contract.args || typeof contract.args !== "object" || Array.isArray(contract.args))
+    ) {
+      // #118: without args the live run cannot drive the tool's formatter, and
+      // the contract falls back to the envelope check that passed a rename.
+      throw new Error(`${tool.name} has a success-envelope contract with no handler args for the field check`);
+    }
     if (contract.mode === "network-write" && (!contract.lifecycle || !contract.cleanup)) {
       throw new Error(`${tool.name} has no isolated lifecycle cleanup declaration`);
     }

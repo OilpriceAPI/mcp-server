@@ -28,4 +28,21 @@ for (const [label, catalog] of [
   if (!rejected) throw new Error(`matrix accepted a ${label} contract declaration`);
 }
 
+// #118: a success-envelope contract that cannot drive its formatter would fall
+// back to the envelope-only check that passed the rig-count rename.
+const successEnvelopes = matrix.tools.filter(({ shape }) => shape === "success-envelope");
+if (successEnvelopes.length === 0 || successEnvelopes.some(({ args }) => !args)) {
+  throw new Error("a success-envelope contract has no handler args for the field check");
+}
+{
+  const { args: _dropped, ...withoutArgs } = LIVE_CONTRACT_CATALOG.opa_get_rig_counts;
+  let rejected = false;
+  try {
+    buildLiveContractMatrix(capabilities, { ...LIVE_CONTRACT_CATALOG, opa_get_rig_counts: withoutArgs });
+  } catch (error) {
+    rejected = String(error.message).includes("no handler args");
+  }
+  if (!rejected) throw new Error("matrix accepted a success-envelope contract with no handler args");
+}
+
 process.stdout.write("Live contract matrix smoke passed.\n");
