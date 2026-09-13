@@ -245,6 +245,25 @@ docs consumers should pin a package version, validate `schemaVersion` and
 `sourceCommit`, and update the artifact only through an explicit dependency
 upgrade. They should not scrape CLI prose or hard-code tool counts.
 
+### API-to-MCP capability ledger
+
+`capability-ledger.json` records an explicit decision for every operation in
+the published OilPriceAPI contract (`https://api.oilpriceapi.com/openapi.json`).
+Each operation is either `exposed`, naming the registered tool(s), or
+`not_exposed` with a disposition (`selected`, `deferred`, `alias`,
+`unsupported`, `internal`) and a one-line reason. Families group operations into
+workflows, including preview API families the server calls that are not in the
+canonical contract yet.
+
+`npm run build && npm run check:capability-ledger` compares the ledger with the
+live contract, `build/capabilities.json` and the REST paths `src/index.ts`
+calls. It exits 1 on drift, such as a new API operation with no decision, a
+removed one, or an unrecorded tool or path. It exits 2 when it cannot check: the
+contract is unreachable, the build manifest is missing, or the route-policy
+snapshot is older than its stated threshold. CI runs it on every pull request
+and daily. When a decision changes, bump `ledgerVersion`, append to `changes`,
+and link that change from the release notes.
+
 ## Tools
 
 All tools are prefixed with `opa_` to avoid name collisions when multiple MCP servers are loaded.
