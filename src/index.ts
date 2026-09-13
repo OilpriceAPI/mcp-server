@@ -66,6 +66,11 @@ import {
   type CapabilityBuildMetadata,
   type ToolConfiguration,
 } from "./toolRegistry.js";
+import {
+  formatQuote,
+  formatQuoteAmount,
+  formatQuoteDelta,
+} from "./currency.js";
 
 export {
   PINNED_PRODUCT_FACTS,
@@ -338,6 +343,8 @@ interface PriceData {
   code: string;
   price: number;
   currency: string;
+  /** Unit the price is quoted per, e.g. "barrel", "litre", "rigs" (#100). */
+  unit?: string;
   created_at?: string;
   updated_at?: string;
   change_24h?: number;
@@ -361,6 +368,8 @@ interface HistoricalPriceData {
     price: number;
     created_at: string;
     code?: string;
+    currency?: string;
+    unit?: string;
   }>;
 }
 
@@ -1173,20 +1182,21 @@ function resolveOrError(
  */
 export function formatPrice(data: PriceData): string {
   const info = COMMODITY_INFO[data.code] || { name: data.code, unit: "unit" };
-  const currencySymbol =
-    data.currency === "EUR"
-      ? "€"
-      : data.currency === "GBP" || data.currency === "GBp"
-        ? "£"
-        : "$";
 
-  let result = `**${info.name}**: ${currencySymbol}${data.price.toFixed(2)}/${info.unit}`;
+  let result = `**${info.name}**: ${formatQuote(
+    data.price,
+    data.currency,
+    data.unit,
+    info.unit,
+  )}`;
 
   if (data.change_24h !== undefined && data.change_24h_percent !== undefined) {
-    const sign = data.change_24h >= 0 ? "+" : "-";
-    const absChange = Math.abs(data.change_24h).toFixed(2);
+    const sign = data.change_24h_percent >= 0 ? "+" : "-";
     const absPct = Math.abs(data.change_24h_percent).toFixed(2);
-    result += `\n- 24h Change: ${sign}${currencySymbol}${absChange} (${sign}${absPct}%)`;
+    result += `\n- 24h Change: ${formatQuoteDelta(
+      data.change_24h,
+      data.currency,
+    )} (${sign}${absPct}%)`;
   }
 
   const timestamp = data.updated_at || data.created_at;
@@ -1977,9 +1987,12 @@ function formatDemoPrice(p: DemoPrice): string {
     name: p.name || p.code,
     unit: "unit",
   };
-  const currencySymbol =
-    p.currency === "EUR" ? "€" : p.currency === "GBP" ? "£" : "$";
-  let result = `**${info.name}**: ${currencySymbol}${p.price.toFixed(2)}/${info.unit}`;
+  let result = `**${info.name}**: ${formatQuote(
+    p.price,
+    p.currency,
+    (p as { unit?: string }).unit,
+    info.unit,
+  )}`;
   if (typeof p.change_24h === "number") {
     const sign = p.change_24h >= 0 ? "+" : "";
     result += `\n- 24h Change: ${sign}${p.change_24h.toFixed(2)}%`;
@@ -2064,14 +2077,8 @@ export async function demoComparePricesResult(
     const spread = Math.abs(found[0].price - found[1].price);
     const name0 = COMMODITY_INFO[found[0].code]?.name || found[0].code;
     const name1 = COMMODITY_INFO[found[1].code]?.name || found[1].code;
-    const sym =
-      found[0].currency === "EUR"
-        ? "€"
-        : found[0].currency === "GBP"
-          ? "£"
-          : "$";
     sections.push(
-      `**Spread**: ${sym}${spread.toFixed(2)} (${name0} vs ${name1})`,
+      `**Spread**: ${formatQuoteAmount(spread, found[0].currency)} (${name0} vs ${name1})`,
     );
   }
 
@@ -2163,8 +2170,7 @@ export async function demoMarketOverviewResult(
     sections.push(`## ${group}\n`);
     for (const p of items) {
       const name = COMMODITY_INFO[p.code]?.name || p.name || p.code;
-      const sym = p.currency === "EUR" ? "€" : p.currency === "GBP" ? "£" : "$";
-      let line = `- **${name}**: ${sym}${p.price.toFixed(2)}`;
+      let line = `- **${name}**: ${formatQuoteAmount(p.price, p.currency)}`;
       if (typeof p.change_24h === "number") {
         const sign = p.change_24h >= 0 ? "+" : "";
         line += ` (${sign}${p.change_24h.toFixed(1)}%)`;
@@ -2520,14 +2526,10 @@ server.registerTool(
           name: item.code,
           unit: "unit",
         };
-        const currencySymbol =
-          item.currency === "EUR"
-            ? "€"
-            : item.currency === "GBP" || item.currency === "GBp"
-              ? "£"
-              : "$";
-
-        let line = `- **${info.name}**: ${currencySymbol}${item.price.toFixed(2)}`;
+        let line = `- **${info.name}**: ${formatQuoteAmount(
+          item.price,
+          item.currency,
+        )}`;
 
         if (item.change_24h_percent !== undefined) {
           const sign = item.change_24h_percent >= 0 ? "+" : "";
@@ -2610,14 +2612,8 @@ server.registerTool(
       const spread = Math.abs(results[0].price - results[1].price);
       const info0 = COMMODITY_INFO[results[0].code]?.name || results[0].code;
       const info1 = COMMODITY_INFO[results[1].code]?.name || results[1].code;
-      const currencySymbol =
-        results[0].currency === "EUR"
-          ? "€"
-          : results[0].currency === "GBP"
-            ? "£"
-            : "$";
       sections.push(
-        `**Spread**: ${currencySymbol}${spread.toFixed(2)} (${info0} vs ${info1})`,
+        `**Spread**: ${formatQuoteAmount(spread, results[0].currency)} (${info0} vs ${info1})`,
       );
     }
 
@@ -2778,14 +2774,13 @@ server.registerTool(
       name: resolved.code,
       unit: "unit",
     };
-    const currencyFromCode = resolved.code.endsWith("_EUR")
-      ? "EUR"
-      : resolved.code.endsWith("_GBP") || resolved.code.endsWith("_GBp")
-        ? "GBP"
-        : "USD";
-    const sym =
-      currencyFromCode === "EUR" ? "€" : currencyFromCode === "GBP" ? "£" : "$";
     const prices = response.data.prices;
+    // The code SUFFIX lies: NATURAL_GAS_GBP is quoted in GBp (pence), so
+    // "_GBP" -> "£" overstated it 100x. Every history row carries its own
+    // `currency` and `unit` — verified live 2026-09-13 on
+    // GET /v1/prices/past_week?by_code=NATURAL_GAS_GBP.
+    const currency = prices.find((p) => p.currency)?.currency;
+    const apiUnit = prices.find((p) => p.unit)?.unit;
     const latest = prices[0];
     const oldest = prices[prices.length - 1];
     const high = Math.max(...prices.map((p) => p.price));
@@ -2796,11 +2791,11 @@ server.registerTool(
 
     const sections = [
       `# ${info.name} — Past ${period.charAt(0).toUpperCase() + period.slice(1)}\n`,
-      `- **Latest**: ${sym}${latest.price.toFixed(2)}/${info.unit}`,
-      `- **High**: ${sym}${high.toFixed(2)}`,
-      `- **Low**: ${sym}${low.toFixed(2)}`,
-      `- **Average**: ${sym}${avg.toFixed(2)}`,
-      `- **Change**: ${change >= 0 ? "+" : ""}${sym}${change.toFixed(2)} (${change >= 0 ? "+" : ""}${changePct.toFixed(1)}%)`,
+      `- **Latest**: ${formatQuote(latest.price, currency, apiUnit, info.unit)}`,
+      `- **High**: ${formatQuoteAmount(high, currency)}`,
+      `- **Low**: ${formatQuoteAmount(low, currency)}`,
+      `- **Average**: ${formatQuoteAmount(avg, currency)}`,
+      `- **Change**: ${formatQuoteDelta(change, currency)} (${change >= 0 ? "+" : ""}${changePct.toFixed(1)}%)`,
       `- **Data Points**: ${prices.length}`,
       `\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`,
     ];
@@ -4998,14 +4993,10 @@ server.registerTool(
     if (data.as_of) sections.push(`_As of ${data.as_of}_\n`);
 
     for (const c of data.commodities) {
-      const sym =
-        c.currency === "EUR"
-          ? "€"
-          : c.currency === "GBP" || c.currency === "GBp"
-            ? "£"
-            : "$";
       const price =
-        typeof c.price === "number" ? `${sym}${c.price.toFixed(2)}` : "n/a";
+        typeof c.price === "number"
+          ? formatQuoteAmount(c.price, c.currency)
+          : "n/a";
       let line = `- **${c.name || c.code}**: ${price}`;
       if (typeof c.change_24h_pct === "number") {
         const sign = c.change_24h_pct >= 0 ? "+" : "";
@@ -5013,7 +5004,10 @@ server.registerTool(
       }
       if (c.stale) line += " ⚠️ stale";
       if (c.forecast_1m && typeof c.forecast_1m.point === "number") {
-        line += ` — 1m forecast ~${sym}${c.forecast_1m.point.toFixed(2)}`;
+        line += ` — 1m forecast ~${formatQuoteAmount(
+          c.forecast_1m.point,
+          c.currency,
+        )}`;
       }
       sections.push(line);
     }
@@ -5021,10 +5015,12 @@ server.registerTool(
     if (Array.isArray(data.spreads) && data.spreads.length > 0) {
       sections.push("\n## Spreads");
       for (const s of data.spreads) {
-        const sym =
-          s.currency === "EUR" ? "€" : s.currency === "GBP" ? "£" : "$";
         sections.push(
-          `- **${s.label || s.pair}**: ${sym}${typeof s.value === "number" ? s.value.toFixed(2) : "n/a"}`,
+          `- **${s.label || s.pair}**: ${
+            typeof s.value === "number"
+              ? formatQuoteAmount(s.value, s.currency)
+              : "n/a"
+          }`,
         );
       }
     }
