@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { makeApiRequest, ApiGateError } from "../index.js";
+import {
+  makeApiRequest,
+  ApiGateError,
+  REQUEST_DEADLINE_MS,
+} from "../index.js";
 
 // #86 — retry policy for 429.
 //
@@ -129,7 +133,15 @@ describe("Retry-After parsing is bounded and never collapses to no wait (#86)", 
     vi.useRealTimers();
   });
 
-  /** Record the delay handed to every setTimeout during the call. */
+  /**
+   * Record the BACKOFF delays handed to setTimeout during the call.
+   *
+   * #84 added a whole-call deadline, which schedules one timer of
+   * REQUEST_DEADLINE_MS before the first attempt. That timer is not a backoff,
+   * so it is dropped here — once, and only if it is actually the first timer —
+   * and asserted separately below so the interaction stays documented rather
+   * than silently swallowed.
+   */
   async function delaysFor(mockFetch: typeof fetch): Promise<number[]> {
     const delays: number[] = [];
     const realSetTimeout = globalThis.setTimeout;
@@ -150,7 +162,9 @@ describe("Retry-After parsing is bounded and never collapses to no wait (#86)", 
     await vi.runAllTimersAsync();
     await p;
     spy.mockRestore();
-    return delays;
+
+    expect(delays[0]).toBe(REQUEST_DEADLINE_MS);
+    return delays.slice(1);
   }
 
   it("an HTTP-date Retry-After produces a real wait, not a 1ms NaN timer", async () => {
