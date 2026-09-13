@@ -40,15 +40,8 @@
   },
   "demandEvidence": {
     "window": "30 days ending 2026-09-13T20:02Z",
-    "systemOfRecord": "production api_requests joined to users (read-only)",
-    "population": "Authenticated accounts with at least one successful (2xx/3xx) call on the operation in the window.",
-    "exclusions": [
-      "users.internal_service or users.admin",
-      "internal email domains (oilpriceapi.com, metirilabs.com) and smoke/e2e/synthetic accounts",
-      "accounts created inside the window (younger than the measurement window)",
-      "catalogue sweepers: accounts calling 25 or more distinct method+path keys"
-    ],
-    "ranking": "Distinct established accounts per workflow family, tie-broken by accounts with repeat use on two or more days. Account-level counts are kept out of this public repository; the query is named mcp-77-demand-export in the pull request that seeded this ledger.",
+    "provenance": "Query, population and exclusions are recorded privately in OilpriceAPI/oilpriceapi-api#8480; they describe internal schema and filtering and are kept out of this public repository.",
+    "ranking": "Distinct established accounts per workflow family, tie-broken by accounts with repeat use on two or more days. Account-level counts and the query are in OilpriceAPI/oilpriceapi-api#8480.",
     "rankedUnexposedFamilies": [
       "1 date-range price history (selected)",
       "2 futures settlement history (selected; ahead of marine and commodity detail on repeat and paid accounts)",
