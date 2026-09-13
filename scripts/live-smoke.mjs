@@ -1,9 +1,19 @@
 #!/usr/bin/env node
 
+// Live contract run against production for every published tool.
+//
+// Exit codes follow scripts/commodity-identity-invariant.mjs:
+//   0  every contract checked and passed
+//   1  a contract failed (wrong status, wrong envelope, a field the formatter
+//      reads is missing, a tool answered with an error)
+//   2  the run could not check (no key, network error, preflight failure).
+//      Never 0: a check that silently skips is indistinguishable from a pass.
+
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { generateLiveContractMatrix } from "./generate-live-contract-matrix.mjs";
+import { checkToolFields } from "./live-contract-fields.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const resultsPath = resolve(root, "artifacts/live-contract-results.json");
@@ -12,22 +22,27 @@ const key = process.env.OILPRICEAPI_TEST_KEY;
 const keyRequired = process.env.OILPRICEAPI_LIVE_REQUIRED === "1";
 const writesRequired = process.env.SMOKE_WRITE_CONTRACTS === "1";
 const rateLimitMs = Number(process.env.OILPRICEAPI_LIVE_RATE_LIMIT_MS || 1100);
+// Captured before any handler runs: the field check swaps globalThis.fetch for
+// a tracing shim while a handler executes, and pass-through requests must not
+// loop back into it.
+const networkFetch = globalThis.fetch;
+const OUTCOMES = ["passed", "covered-plan-gate", "non-network", "failed", "cannot-check"];
 let matrix;
+let registeredTools;
 const results = [];
 let lastRequestAt = 0;
 
+class CannotCheckError extends Error {}
+
 function record(tool, outcome, detail, extra = {}) {
   results.push({ tool, outcome, detail, ...extra });
-  const stream = outcome === "failed" ? process.stderr : process.stdout;
+  const stream = ["failed", "cannot-check"].includes(outcome) ? process.stderr : process.stdout;
   stream.write(`${outcome.toUpperCase()}: ${tool} — ${detail}\n`);
 }
 
 function writeResults() {
   const summary = Object.fromEntries(
-    ["passed", "covered-plan-gate", "non-network", "failed"].map((outcome) => [
-      outcome,
-      results.filter((result) => result.outcome === outcome).length,
-    ]),
+    OUTCOMES.map((outcome) => [outcome, results.filter((result) => result.outcome === outcome).length]),
   );
   mkdirSync(dirname(resultsPath), { recursive: true });
   writeFileSync(
@@ -46,22 +61,37 @@ async function pace() {
   if (remaining > 0) await new Promise((resolvePromise) => setTimeout(resolvePromise, remaining));
 }
 
+async function pacedNetworkFetch(input, init) {
+  try {
+    return await networkFetch(input, init);
+  } finally {
+    lastRequestAt = Date.now();
+  }
+}
+
 async function request(path, { method = "GET", body, headers = {} } = {}) {
   await pace();
-  const response = await fetch(`${apiBase}${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${key}`,
-      Accept: "application/json",
-      "User-Agent": "oilpriceapi-mcp-live-contracts/3.2.4",
-      "X-OPA-Source": "mcp-live-contracts",
-      ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-      ...headers,
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  lastRequestAt = Date.now();
-  const text = await response.text();
+  let response;
+  let text;
+  try {
+    response = await networkFetch(`${apiBase}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${key}`,
+        Accept: "application/json",
+        "User-Agent": "oilpriceapi-mcp-live-contracts/3.2.4",
+        "X-OPA-Source": "mcp-live-contracts",
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        ...headers,
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    text = await response.text();
+  } catch (error) {
+    throw new CannotCheckError(`network error on ${method} ${path}: ${error.message}`);
+  } finally {
+    lastRequestAt = Date.now();
+  }
   let parsed = null;
   if (text) {
     try {
@@ -70,7 +100,7 @@ async function request(path, { method = "GET", body, headers = {} } = {}) {
       parsed = text;
     }
   }
-  return { status: response.status, body: parsed };
+  return { status: response.status, body: parsed, text, headers: response.headers };
 }
 
 function validateShape(shape, body) {
@@ -128,6 +158,42 @@ async function quotaPreflight(expectedRequests) {
   );
 }
 
+async function loadRegisteredTools() {
+  if (registeredTools) return registeredTools;
+  // The built server reads its key and base URL from the environment. Point
+  // it at the same key and API the envelope check used.
+  process.env.OILPRICEAPI_KEY = key;
+  process.env.OILPRICEAPI_BASE_URL = apiBase;
+  const built = await import(pathToFileURL(resolve(root, "build/index.js")).href);
+  registeredTools = {
+    tools: built.createSandboxServer()._registeredTools,
+    notReported: built.NOT_REPORTED,
+  };
+  return registeredTools;
+}
+
+// #118: the envelope says nothing about the fields the formatter reads. Run the
+// tool's real handler over the live response and fail on any field it read
+// that the response lacks, when the answer shows that absence.
+async function checkFormatterFields(contract, response) {
+  const { tools, notReported } = await loadRegisteredTools();
+  const registered = tools[contract.name];
+  assert(registered && typeof registered.handler === "function", `${contract.name} is not a registered tool`);
+  const fields = await checkToolFields({
+    tool: contract.name,
+    handler: registered.handler,
+    args: contract.args,
+    contractPath: contract.path,
+    contractResponse: { status: response.status, text: response.text, headers: response.headers },
+    apiBase,
+    fetchImpl: pacedNetworkFetch,
+    notReported,
+    beforeRequest: pace,
+  });
+  if (!fields.ok) throw new Error(`field contract: ${fields.reason}`);
+  return fields;
+}
+
 async function checkRead(contract) {
   if (contract.shape === "well-lifecycle-lookup") {
     const discovery = await request(
@@ -169,9 +235,22 @@ async function checkRead(contract) {
   }
   assert(response.status === 200, `expected HTTP 200, received ${response.status}`);
   validateShape(contract.shape, response.body);
-  record(contract.name, "passed", `HTTP 200 ${contract.shape}`, {
+  if (contract.shape !== "success-envelope") {
+    record(contract.name, "passed", `HTTP 200 ${contract.shape}`, {
+      method: contract.method,
+      path: contract.path,
+    });
+    return;
+  }
+  const fields = await checkFormatterFields(contract, response);
+  const tolerated = fields.absentKeys.length
+    ? `; optional keys absent and not rendered as missing: ${fields.absentKeys.slice(0, 10).join(", ")}${fields.absentKeys.length > 10 ? ` (+${fields.absentKeys.length - 10} more)` : ""}`
+    : "";
+  record(contract.name, "passed", `HTTP 200 ${contract.shape}; formatter fields present${tolerated}`, {
     method: contract.method,
     path: contract.path,
+    requested: fields.requested,
+    toleratedAbsentKeys: fields.absentKeys,
   });
 }
 
@@ -250,9 +329,16 @@ async function subscriptionLifecycle() {
   }
 }
 
+function outcomeFor(error) {
+  return error instanceof CannotCheckError ? "cannot-check" : "failed";
+}
+
 async function main() {
   if (!key) {
-    if (keyRequired) throw new Error("OILPRICEAPI_TEST_KEY is required");
+    // Protected main sets OILPRICEAPI_LIVE_REQUIRED=1: no key there is a run
+    // that checked nothing, so it exits 2. Local and pull-request runs, which
+    // deliberately receive no secret, keep the explicit SKIP.
+    if (keyRequired) throw new CannotCheckError("OILPRICEAPI_TEST_KEY is required; no contract was checked");
     process.stdout.write("SKIP: OILPRICEAPI_TEST_KEY not set.\n");
     return;
   }
@@ -265,13 +351,19 @@ async function main() {
   const reads = matrix.tools.filter(
     ({ mode, lifecycle }) => mode === "network-read" && !["price-alert", "subscription"].includes(lifecycle),
   );
-  const expectedRequests = reads.length + (writesRequired ? 12 : 1) + 2;
-  await quotaPreflight(expectedRequests);
+  // Field checks reuse each contract response; the handlers' secondary calls
+  // (a comparison leg, a state-health gate) are budgeted at one per read.
+  const expectedRequests = reads.length * 2 + (writesRequired ? 12 : 1) + 2;
+  try {
+    await quotaPreflight(expectedRequests);
+  } catch (error) {
+    throw new CannotCheckError(`preflight: ${error.message}`);
+  }
   for (const contract of reads) {
     try {
       await checkRead(contract);
     } catch (error) {
-      record(contract.name, "failed", error.message, { method: contract.method, path: contract.path });
+      record(contract.name, outcomeFor(error), error.message, { method: contract.method, path: contract.path });
     }
   }
 
@@ -282,7 +374,7 @@ async function main() {
     } catch (error) {
       const lifecycleTools = matrix.tools.filter((tool) => tool.lifecycle === label);
       for (const tool of lifecycleTools.filter((candidate) => !results.some((result) => result.tool === candidate.name))) {
-        record(tool.name, "failed", `${label} lifecycle: ${error.message}`);
+        record(tool.name, outcomeFor(error), `${label} lifecycle: ${error.message}`);
       }
     }
   }
@@ -291,19 +383,25 @@ async function main() {
 try {
   await main();
 } catch (error) {
-  record("__runner__", "failed", error.message);
+  record("__runner__", outcomeFor(error), error.message);
 } finally {
   let summary = writeResults();
   const expectedTools = new Set(matrix?.tools.map(({ name }) => name) ?? []);
   const reportedTools = new Set(results.filter(({ tool }) => tool !== "__runner__").map(({ tool }) => tool));
-  const missing = key
-    ? [...expectedTools].filter((tool) => !reportedTools.has(tool))
-    : [];
-  if (missing.length) record("__runner__", "failed", `tools missing results: ${missing.join(", ")}`);
+  const missing = [...expectedTools].filter((tool) => !reportedTools.has(tool));
+  if (missing.length) {
+    // Tools left unchecked because the runner could not check are a
+    // cannot-check, not a contract failure; anything else is a failure.
+    const runnerCannotCheck = results.some(({ tool, outcome }) => tool === "__runner__" && outcome === "cannot-check");
+    record("__runner__", runnerCannotCheck ? "cannot-check" : "failed", `tools missing results: ${missing.join(", ")}`);
+  }
   summary = writeResults();
-  if (summary.failed > 0 || missing.length > 0) {
+  if (summary.failed > 0) {
     process.stderr.write(`Live contracts FAILED: ${JSON.stringify(summary)}\n`);
     process.exitCode = 1;
+  } else if (summary["cannot-check"] > 0) {
+    process.stderr.write(`Live contracts COULD NOT CHECK (exit 2, not a pass): ${JSON.stringify(summary)}\n`);
+    process.exitCode = 2;
   } else {
     process.stdout.write(`Live contracts PASSED: ${JSON.stringify(summary)}\n`);
   }
