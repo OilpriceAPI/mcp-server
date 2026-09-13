@@ -715,9 +715,15 @@ describe("makeApiRequest - retry behaviour", () => {
     return promise;
   }
 
-  // v2.4.0 (#17): an exhausted 429 now surfaces the rate limit + upgrade link
-  // as an ApiGateError instead of silently returning null.
-  it("throws ApiGateError with upgrade link on 429 after exhausting all retries", async () => {
+  // v2.4.0 (#17): an exhausted 429 surfaces the rate limit + upgrade link as
+  // an ApiGateError instead of silently returning null.
+  //
+  // #86 changed the call count here from 4 to 1. This fixture is a MONTHLY
+  // quota — a durable window that cannot reopen inside a retry budget — so
+  // the three extra requests could never have succeeded. They only delayed
+  // the error and spent three more requests against an exhausted allowance.
+  // Coverage of the retries-exhausted path moved to the transient case below.
+  it("throws ApiGateError with upgrade link on a durable 429 without retrying", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 429,
@@ -739,6 +745,29 @@ describe("makeApiRequest - retry behaviour", () => {
     expect((error as ApiGateError).message).toContain(
       "Monthly request limit of 200 reached",
     );
+    expect((error as ApiGateError).message).toContain(UPGRADE_URL);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws ApiGateError with upgrade link on a transient 429 after exhausting all retries", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      statusText: "Too Many Requests",
+      headers: { get: () => null },
+      text: async () =>
+        JSON.stringify({ message: "Too many requests, slow down" }),
+    });
+
+    const promise = makeApiRequest(
+      "/v1/prices/latest",
+      mockFetch as typeof fetch,
+    ).catch((e: unknown) => e);
+    await vi.runAllTimersAsync();
+    const error = await promise;
+
+    expect(error).toBeInstanceOf(ApiGateError);
+    expect((error as ApiGateError).status).toBe(429);
     expect((error as ApiGateError).message).toContain(UPGRADE_URL);
     expect(mockFetch).toHaveBeenCalledTimes(4);
   });
