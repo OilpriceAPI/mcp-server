@@ -1386,11 +1386,22 @@ describe("tier-limit gate errors (#17) - makeApiRequest", () => {
 });
 
 describe("tier-limit gate errors (#17) - alertHttpError", () => {
-  it("appends the upgrade link on 429 with the API's exact limit", () => {
+  it("appends the upgrade link on a DURABLE 429 with the API's exact limit", () => {
+    // #109: a 429 is classified on the API's own signal, so this fixture now
+    // carries the rate-limit contract that makes it durable exhaustion. A
+    // prose-only 429 is transient and no longer sells an upgrade.
     const msg = alertHttpError(
       {
         ok: false,
         status: 429,
+        headers: {
+          "X-RateLimit-Window": "monthly_counter",
+          "X-RateLimit-State": "exhausted",
+        },
+        rawBody: JSON.stringify({
+          block_reason: "request_limit_exceeded",
+          message: "Rate limit exceeded: 200 requests/month",
+        }),
         body: { message: "Rate limit exceeded: 200 requests/month" },
       },
       "get the market brief",
