@@ -723,14 +723,28 @@ describe("makeApiRequest - retry behaviour", () => {
   // the three extra requests could never have succeeded. They only delayed
   // the error and spent three more requests against an exhausted allowance.
   // Coverage of the retries-exhausted path moved to the transient case below.
+  //
+  // #101: the fixture now carries the headers and enum fields production
+  // actually sends (base_controller.rb:1379, :1454-1473). Durability is no
+  // longer inferred from the word "quota" in a sentence.
   it("throws ApiGateError with upgrade link on a durable 429 without retrying", async () => {
+    const quotaHeaders: Record<string, string> = {
+      "x-ratelimit-window": "monthly_counter",
+      "x-ratelimit-state": "exhausted",
+    };
     const mockFetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 429,
       statusText: "Too Many Requests",
-      headers: { get: () => null },
+      headers: {
+        get: (name: string) => quotaHeaders[name.toLowerCase()] ?? null,
+      },
       text: async () =>
-        JSON.stringify({ message: "Monthly request limit of 200 reached" }),
+        JSON.stringify({
+          message: "Monthly request limit of 200 reached",
+          error_code: "MONTHLY_QUOTA_EXCEEDED",
+          block_reason: "request_limit_exceeded",
+        }),
     });
 
     const promise = makeApiRequest(
@@ -749,7 +763,11 @@ describe("makeApiRequest - retry behaviour", () => {
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("throws ApiGateError with upgrade link on a transient 429 after exhausting all retries", async () => {
+  // #101: a transient 429 means the caller is bursting, not out of allowance.
+  // It used to end in "the plan's request limit was hit ... Upgrade", which
+  // is an upsell for something they have not run out of. It still surfaces as
+  // an ApiGateError after the retries, without the pitch.
+  it("throws ApiGateError WITHOUT upgrade copy on a transient 429 after exhausting all retries", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 429,
@@ -768,7 +786,10 @@ describe("makeApiRequest - retry behaviour", () => {
 
     expect(error).toBeInstanceOf(ApiGateError);
     expect((error as ApiGateError).status).toBe(429);
-    expect((error as ApiGateError).message).toContain(UPGRADE_URL);
+    expect((error as ApiGateError).message).not.toContain(UPGRADE_URL);
+    expect((error as ApiGateError).message).toContain(
+      "Too many requests, slow down",
+    );
     expect(mockFetch).toHaveBeenCalledTimes(4);
   });
 

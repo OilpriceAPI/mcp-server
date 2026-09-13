@@ -1307,24 +1307,195 @@ export function boundedRetryDelayMs(
   return Math.min(Math.max(base, 1000), MAX_RETRY_DELAY_MS);
 }
 
-/**
- * Quota windows that will not reopen within the retry budget. Matched against
- * the raw response body so it works whatever error envelope the API uses.
- */
-const DURABLE_QUOTA_PATTERN =
-  /\b(month|monthly|daily|per[-\s]?day|per[-\s]?month|trial|quota)\b/i;
+// ---------------------------------------------------------------------------
+// Classifying a 429 (#101)
+//
+// #96 matched a regex against the raw response body. The API's
+// enforcement_check_failed 429 says "We couldn't safely verify your current
+// QUOTA. Retry shortly" — the word "quota" matched, so an explicitly
+// retryable operational failure was thrown after a single fetch and answered
+// with "the plan's request limit was hit ... Upgrade". The customer had hit
+// nothing. The comment directly above that renderer in oilpriceapi-api says
+// so verbatim (base_controller.rb:1337-1339):
+//
+//   "Enforcement lookup failures are operational failures, not customer
+//    exhaustion."
+//
+// The API publishes a machine-readable signal for exactly this decision, on
+// every rate-limit rejection (base_controller.rb:1893-1895, :1979-2013):
+//
+//   X-RateLimit-State:  exhausted | unavailable | <entitlement state>
+//   X-RateLimit-Window: monthly_counter | daily_counter | trial_counter
+//                     | hourly_circuit_breaker | enforcement_check
+//
+// State alone is not enough — the hourly circuit breaker also reports
+// "exhausted" — so BOTH are required, exactly as the node SDK does
+// (oilpriceapi-node src/client.ts:59-113).
+// ---------------------------------------------------------------------------
+
+/** Counter windows whose allowance does not come back within a retry budget. */
+const DURABLE_QUOTA_WINDOWS = new Set([
+  "daily_counter",
+  "monthly_counter",
+  "trial_counter",
+]);
 
 /**
- * True when a 429 is a durable window rather than a recoverable burst. A
- * Retry-After beyond the retry budget is durable by definition: the server
- * itself says recovery is further away than we are willing to wait.
+ * Structured body fields, used only when the headers are missing. These are
+ * enum-valued fields the API sets, never prose: `block_reason` and
+ * `error_code` from base_controller.rb:1454-1473 and :1899-1901. The degraded
+ * rescue path (base_controller.rb:1804-1810) renders a body with no header
+ * contract, which is the case this covers.
  */
-export function isDurableRateLimit(
+const DURABLE_BLOCK_REASONS = new Set([
+  "request_limit_exceeded",
+  "trial_limit_exceeded",
+]);
+const DURABLE_ERROR_CODES = new Set([
+  "MONTHLY_QUOTA_EXCEEDED",
+  "TRIAL_LIMIT_EXCEEDED",
+  "TRIAL_EXPIRED",
+  "EMAIL_CONFIRMATION_REQUIRED",
+  "RATE_LIMIT_EXCEEDED",
+  "PAYMENT_REQUIRED",
+]);
+const TRANSIENT_BLOCK_REASONS = new Set([
+  "enforcement_check_failed",
+  "hourly_circuit_breaker",
+]);
+const TRANSIENT_ERROR_CODES = new Set([
+  "RATE_LIMIT_CHECK_FAILED",
+  "HOURLY_CIRCUIT_BREAKER_EXCEEDED",
+]);
+
+export type RateLimitClassification = {
+  /** "durable_quota" only when the allowance itself is gone. */
+  kind: "durable_quota" | "transient";
+  /** X-RateLimit-Window, lowercased, or null. */
+  window: string | null;
+  /** X-RateLimit-State, lowercased, or null. */
+  state: string | null;
+  /** block_reason from the body, or null. */
+  blockReason: string | null;
+};
+
+/** Minimal shape of whatever carries the response headers. */
+type HeaderSource =
+  { get(name: string): string | null } | Record<string, string>;
+
+function headerValue(source: HeaderSource, name: string): string | null {
+  if (source && typeof (source as { get?: unknown }).get === "function") {
+    const raw = (source as { get(n: string): string | null }).get(name);
+    return raw === null || raw === undefined ? null : String(raw);
+  }
+  const bag = source as Record<string, string>;
+  if (!bag) return null;
+  const hit = Object.keys(bag).find(
+    (key) => key.toLowerCase() === name.toLowerCase(),
+  );
+  return hit === undefined ? null : String(bag[hit]);
+}
+
+function normalize(value: string | null): string | null {
+  const trimmed = value?.trim().toLowerCase();
+  return trimmed ? trimmed : null;
+}
+
+/** Pull `block_reason` / `error_code` out of the body, guarded. */
+function structuredReason(body: string): {
+  blockReason: string | null;
+  errorCode: string | null;
+} {
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object") {
+      return { blockReason: null, errorCode: null };
+    }
+    const nested =
+      parsed.error && typeof parsed.error === "object"
+        ? (parsed.error as Record<string, unknown>)
+        : {};
+    const pick = (key: string): string | null => {
+      const value = parsed[key] ?? nested[key];
+      return typeof value === "string" && value.trim() ? value.trim() : null;
+    };
+    return {
+      blockReason: pick("block_reason"),
+      errorCode: pick("error_code")?.toUpperCase() ?? null,
+    };
+  } catch {
+    return { blockReason: null, errorCode: null };
+  }
+}
+
+/**
+ * Decide whether a 429 means the allowance is gone.
+ *
+ * Fails OPEN: an absent or unrecognised signal is "transient", so an unknown
+ * state can never turn a retryable burst into a hard failure — and can never
+ * turn one into an upgrade pitch.
+ */
+export function classifyRateLimit(
+  headers: HeaderSource,
   body: string,
+): RateLimitClassification {
+  const window = normalize(headerValue(headers, "X-RateLimit-Window"));
+  const state = normalize(headerValue(headers, "X-RateLimit-State"));
+  const { blockReason, errorCode } = structuredReason(body);
+  const base = { window, state, blockReason };
+
+  // An explicitly non-exhaustion condition wins over everything. The hourly
+  // circuit breaker reports state "exhausted" and is still not a quota.
+  if (
+    (blockReason && TRANSIENT_BLOCK_REASONS.has(blockReason)) ||
+    (errorCode && TRANSIENT_ERROR_CODES.has(errorCode)) ||
+    (window && !DURABLE_QUOTA_WINDOWS.has(window))
+  ) {
+    return { ...base, kind: "transient" };
+  }
+
+  if (state === "exhausted" && window && DURABLE_QUOTA_WINDOWS.has(window)) {
+    return { ...base, kind: "durable_quota" };
+  }
+
+  // No usable header contract — fall back to the body's enum fields.
+  if (
+    (blockReason && DURABLE_BLOCK_REASONS.has(blockReason)) ||
+    (errorCode && DURABLE_ERROR_CODES.has(errorCode))
+  ) {
+    return { ...base, kind: "durable_quota" };
+  }
+
+  return { ...base, kind: "transient" };
+}
+
+/**
+ * Build the error for a 429 that is NOT durable quota exhaustion.
+ *
+ * Carries no upgrade copy: the caller has not run out of anything, and for
+ * enforcement_check_failed the API's own `recovery.action` is "retry". Telling
+ * them to buy more of an allowance they still have is the defect (#101).
+ */
+function buildRateLimitError(
+  classification: RateLimitClassification,
+  detail: string,
   retryAfterMs: number | null,
-): boolean {
-  if (retryAfterMs !== null && retryAfterMs > MAX_RETRY_DELAY_MS) return true;
-  return DURABLE_QUOTA_PATTERN.test(body);
+  attempts: number,
+): ApiGateError {
+  const label =
+    classification.window === "enforcement_check" ||
+    classification.blockReason === "enforcement_check_failed"
+      ? "Rate limit check unavailable (HTTP 429) — the API could not verify this account's allowance. This is a server-side check failure, not a plan limit"
+      : classification.window === "hourly_circuit_breaker" ||
+          classification.blockReason === "hourly_circuit_breaker"
+        ? "Hourly safety limit (HTTP 429) — this is a short-window burst guard, not a plan quota, and a larger plan does not lift it"
+        : "Rate limit exceeded (HTTP 429) — the API asked for a slower request rate";
+  const retried =
+    attempts > 1 ? ` Retried ${attempts} times without success.` : "";
+  return new ApiGateError(
+    429,
+    `${label}${detail ? `: ${detail}` : "."}${resetHint(retryAfterMs)}${retried} Retry shortly; check current usage with opa_get_account_status.`,
+  );
 }
 
 /** Human reset hint for a durable limit, e.g. "resets in about 8h 47m". */
@@ -1575,12 +1746,28 @@ export async function requestApi<T>(
           // Read the body once: it both classifies the limit and supplies the
           // detail for the gate error.
           const body = await readBodyText(response);
+          const classification = classifyRateLimit(response.headers, body);
 
           // Durable quota exhaustion — stop immediately (#86). Retrying cannot
           // succeed and only spends more of an already-exhausted allowance.
-          if (isDurableRateLimit(body, retryAfterMs)) {
+          // This is the ONLY branch that sells an upgrade (#101).
+          if (classification.kind === "durable_quota") {
             const gate = await buildGateError(replayResponse(429, body));
             throw new ApiGateError(429, gate.message + resetHint(retryAfterMs));
+          }
+
+          const detail = await extractErrorDetail(replayResponse(429, body));
+
+          // The server says recovery is further away than we are willing to
+          // wait, so stop — but this is a "come back later", not a quota
+          // exhausted, and it must not carry upgrade copy (#101).
+          if (retryAfterMs !== null && retryAfterMs > MAX_RETRY_DELAY_MS) {
+            throw buildRateLimitError(
+              classification,
+              detail,
+              retryAfterMs,
+              attempt + 1,
+            );
           }
 
           if (attempt < maxRetries) {
@@ -1593,8 +1780,14 @@ export async function requestApi<T>(
             continue;
           }
 
-          // Transient limit, retries exhausted — surface it with the upgrade link.
-          throw await buildGateError(replayResponse(429, body));
+          // Transient limit, retries exhausted. Still not an upgrade: nothing
+          // says this account ran out of anything.
+          throw buildRateLimitError(
+            classification,
+            detail,
+            retryAfterMs,
+            attempt + 1,
+          );
         }
 
         // Retry on 5xx, with the same bounded delay.

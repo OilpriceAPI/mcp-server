@@ -1,9 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  makeApiRequest,
-  ApiGateError,
-  REQUEST_DEADLINE_MS,
-} from "../index.js";
+import { makeApiRequest, ApiGateError, REQUEST_DEADLINE_MS } from "../index.js";
 
 // #86 — retry policy for 429.
 //
@@ -40,13 +36,28 @@ function res(status: number, headers: Record<string, string> = {}, body = "") {
 }
 
 // Production's actual envelope is nested under "error". Extracting the
-// message out of that shape is fixed separately in #93/#94; durability is
-// classified against the raw body, so it works either way.
+// message out of that shape is fixed separately in #93/#94.
+//
+// #101 moved durability off body prose and onto the API's machine-readable
+// signal, so these fixtures now carry what production actually sends with a
+// quota 429 (oilpriceapi-api base_controller.rb:1454-1473 and :1379):
+// X-RateLimit-State "exhausted", X-RateLimit-Window "monthly_counter", and
+// the enum fields block_reason / error_code. The previous fixtures carried
+// prose only and no headers at all — a shape production never emits, and the
+// shape that let an unrelated 429 be read as exhaustion.
+const QUOTA_HEADERS = {
+  "X-RateLimit-Window": "monthly_counter",
+  "X-RateLimit-State": "exhausted",
+};
 const MONTHLY_NESTED = JSON.stringify({
   error: { message: "Monthly request limit of 200 reached" },
+  error_code: "MONTHLY_QUOTA_EXCEEDED",
+  block_reason: "request_limit_exceeded",
 });
 const MONTHLY_FLAT = JSON.stringify({
   message: "Monthly request limit of 200 reached",
+  error_code: "MONTHLY_QUOTA_EXCEEDED",
+  block_reason: "request_limit_exceeded",
 });
 const BURST = JSON.stringify({
   error: { message: "Too many requests in a short burst, slow down" },
@@ -70,7 +81,9 @@ describe("durable quota exhaustion is not retried (#86)", () => {
   }
 
   it("a monthly-quota 429 is requested exactly once", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(res(429, {}, MONTHLY_NESTED));
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(res(429, QUOTA_HEADERS, MONTHLY_NESTED));
 
     const error = await call(mockFetch as unknown as typeof fetch);
 
@@ -80,7 +93,9 @@ describe("durable quota exhaustion is not retried (#86)", () => {
   });
 
   it("the API's own limit text survives the no-retry path", async () => {
-    const mockFetch = vi.fn().mockResolvedValue(res(429, {}, MONTHLY_FLAT));
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(res(429, QUOTA_HEADERS, MONTHLY_FLAT));
 
     const error = await call(mockFetch as unknown as typeof fetch);
 
