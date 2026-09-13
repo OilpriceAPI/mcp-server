@@ -452,8 +452,23 @@ describe("resolveCommodityCode", () => {
     expect(resolveCommodityCode("BRENT_CRUDE_USD")).toBe("BRENT_CRUDE_USD");
   });
 
-  it("returns null for unknown input", () => {
-    expect(resolveCommodityCode("unknown_commodity_xyz")).toBeNull();
+  // CONTRACT CHANGE (#8437). Code-shaped input now passes THROUGH to the API
+  // rather than being refused locally against a hardcoded 27-entry list, because
+  // the live catalog is ~604 and the API owns it. An unknown code reaches the
+  // API and comes back with its real `invalid_code` error and real suggestions
+  // ("did you mean WTI_CRUDE_USD"), which is strictly better than this server
+  // guessing — its own suggestion helper returns zero suggestions for
+  // underscore-joined input.
+  //
+  // Non-code input is still refused here, which is what this case now asserts.
+  it("passes unknown CODE-SHAPED input through for the API to adjudicate", () => {
+    expect(resolveCommodityCode("unknown_commodity_xyz")).toBe(
+      "UNKNOWN_COMMODITY_XYZ",
+    );
+  });
+
+  it("returns null for input that is neither a code nor an alias", () => {
+    expect(resolveCommodityCode("what is the weather today")).toBeNull();
   });
 
   it("returns null for garbage input", () => {

@@ -965,7 +965,38 @@ export function resolveCommodityCode(input: string): string | null {
     return mapped;
   }
 
-  // Fuzzy match — check if input contains key words
+  // Code-shaped input passes THROUGH to the API (#8437).
+  //
+  // COMMODITY_CODES is a hardcoded 27-entry list; the live catalog is ~604.
+  // Anything outside the 27 fell to the substring loop below and was matched
+  // onto an unrelated commodity, or refused without the API ever being called.
+  //
+  // The substitutions were silent and wrong. Measured 2026-09-13 against the
+  // real module:
+  //
+  //   NATURAL_GAS_WAHA          -> NATURAL_GAS_USD
+  //   RBOB_GASOLINE_USD         -> NATURAL_GAS_USD
+  //   NATURAL_GAS_TTF_SPOT_EUR  -> NATURAL_GAS_USD
+  //   SINGAPORE_GASOIL_USD      -> NATURAL_GAS_USD
+  //
+  // Waha is a Permian hub that trades at a deep basis discount to Henry Hub and
+  // has settled NEGATIVE; TTF is European gas in EUR/MWh. These are different
+  // instruments in different currencies and units, returned with isError:false.
+  // An AI agent cannot detect the substitution and will report the number as
+  // fact.
+  //
+  // A real code now passes through to the API, which owns the catalog, a large
+  // alias table and a suggestion engine ("did you mean WTI_CRUDE_USD"). The MCP
+  // inherits all of it, including future aliases, with no npm release.
+  //
+  // Deliberately BEFORE the fuzzy loop: a real code must never be fuzzy-matched
+  // onto a different commodity. A refusal is recoverable; a wrong number is not.
+  if (/^[a-z0-9]+(?:_[a-z0-9]+)+$/.test(normalized)) {
+    return normalized.toUpperCase();
+  }
+
+  // Fuzzy match — natural language only ("brent crude oil price" -> "brent
+  // crude"). Code-shaped input can no longer reach this loop.
   for (const [alias, code] of Object.entries(COMMODITY_ALIASES)) {
     if (normalized.includes(alias) || alias.includes(normalized)) {
       return code;
