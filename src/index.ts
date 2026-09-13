@@ -1759,6 +1759,8 @@ function isAbortError(error: unknown): boolean {
 
 interface RequestDeadline {
   signal: AbortSignal;
+  /** The budget this deadline was started with, for the timeout message. */
+  budgetMs: number;
   /** True once the budget elapsed (as opposed to the host cancelling). */
   timedOut: () => boolean;
   /** Clears the timer and detaches listeners. Always call it. */
@@ -1791,6 +1793,7 @@ function startRequestDeadline(
 
   return {
     signal: controller.signal,
+    budgetMs,
     timedOut: () => expired,
     release: () => {
       clearTimeout(timer);
@@ -1803,7 +1806,7 @@ function startRequestDeadline(
 function deadlineError(deadline: RequestDeadline, endpoint: string): Error {
   return deadline.timedOut()
     ? new ApiTimeoutError(
-        `The request to ${endpoint} timed out after ${Math.round(REQUEST_DEADLINE_MS / 1000)}s. The API did not respond in time — this is not a plan or permission problem. Retry in a moment; if it persists, check https://status.oilpriceapi.com.`,
+        `The request to ${endpoint} timed out after ${Math.round(deadline.budgetMs / 1000)}s. The API did not respond in time — this is not a plan or permission problem. Retry in a moment; if it persists, check https://status.oilpriceapi.com.`,
         "timeout",
       )
     : new ApiTimeoutError(
@@ -1858,9 +1861,25 @@ export async function makeApiRequest<T>(
  * and 402/403/429 gate behaviour, but returns WHY it failed rather than a bare
  * null. `makeApiRequest` is a thin wrapper so existing callers are unchanged.
  */
+export interface RequestApiOptions {
+  /**
+   * Wall-clock budget for this request, retries included. Defaults to the
+   * tool deadline. A tool that can answer without one leg bounds that leg
+   * shorter so it cannot consume the whole deadline (#121).
+   */
+  budgetMs?: number;
+  /**
+   * Retry a 5xx. Default true. Set false for a leg whose 5xx is known to
+   * arrive at the server's own timeout: a retry cannot succeed and only
+   * doubles the wait (#121).
+   */
+  retryServerErrors?: boolean;
+}
+
 export async function requestApi<T>(
   endpoint: string,
   fetchFn: typeof fetch = fetch,
+  options: RequestApiOptions = {},
 ): Promise<ApiRequestOutcome<T>> {
   const headers: Record<string, string> = {
     ...clientAttributionHeaders(),
@@ -1876,7 +1895,7 @@ export async function requestApi<T>(
   const maxRetries = 3;
   // ONE budget for the whole call — every attempt and every backoff included —
   // so a retrying tool cannot quietly cost 4x the deadline (#84).
-  const deadline = startRequestDeadline();
+  const deadline = startRequestDeadline(options.budgetMs);
 
   try {
     if (deadline.signal.aborted) throw deadlineError(deadline, endpoint);
@@ -1966,7 +1985,11 @@ export async function requestApi<T>(
         }
 
         // Retry on 5xx, with the same bounded delay.
-        if (response.status >= 500 && attempt < maxRetries) {
+        if (
+          response.status >= 500 &&
+          attempt < maxRetries &&
+          options.retryServerErrors !== false
+        ) {
           const retryAfterMs = parseRetryAfterMs(
             response.headers.get("Retry-After"),
           );
@@ -4567,12 +4590,20 @@ server.registerTool(
   },
 );
 
+/**
+ * How long opa_get_well_activity waits for /v1/ei/well-permits/states before
+ * answering with the summary alone (#121). Live on 2026-09-13 the per-state
+ * route answered in 2.8-3.4s; the index 500s at the server's 25s timeout. This
+ * leaves the summary its full REQUEST_DEADLINE_MS.
+ */
+export const WELL_ACTIVITY_STATE_HEALTH_BUDGET_MS = 10_000;
+
 server.registerTool(
   "opa_get_well_activity",
   {
     title: "Get Recent Well Activity",
     description:
-      "Get recent US well-permit activity including counts by state, top operators and formations, permit types, and weekly trend. The response also includes every non-available state-health record so stale, degraded, unavailable, or attention states are explicit; rankings must not be treated as complete national coverage when warnings exist.",
+      "Get recent US well-permit activity including counts by state, top operators and formations, permit types, and weekly trend. The response also includes every non-available state-health record so stale, degraded, unavailable, or attention states are explicit; rankings must not be treated as complete national coverage when warnings exist. If the state-health index cannot be loaded, the activity summary is still returned, headed as partial, with the reason the health gate is missing.",
     inputSchema: {
       days: z
         .number()
@@ -4587,26 +4618,92 @@ server.registerTool(
   async ({ days }) => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_well_activity");
 
-    const [activity, healthResponse] = await Promise.all([
-      makeApiRequest<ApiResponse<Record<string, unknown>>>(
+    // The state-health index is bounded and not retried on a 5xx (#121): live
+    // on 2026-09-13 it answered HTTP 500 only after the server's own 25s
+    // timeout, every time, so waiting on it (and retrying it) cost the whole
+    // 30s tool deadline and threw away a summary that had loaded in ~3s.
+    const startedAt = Date.now();
+    const [activityOutcome, healthLeg] = await Promise.all([
+      requestApi<ApiResponse<Record<string, unknown>>>(
         `/v1/ei/well-permits/summary?days=${days}`,
       ),
-      makeApiRequest<ApiResponse<Record<string, unknown>>>(
+      requestApi<ApiResponse<Record<string, unknown>>>(
         "/v1/ei/well-permits/states",
+        undefined,
+        {
+          budgetMs: WELL_ACTIVITY_STATE_HEALTH_BUDGET_MS,
+          retryServerErrors: false,
+        },
+      ).then(
+        (outcome) => ({ outcome, elapsedMs: Date.now() - startedAt }),
+        (error: unknown) => {
+          // Only OUR bound degrades to a partial answer. A host cancellation
+          // wants no answer, and a plan gate is answered where it happens.
+          if (error instanceof ApiTimeoutError && error.reason === "timeout") {
+            return { outcome: null, elapsedMs: Date.now() - startedAt };
+          }
+          throw error;
+        },
       ),
     ]);
+
+    const activity = activityOutcome.data;
     if (
       !activity ||
       activity.status !== "success" ||
       !activity.data ||
-      typeof activity.data !== "object" ||
-      !healthResponse ||
-      healthResponse.status !== "success" ||
-      !healthResponse.data ||
-      typeof healthResponse.data !== "object"
+      typeof activity.data !== "object"
     ) {
       return errorResult(
-        "Recent well activity is unavailable because either the activity summary or its state-health gate could not be loaded.",
+        describeUnavailable(
+          "Recent well activity",
+          activityOutcome,
+          "Recent well activity is unavailable: the API answered but returned no activity summary.",
+        ),
+      );
+    }
+
+    const healthResponse = healthLeg.outcome?.data;
+    const healthLoaded =
+      !!healthResponse &&
+      healthResponse.status === "success" &&
+      !!healthResponse.data &&
+      typeof healthResponse.data === "object";
+
+    if (!healthLoaded) {
+      const leg = healthLeg.outcome;
+      const seconds = (healthLeg.elapsedMs / 1000).toFixed(1);
+      const why = !leg
+        ? `/v1/ei/well-permits/states did not answer within ${Math.round(WELL_ACTIVITY_STATE_HEALTH_BUDGET_MS / 1000)}s`
+        : leg.data
+          ? "/v1/ei/well-permits/states answered without a state-health record"
+          : leg.status === 0
+            ? `/v1/ei/well-permits/states could not be reached (${leg.detail || "network or transport error"})`
+            : `/v1/ei/well-permits/states returned HTTP ${leg.status} after ${seconds}s`;
+      const freshness =
+        "by_state_as_of" in activity.data
+          ? " The summary's own `by_state_as_of` dates are included below; they are freshness stamps, not the health gate."
+          : "";
+
+      // The #113 pattern: say in the heading that this is not the whole
+      // answer, and say what is missing and why. No "all gates available" line
+      // is printed, because nothing was checked.
+      return textResult(
+        [
+          `# Recent US Well Activity — ${days} days (partial: state-health gate unavailable)`,
+          "",
+          `_Incomplete answer: the activity summary loaded, but the per-state health gate did not, so stale, degraded, unavailable or attention states are NOT flagged here. Treat the rankings as directional, not as complete national coverage, and do not read the absence of warnings as all states healthy.${freshness}_`,
+          "",
+          "```json",
+          JSON.stringify({ activity: activity.data }, null, 2),
+          "```",
+          "",
+          "## Not included",
+          "",
+          `- Per-state health: ${why}. For one state, opa_search_well_permits checks that state's health gate before searching.`,
+          "",
+          "_Data from [OilPriceAPI](https://oilpriceapi.com)._",
+        ].join("\n"),
       );
     }
 
