@@ -143,12 +143,30 @@ describe("#105.2 opa_get_alert_triggers does not report 'no triggers' for a trig
 describe("#105.3 no `undefined` interpolated into data tables", () => {
   it("opa_get_marine_fuels: a price with no currency or unit is not rendered as a bare number", async () => {
     vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    // Fixture rewritten for #120. This case was written against a flat
+    // `{port, fuel_type, price}` record /v1/marine-fuels/latest has never
+    // served; live, `prices[]` is ports nesting `fuels[]`, and the formatter
+    // threw on every real call. The nested record below keeps the guard's
+    // purpose: currency and unit are absent, so they must be said to be.
     stubJson({
       status: "success",
       data: {
         prices: [
-          { port: "SINGAPORE", fuel_type: "VLSFO", price: 512.5 },
-          // currency and unit absent
+          {
+            port_code: "SGSIN",
+            port_name: "Singapore",
+            fuels: [
+              {
+                code: "VLSFO_SGSIN_USD",
+                fuel_type: "VLSFO",
+                price: 512.5,
+                as_of: "2026-09-11T17:00:00.000Z",
+                stale: false,
+                age_days: 2,
+                // currency and unit absent
+              },
+            ],
+          },
         ],
       },
     });
@@ -156,7 +174,10 @@ describe("#105.3 no `undefined` interpolated into data tables", () => {
     const result = await tools.opa_get_marine_fuels.handler({}, {});
     const text = textOf(result);
 
+    expect(result.isError).not.toBe(true);
+    expect(text).toContain("512.5");
     expect(text).not.toContain("undefined");
+    expect(text).not.toContain("$");
     expect(text).toMatch(/not reported/i);
   });
 
