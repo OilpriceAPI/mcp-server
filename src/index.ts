@@ -2829,8 +2829,11 @@ server.registerTool(
     // Keyless demo mode (#16): list the demo commodity set.
     if (!getApiKey()) return demoListCommoditiesResult();
 
-    // Try to fetch the live commodity catalog from the API
-    const response = await makeApiRequest<
+    // The live catalogue is the ONLY source for this tool. There is no static
+    // substitute (#85): the tool promises "the account-visible commodities
+    // returned by the live API", and a hardcoded list is neither account-scoped
+    // nor current — it was 19 of the 604 codes production serves.
+    const outcome = await requestApi<
       ApiResponse<{
         commodities: Array<{
           code: string;
@@ -2841,77 +2844,52 @@ server.registerTool(
         }>;
       }>
     >("/v1/commodities");
+    const response = outcome.data;
 
-    if (response?.status === "success" && response.data.commodities?.length) {
-      const grouped: Record<string, Array<{ code: string; name: string }>> = {};
-
-      for (const c of response.data.commodities) {
-        const cat = c.category || "Other";
-        if (!grouped[cat]) grouped[cat] = [];
-        grouped[cat].push({ code: c.code, name: c.name });
-      }
-
-      const sections = [
-        `# Available Commodities (${response.data.commodities.length} total)\n`,
-      ];
-
-      for (const [category, items] of Object.entries(grouped)) {
-        sections.push(`## ${category}`);
-        for (const item of items) {
-          sections.push(`- \`${item.code}\` — ${item.name}`);
-        }
-        sections.push("");
-      }
-
-      sections.push(
-        "_You can use natural language like 'brent oil' or 'natural gas' — the server translates it to the right code._",
+    if (response?.status !== "success") {
+      return errorResult(
+        describeRequestFailure("The commodity catalog", outcome),
       );
-
-      return textResult(sections.join("\n"));
     }
 
-    // Fallback to static list if API call fails
-    const sections = ["# Available Commodities\n"];
+    const commodities = response.data?.commodities;
+    if (!Array.isArray(commodities)) {
+      return errorResult(
+        "The commodity catalog could not be read: the API returned a success envelope with no `commodities` list. Retry shortly; if it persists the response shape has changed.",
+      );
+    }
 
-    sections.push("## Crude Oil");
-    sections.push("- `BRENT_CRUDE_USD` — Brent Crude (global benchmark)");
-    sections.push("- `WTI_USD` — West Texas Intermediate (US benchmark)");
-    sections.push("- `URALS_CRUDE_USD` — Urals Crude (Russian)");
-    sections.push("- `DUBAI_CRUDE_USD` — Dubai Crude (Middle East)");
-    sections.push("");
+    if (commodities.length === 0) {
+      return textResult(
+        "# Available Commodities (0)\n\n" +
+          "The API returned an empty catalog for this account — no commodities are currently visible to it. " +
+          "This is the account's real catalog, not a failed lookup. " +
+          "Check the account's plan and entitlements with opa_get_plans.",
+      );
+    }
 
-    sections.push("## Natural Gas");
-    sections.push("- `NATURAL_GAS_USD` — US Henry Hub ($/MMBtu)");
-    sections.push("- `NATURAL_GAS_GBP` — UK NBP (pence/therm)");
-    sections.push("- `DUTCH_TTF_EUR` — European TTF (€/MWh)");
-    sections.push("");
+    const grouped: Record<string, Array<{ code: string; name: string }>> = {};
 
-    sections.push("## Coal");
-    sections.push("- `COAL_USD` — Thermal Coal");
-    sections.push("- `NEWCASTLE_COAL_USD` — Newcastle (Asia-Pacific)");
-    sections.push("");
+    for (const c of commodities) {
+      const cat = c.category || "Other";
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat].push({ code: c.code, name: c.name });
+    }
 
-    sections.push("## Refined Products");
-    sections.push("- `DIESEL_USD` — Diesel");
-    sections.push("- `GASOLINE_USD` — Gasoline");
-    sections.push("- `GASOLINE_RBOB_USD` — RBOB Gasoline");
-    sections.push("- `JET_FUEL_USD` — Jet Fuel");
-    sections.push("- `HEATING_OIL_USD` — Heating Oil");
-    sections.push("");
+    const sections = [
+      `# Available Commodities (${commodities.length} total)\n`,
+    ];
 
-    sections.push("## Precious Metals");
-    sections.push("- `GOLD_USD` — Gold");
-    sections.push("- `SILVER_FIX_USD` — LBMA Silver Fix");
-    sections.push("");
-
-    sections.push("## Other");
-    sections.push("- `EU_CARBON_EUR` — EU Carbon Allowances");
-    sections.push("- `EUR_USD` — Euro to USD");
-    sections.push("- `GBP_USD` — British Pound to USD");
-    sections.push("");
+    for (const [category, items] of Object.entries(grouped)) {
+      sections.push(`## ${category}`);
+      for (const item of items) {
+        sections.push(`- \`${item.code}\` — ${item.name}`);
+      }
+      sections.push("");
+    }
 
     sections.push(
-      "_Note: This is a partial list because the catalog endpoint was unreachable. Dataset access varies by plan and account entitlement; try again for the account-enabled list._",
+      "_You can use natural language like 'brent oil' or 'natural gas' — the server translates it to the right code._",
     );
 
     return textResult(sections.join("\n"));
