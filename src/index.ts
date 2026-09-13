@@ -1242,6 +1242,110 @@ async function extractErrorDetail(response: Response): Promise<string> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Retry policy (#86)
+//
+// Two rules, both about not wasting the caller's time inside an MCP session:
+//
+//   1. A retry budget. No single backoff may exceed MAX_RETRY_DELAY_MS,
+//      whatever Retry-After asks for. A tool call that sleeps for hours is
+//      never the right answer — the agent just hangs.
+//   2. Durable quota exhaustion is not retried at all. A monthly/daily/trial
+//      window does not reopen inside a retry budget, so re-sending the request
+//      three more times cannot succeed; it only delays the error the caller
+//      needs to see and spends three more requests doing it.
+// ---------------------------------------------------------------------------
+
+/** Longest any single backoff may be. Also the durable/transient threshold. */
+export const MAX_RETRY_DELAY_MS = 60_000;
+
+/**
+ * Parse Retry-After per RFC 9110: either delay-seconds or an HTTP-date.
+ * Returns the FULL requested delay in ms (unclamped, for classification), or
+ * null when absent or unparseable.
+ *
+ * parseInt() alone returned NaN for the HTTP-date form and passed negatives
+ * straight through. Math.min(NaN, 60) is NaN and setTimeout(fn, NaN) fires in
+ * 1ms ("TimeoutNaNWarning: NaN is not a number. Timeout duration was set to
+ * 1."), as does a negative delay — so a legal header silently removed the
+ * backoff entirely and the server was hit four times in a row.
+ */
+export function parseRetryAfterMs(
+  raw: string | null | undefined,
+  now: number = Date.now(),
+): number | null {
+  if (!raw) return null;
+  const trimmed = String(raw).trim();
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    return Number.isFinite(seconds) ? seconds * 1000 : null;
+  }
+  const at = Date.parse(trimmed);
+  if (Number.isNaN(at)) return null;
+  return Math.max(0, at - now);
+}
+
+/** Backoff for one attempt, always finite, positive and within the budget. */
+export function boundedRetryDelayMs(
+  retryAfterMs: number | null,
+  attempt: number,
+): number {
+  const base =
+    retryAfterMs !== null && retryAfterMs > 0
+      ? retryAfterMs
+      : Math.pow(2, attempt) * 1000;
+  return Math.min(Math.max(base, 1000), MAX_RETRY_DELAY_MS);
+}
+
+/**
+ * Quota windows that will not reopen within the retry budget. Matched against
+ * the raw response body so it works whatever error envelope the API uses.
+ */
+const DURABLE_QUOTA_PATTERN =
+  /\b(month|monthly|daily|per[-\s]?day|per[-\s]?month|trial|quota)\b/i;
+
+/**
+ * True when a 429 is a durable window rather than a recoverable burst. A
+ * Retry-After beyond the retry budget is durable by definition: the server
+ * itself says recovery is further away than we are willing to wait.
+ */
+export function isDurableRateLimit(
+  body: string,
+  retryAfterMs: number | null,
+): boolean {
+  if (retryAfterMs !== null && retryAfterMs > MAX_RETRY_DELAY_MS) return true;
+  return DURABLE_QUOTA_PATTERN.test(body);
+}
+
+/** Human reset hint for a durable limit, e.g. "resets in about 8h 47m". */
+function resetHint(retryAfterMs: number | null): string {
+  if (retryAfterMs === null || retryAfterMs <= 0) return "";
+  const totalMinutes = Math.round(retryAfterMs / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  const span =
+    hours > 0 ? `${hours}h ${minutes}m` : `${Math.max(totalMinutes, 1)}m`;
+  return ` The limit resets in about ${span} (server Retry-After).`;
+}
+
+/** Read a response body once, tolerating mocks without text(). */
+async function readBodyText(response: Response): Promise<string> {
+  try {
+    if (typeof response.text !== "function") return "";
+    return (await response.text()) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * buildGateError() consumes the body, so hand it a shim carrying the text we
+ * already read. It only ever touches `status` and `text()`.
+ */
+function replayResponse(status: number, body: string): Response {
+  return { status, text: async () => body } as unknown as Response;
+}
+
 /** Build the standard 402/403/429 gate error with the upgrade nudge. */
 async function buildGateError(response: Response): Promise<ApiGateError> {
   const detail = await extractErrorDetail(response);
@@ -1332,22 +1436,41 @@ export async function requestApi<T>(
         throw await buildGateError(response);
       }
 
-      // Retry on 429 and 5xx
-      if (
-        (response.status === 429 || response.status >= 500) &&
-        attempt < maxRetries
-      ) {
-        const retryAfter = response.headers.get("Retry-After");
-        const delay = retryAfter
-          ? Math.min(parseInt(retryAfter, 10), 60) * 1000
-          : Math.pow(2, attempt) * 1000;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        continue;
+      if (response.status === 429) {
+        const retryAfterMs = parseRetryAfterMs(
+          response.headers.get("Retry-After"),
+        );
+        // Read the body once: it both classifies the limit and supplies the
+        // detail for the gate error.
+        const body = await readBodyText(response);
+
+        // Durable quota exhaustion — stop immediately (#86). Retrying cannot
+        // succeed and only spends more of an already-exhausted allowance.
+        if (isDurableRateLimit(body, retryAfterMs)) {
+          const gate = await buildGateError(replayResponse(429, body));
+          throw new ApiGateError(429, gate.message + resetHint(retryAfterMs));
+        }
+
+        if (attempt < maxRetries) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, boundedRetryDelayMs(retryAfterMs, attempt)),
+          );
+          continue;
+        }
+
+        // Transient limit, retries exhausted — surface it with the upgrade link.
+        throw await buildGateError(replayResponse(429, body));
       }
 
-      // 429 with retries exhausted — surface the rate limit + upgrade link.
-      if (response.status === 429) {
-        throw await buildGateError(response);
+      // Retry on 5xx, with the same bounded delay.
+      if (response.status >= 500 && attempt < maxRetries) {
+        const retryAfterMs = parseRetryAfterMs(
+          response.headers.get("Retry-After"),
+        );
+        await new Promise((resolve) =>
+          setTimeout(resolve, boundedRetryDelayMs(retryAfterMs, attempt)),
+        );
+        continue;
       }
 
       console.error(
