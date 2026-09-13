@@ -608,7 +608,11 @@ describe("formatPrice", () => {
     expect(result).not.toContain("$75.30");
   });
 
-  it("formats GBp (pence) currency with pound symbol", () => {
+  // This test used to assert "£80.00" for a GBp quote, i.e. it encoded the
+  // 100x bug it was supposed to guard (#98). NATURAL_GAS_GBP is denominated
+  // in GBp — pence — in production today; the API's own `formatted` field
+  // for it on 2026-09-13 read "203.30p".
+  it("formats GBp as pence, never as pounds", () => {
     const data = {
       code: "NATURAL_GAS_GBP",
       price: 80.0,
@@ -617,7 +621,8 @@ describe("formatPrice", () => {
 
     const result = formatPrice(data);
 
-    expect(result).toContain("£80.00");
+    expect(result).toContain("80.00p");
+    expect(result).not.toContain("£80.00");
   });
 
   it("uses created_at as fallback timestamp when updated_at is absent", () => {
