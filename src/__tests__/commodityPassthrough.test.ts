@@ -52,6 +52,54 @@ describe("commodity code passthrough (no silent substitution)", () => {
     expect(resolveCommodityCode("what is the weather")).toBeNull();
   });
 
+  // THE INVARIANT, stated once and checked structurally.
+  //
+  //   For any code-shaped input, resolveCommodityCode returns that code or
+  //   null. Never a different commodity.
+  //
+  // This needs no catalog and no network, so it runs on every PR — pull
+  // requests deliberately do not receive API secrets. It is also the exact
+  // property that was violated: a substring fall-through that always returned
+  // *something* turned "I do not know" into a confidently wrong answer.
+  //
+  // Guard this test. If a future change makes it fail, the change is wrong.
+  describe("identity invariant", () => {
+    const CODE_SHAPED = [
+      // real catalog codes spanning every category
+      "NATURAL_GAS_WAHA",
+      "NATURAL_GAS_TTF_SPOT_EUR",
+      "NATURAL_GAS_ALGONQUIN_USD",
+      "RBOB_GASOLINE_USD",
+      "GASOLINE_RBOB_USD",
+      "SINGAPORE_GASOIL_USD",
+      "PROPANE_MONT_BELVIEU_USD",
+      "BALTIC_CAPESIZE_INDEX",
+      "EU_CARBON_EUR",
+      "CONTAINER_FREIGHT_COMPOSITE_USD",
+      "US_RIG_COUNT",
+      "DIESEL_RETAIL_STATE_WA_USD",
+      "MGO_05S_USD",
+      "AZERI_LIGHT_USD",
+      "URALS_CRUDE_USD",
+      // synthetic code-shaped input the catalog does not contain
+      "TOTALLY_MADE_UP_CODE",
+      "A_B",
+      "X1_Y2_Z3",
+    ];
+
+    for (const input of CODE_SHAPED) {
+      it(`${input} -> itself or null, never another commodity`, () => {
+        const out = resolveCommodityCode(input);
+        expect(
+          out === null || out === input.toUpperCase(),
+          `resolveCommodityCode(${input}) returned ${out}. ` +
+            `A code-shaped input must resolve to itself or to nothing — ` +
+            `handing back a different instrument is undetectable downstream.`,
+        ).toBe(true);
+      });
+    }
+  });
+
   it("hardcoded list is far smaller than the live catalog (documents the gap)", () => {
     expect(COMMODITY_CODES.length).toBeLessThan(100);
   });
