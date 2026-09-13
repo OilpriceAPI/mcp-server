@@ -2661,11 +2661,31 @@ server.registerTool(
       forex: ["EUR_USD", "GBP_USD"],
     };
 
+    const availableCodes = Object.keys(prices);
+
     let filteredCodes: string[];
     if (category === "all") {
-      filteredCodes = Object.keys(prices);
+      filteredCodes = availableCodes;
     } else {
       filteredCodes = categoryFilters[category] || [];
+    }
+
+    // #104: categoryFilters is a curated 27-code benchmark list. The live
+    // catalog is an order of magnitude larger, so a category filter returns a
+    // SAMPLE — and the old output said nothing, leaving a caller who asked for
+    // an overview to read three rows as the whole market. Whatever is shown,
+    // the response now states what was not.
+    const requestedButAbsent =
+      category === "all" ? [] : filteredCodes.filter((code) => !prices[code]);
+    const shownCodes = filteredCodes.filter((code) => prices[code]);
+
+    if (shownCodes.length === 0) {
+      // A header and a timestamp read as "the market has nothing in it".
+      return errorResult(
+        category === "all"
+          ? "The API returned no prices for this account."
+          : `No '${category}' benchmark is present in the ${availableCodes.length} codes the API returned for this account. The '${category}' filter is a curated benchmark list (${filteredCodes.join(", ")}), not an enumeration of the catalog — use category "all", or opa_list_commodities for the codes this account can actually read.`,
+      );
     }
 
     const sections: string[] = ["# Energy Market Overview\n"];
@@ -2734,8 +2754,23 @@ server.registerTool(
       sections.push("");
     }
 
+    if (category === "all") {
+      sections.push(
+        `_Showing all ${shownCodes.length} codes the API returned for this account._`,
+      );
+    } else {
+      sections.push(
+        `_Coverage: showing ${shownCodes.length} of the ${availableCodes.length} codes the API returned for this account. The '${category}' filter is a curated benchmark list, not an enumeration of the catalog — use category "all" for everything the API returned, or opa_list_commodities for the full code list._`,
+      );
+      if (requestedButAbsent.length > 0) {
+        sections.push(
+          `_Not returned by the API for this account: ${requestedButAbsent.join(", ")}._`,
+        );
+      }
+    }
+
     sections.push(
-      `_Updated: ${new Date(response.data.data.timestamp).toLocaleString(
+      `\n_Updated: ${new Date(response.data.data.timestamp).toLocaleString(
         "en-US",
         { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" },
       )} UTC | Data from [OilPriceAPI](https://oilpriceapi.com)_`,
@@ -2767,7 +2802,12 @@ server.registerTool(
     if (!getApiKey()) return demoComparePricesResult(commodities);
 
     const results: PriceData[] = [];
+    // #104: what the caller asked for and did not get. Both lists used to be
+    // rendered ONLY when fewer than two commodities came back, so a 3-way
+    // request that half-succeeded returned a clean 2-way comparison with no
+    // trace of the third.
     const errors: string[] = [];
+    const unavailable: string[] = [];
 
     for (const commodity of commodities) {
       const resolved = resolveOrError(commodity);
@@ -2776,13 +2816,19 @@ server.registerTool(
         continue;
       }
 
-      const response = await makeApiRequest<ApiResponse<PriceData>>(
+      const outcome = await requestApi<ApiResponse<PriceData>>(
         `/v1/prices/latest?by_code=${resolved.code}`,
       );
 
-      if (response?.status === "success") {
-        results.push(response.data);
+      if (outcome.data?.status === "success") {
+        results.push(outcome.data.data);
+        continue;
       }
+      unavailable.push(
+        resolved.code === commodity
+          ? commodity
+          : `${commodity} (code: ${resolved.code})`,
+      );
     }
 
     if (results.length < 2) {
@@ -2791,23 +2837,67 @@ server.registerTool(
       if (errors.length > 0) {
         msg += ` Unrecognized commodities: ${errors.join(", ")}. Use opa_list_commodities to see valid codes.`;
       }
+      if (unavailable.length > 0) {
+        msg += ` No price returned for: ${unavailable.join(", ")}.`;
+      }
       return errorResult(msg);
     }
 
-    const sections = ["# Price Comparison\n"];
+    const complete = errors.length === 0 && unavailable.length === 0;
+
+    const sections = [
+      complete
+        ? "# Price Comparison\n"
+        : `# Price Comparison (${results.length} of ${commodities.length} requested)\n`,
+    ];
 
     for (const data of results) {
       sections.push(formatPrice(data));
       sections.push("");
     }
 
-    if (results.length === 2 && results[0].currency === results[1].currency) {
-      const spread = Math.abs(results[0].price - results[1].price);
-      const info0 = COMMODITY_INFO[results[0].code]?.name || results[0].code;
-      const info1 = COMMODITY_INFO[results[1].code]?.name || results[1].code;
-      sections.push(
-        `**Spread**: ${formatQuoteAmount(spread, results[0].currency)} (${info0} vs ${info1})`,
-      );
+    if (!complete) {
+      sections.push("## Not compared\n");
+      if (errors.length > 0) {
+        sections.push(
+          `- Not recognized as a commodity: ${errors.join(", ")}. Use opa_list_commodities to see valid codes.`,
+        );
+      }
+      if (unavailable.length > 0) {
+        sections.push(
+          `- Requested, but the API returned no current price: ${unavailable.join(", ")}.`,
+        );
+      }
+      sections.push("");
+    }
+
+    // The spread is only ever about the pair the caller NAMED. Computing it
+    // from whatever two happened to come back states a number for a different
+    // pair than the one asked about, and nothing in the output says so (#104).
+    if (commodities.length === 2 && results.length === 2 && complete) {
+      const [a, b] = results;
+      const info0 = COMMODITY_INFO[a.code]?.name || a.code;
+      const info1 = COMMODITY_INFO[b.code]?.name || b.code;
+      const quote = (p: PriceData) =>
+        `${p.currency ?? "an unreported currency"}${p.unit ? `/${p.unit}` : ""}`;
+
+      if (!a.currency || !b.currency) {
+        // Two records that both omit `currency` compared equal under the old
+        // `a.currency === b.currency` guard, so a €/MWh gas price could be
+        // subtracted from a $/bbl crude price.
+        sections.push(
+          `_Spread not computed: ${!a.currency ? info0 : info1} did not report a currency, so there is no unit the difference could be stated in._`,
+        );
+      } else if (a.currency !== b.currency) {
+        sections.push(
+          `_Spread not computed: ${info0} is quoted in ${quote(a)} and ${info1} in ${quote(b)}. Subtracting across currencies would produce a number in no unit._`,
+        );
+      } else {
+        const spread = Math.abs(a.price - b.price);
+        sections.push(
+          `**Spread**: ${formatQuoteAmount(spread, a.currency)} (${info0} vs ${info1})`,
+        );
+      }
     }
 
     sections.push(`\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
@@ -4687,7 +4777,11 @@ server.registerTool(
     text += "| Plan | Monthly | Yearly | Requests/mo | Key features |\n";
     text += "|---|---|---|---|---|\n";
     for (const p of plans) {
-      const feats = (p.features ?? []).slice(0, 4).join("; ");
+      // #104: this was .slice(0, 4). It dropped "Well permits (all US
+      // states)" from Scale and "WebSocket updates for supported price
+      // streams" from Professional — exactly the entitlement lines this tool
+      // exists to answer, and the ones #94/#103 send customers here to read.
+      const feats = (p.features ?? []).join("; ");
       text += `| ${p.name}${p.popular ? " ★" : ""} | $${p.monthlyPrice} | $${p.yearlyPrice} | ${p.requestLimit?.toLocaleString?.() ?? p.requestLimit} | ${feats} |\n`;
     }
     const productFacts = await productFactsProvider.get();
