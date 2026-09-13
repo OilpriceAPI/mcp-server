@@ -55,6 +55,7 @@ import {
 import { PRODUCT_FACTS_URI, ProductFactsProvider } from "./productFacts.js";
 import {
   currentToolAttributionHeaders,
+  currentToolAbortSignal,
   withToolTelemetry,
 } from "./telemetry.js";
 import {
@@ -899,7 +900,16 @@ server.registerTool = ((
     name,
     config as never,
     ((args: unknown, extra: unknown) =>
-      withToolTelemetry(name, args, () => callback(args, extra))) as never,
+      withToolTelemetry(
+        name,
+        args,
+        () => callback(args, extra),
+        undefined,
+        // The MCP SDK hands handlers the host's cancellation signal. Parking
+        // it on the tool-call context means every request helper honours it
+        // without threading a parameter through all 36 handlers (#84).
+        (extra as { signal?: AbortSignal } | undefined)?.signal,
+      )) as never,
   )) as typeof server.registerTool;
 
 export const productFactsProvider = new ProductFactsProvider({
@@ -1168,6 +1178,107 @@ async function buildGateError(response: Response): Promise<ApiGateError> {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Request deadlines and cancellation (#84)
+//
+// Nothing in the tool path bounded its fetch: a stalled upstream held a tool
+// call open forever from the application's side, hanging the agent with no way
+// out. src/doctor.ts and src/productFacts.ts already had a bounded-request
+// pattern; this is the same idea, shared, and extended two ways —
+//
+//   - the signal stays live across the BODY read, not just until headers, so
+//     a response that opens and then stalls is still cut off;
+//   - it composes with the MCP host's own cancellation signal, so a user who
+//     interrupts the agent actually stops the outbound request.
+// ---------------------------------------------------------------------------
+
+/** Wall-clock budget for one tool's API work, including retries and backoff. */
+export const REQUEST_DEADLINE_MS = 30_000;
+
+/** Thrown when a request is cut off by the deadline or by host cancellation. */
+export class ApiTimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ApiTimeoutError";
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" || error.name === "TimeoutError")
+  );
+}
+
+interface RequestDeadline {
+  signal: AbortSignal;
+  /** True once the budget elapsed (as opposed to the host cancelling). */
+  timedOut: () => boolean;
+  /** Clears the timer and detaches listeners. Always call it. */
+  release: () => void;
+}
+
+/**
+ * A deadline that also honours the current tool call's host signal. The
+ * returned signal aborts on whichever happens first.
+ */
+function startRequestDeadline(
+  budgetMs: number = REQUEST_DEADLINE_MS,
+): RequestDeadline {
+  const controller = new AbortController();
+  let expired = false;
+
+  const timer = setTimeout(() => {
+    expired = true;
+    controller.abort();
+  }, budgetMs);
+  // Never keep the process alive just for a pending deadline.
+  (timer as unknown as { unref?: () => void }).unref?.();
+
+  const host = currentToolAbortSignal();
+  const onHostAbort = () => controller.abort();
+  if (host) {
+    if (host.aborted) controller.abort();
+    else host.addEventListener("abort", onHostAbort, { once: true });
+  }
+
+  return {
+    signal: controller.signal,
+    timedOut: () => expired,
+    release: () => {
+      clearTimeout(timer);
+      host?.removeEventListener("abort", onHostAbort);
+    },
+  };
+}
+
+/** Message for a cut-off request: says which cause, and what to do next. */
+function deadlineError(deadline: RequestDeadline, endpoint: string): Error {
+  return deadline.timedOut()
+    ? new ApiTimeoutError(
+        `The request to ${endpoint} timed out after ${Math.round(REQUEST_DEADLINE_MS / 1000)}s. The API did not respond in time — this is not a plan or permission problem. Retry in a moment; if it persists, check https://status.oilpriceapi.com.`,
+      )
+    : new ApiTimeoutError(
+        `The request to ${endpoint} was cancelled before it completed.`,
+      );
+}
+
+/** Sleep that wakes early if the deadline or the host cancels. */
+function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(timer);
+      resolve();
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 /**
  * Make API request to OilPriceAPI with retry and exponential backoff.
  *
@@ -1191,64 +1302,84 @@ export async function makeApiRequest<T>(
   }
 
   const maxRetries = 3;
+  // ONE budget for the whole call — attempts and backoff included — so a
+  // retrying tool cannot quietly cost 4x the deadline (#84).
+  const deadline = startRequestDeadline();
 
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const response = await fetchFn(`${API_BASE}${endpoint}`, { headers });
+  try {
+    if (deadline.signal.aborted) throw deadlineError(deadline, endpoint);
 
-      if (response.ok) {
-        return (await response.json()) as T;
-      }
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await fetchFn(`${API_BASE}${endpoint}`, {
+          headers,
+          signal: deadline.signal,
+        });
 
-      if (response.status === 401) {
+        if (response.ok) {
+          // The body read stays inside the budget: a response that opens and
+          // then stalls is cut off too.
+          return (await response.json()) as T;
+        }
+
+        if (response.status === 401) {
+          console.error(
+            `Authentication failed. Set OILPRICEAPI_KEY environment variable. Get a key at ${SIGNUP_URL}`,
+          );
+          return null;
+        }
+
+        // Tier/feature gate — surface the exact limit + upgrade link (#17).
+        if (response.status === 402 || response.status === 403) {
+          throw await buildGateError(response);
+        }
+
+        // Retry on 429 and 5xx
+        if (
+          (response.status === 429 || response.status >= 500) &&
+          attempt < maxRetries
+        ) {
+          const retryAfter = response.headers.get("Retry-After");
+          const delay = retryAfter
+            ? Math.min(parseInt(retryAfter, 10), 60) * 1000
+            : Math.pow(2, attempt) * 1000;
+          await abortableSleep(delay, deadline.signal);
+          if (deadline.signal.aborted) throw deadlineError(deadline, endpoint);
+          continue;
+        }
+
+        // 429 with retries exhausted — surface the rate limit + upgrade link.
+        if (response.status === 429) {
+          throw await buildGateError(response);
+        }
+
         console.error(
-          `Authentication failed. Set OILPRICEAPI_KEY environment variable. Get a key at ${SIGNUP_URL}`,
+          `HTTP ${response.status}: ${response.statusText} for ${endpoint}`,
         );
         return null;
+      } catch (error) {
+        if (error instanceof ApiGateError) throw error;
+        if (error instanceof ApiTimeoutError) throw error;
+        // The deadline or the host fired: stop, do not spend more attempts.
+        if (deadline.signal.aborted || isAbortError(error)) {
+          throw deadlineError(deadline, endpoint);
+        }
+        if (attempt === maxRetries) {
+          console.error(
+            `API request failed after ${maxRetries + 1} attempts: ${endpoint}`,
+            error,
+          );
+          return null;
+        }
+        await abortableSleep(Math.pow(2, attempt) * 1000, deadline.signal);
+        if (deadline.signal.aborted) throw deadlineError(deadline, endpoint);
       }
-
-      // Tier/feature gate — surface the exact limit + upgrade link (#17).
-      if (response.status === 402 || response.status === 403) {
-        throw await buildGateError(response);
-      }
-
-      // Retry on 429 and 5xx
-      if (
-        (response.status === 429 || response.status >= 500) &&
-        attempt < maxRetries
-      ) {
-        const retryAfter = response.headers.get("Retry-After");
-        const delay = retryAfter
-          ? Math.min(parseInt(retryAfter, 10), 60) * 1000
-          : Math.pow(2, attempt) * 1000;
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        continue;
-      }
-
-      // 429 with retries exhausted — surface the rate limit + upgrade link.
-      if (response.status === 429) {
-        throw await buildGateError(response);
-      }
-
-      console.error(
-        `HTTP ${response.status}: ${response.statusText} for ${endpoint}`,
-      );
-      return null;
-    } catch (error) {
-      if (error instanceof ApiGateError) throw error;
-      if (attempt === maxRetries) {
-        console.error(
-          `API request failed after ${maxRetries + 1} attempts: ${endpoint}`,
-          error,
-        );
-        return null;
-      }
-      const delay = Math.pow(2, attempt) * 1000;
-      await new Promise((resolve) => setTimeout(resolve, delay));
     }
-  }
 
-  return null;
+    return null;
+  } finally {
+    deadline.release();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1315,14 +1446,20 @@ export async function makeAuthRequest(
     Object.assign(headers, extraHeaders);
   }
 
+  // Bounded and cancellable like the read path, but STILL a single attempt:
+  // a write that times out is ambiguous — it may have landed — so it is never
+  // re-sent automatically (#84).
+  const deadline = startRequestDeadline();
   try {
     const response = await fetchFn(`${API_BASE}${endpoint}`, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: deadline.signal,
     });
 
     let parsed: unknown = null;
+    // The body read stays inside the budget.
     const text = await response.text();
     if (text) {
       try {
@@ -1334,8 +1471,17 @@ export async function makeAuthRequest(
 
     return { ok: response.ok, status: response.status, body: parsed };
   } catch (error) {
+    if (deadline.signal.aborted || isAbortError(error)) {
+      console.error(
+        `Authenticated request cut off: ${method} ${endpoint}`,
+        deadline.timedOut() ? "deadline" : "cancelled",
+      );
+      return { ok: false, status: 0, body: null };
+    }
     console.error(`Authenticated request failed: ${method} ${endpoint}`, error);
     return { ok: false, status: 0, body: null };
+  } finally {
+    deadline.release();
   }
 }
 
@@ -1496,6 +1642,7 @@ interface DemoPrice {
 export async function fetchDemoPrices(
   fetchFn: typeof fetch = fetch,
 ): Promise<DemoPrice[] | null> {
+  const deadline = startRequestDeadline();
   try {
     const response = await fetchFn(`${API_BASE}/v1/demo/prices`, {
       headers: {
@@ -1503,6 +1650,7 @@ export async function fetchDemoPrices(
         ...currentToolAttributionHeaders(),
         Accept: "application/json",
       },
+      signal: deadline.signal,
     });
     if (!response.ok) return null;
     const payload = (await response.json()) as ApiResponse<{
@@ -1514,6 +1662,8 @@ export async function fetchDemoPrices(
     return payload.data.prices;
   } catch {
     return null;
+  } finally {
+    deadline.release();
   }
 }
 
@@ -4654,8 +4804,9 @@ server.registerTool(
       );
     }
 
-    const created = (unwrapSuccessData(result.body) as { subscription?: WatchRecord } | null)
-      ?.subscription;
+    const created = (
+      unwrapSuccessData(result.body) as { subscription?: WatchRecord } | null
+    )?.subscription;
     let text = "# Price Subscription Created\n\n";
     text += created
       ? formatWatchLine(created)
@@ -4697,8 +4848,11 @@ server.registerTool(
     }
 
     const watches =
-      (unwrapSuccessData(result.body) as { subscriptions?: WatchRecord[] } | null)
-        ?.subscriptions ?? [];
+      (
+        unwrapSuccessData(result.body) as {
+          subscriptions?: WatchRecord[];
+        } | null
+      )?.subscriptions ?? [];
 
     if (watches.length === 0) {
       return textResult(

@@ -22,6 +22,8 @@ export interface ToolTelemetryEvent {
 interface ToolCallContext {
   tool: string;
   argumentShape: Record<string, string | number | boolean | string[]>;
+  /** The MCP host's cancellation signal for this tool call, when it sent one. */
+  signal?: AbortSignal;
 }
 
 const toolCallContext = new AsyncLocalStorage<ToolCallContext>();
@@ -75,17 +77,13 @@ const NUMERIC_SHAPE_ARGUMENTS = new Set([
 function safeEnum(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim().toLowerCase();
-  return /^[a-z0-9][a-z0-9_-]{0,39}$/.test(normalized)
-    ? normalized
-    : undefined;
+  return /^[a-z0-9][a-z0-9_-]{0,39}$/.test(normalized) ? normalized : undefined;
 }
 
 function safeCommodityCode(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const normalized = value.trim().toUpperCase();
-  return /^[A-Z][A-Z0-9_:-]{1,39}$/.test(normalized)
-    ? normalized
-    : undefined;
+  return /^[A-Z][A-Z0-9_:-]{1,39}$/.test(normalized) ? normalized : undefined;
 }
 
 function safeDateShape(value: unknown): string | undefined {
@@ -254,9 +252,9 @@ export function classifyToolMiss(
 function isErrorResult(result: unknown): boolean {
   return Boolean(
     result &&
-      typeof result === "object" &&
-      "isError" in result &&
-      result.isError === true,
+    typeof result === "object" &&
+    "isError" in result &&
+    result.isError === true,
   );
 }
 
@@ -265,10 +263,12 @@ export async function withToolTelemetry<T>(
   args: unknown,
   handler: () => Promise<T> | T,
   writer: (line: string) => void = console.error,
+  signal?: AbortSignal,
 ): Promise<T> {
   const context: ToolCallContext = {
     tool,
     argumentShape: sanitizeToolArguments(args),
+    signal,
   };
 
   return toolCallContext.run(context, async () => {
@@ -304,14 +304,22 @@ export async function withToolTelemetry<T>(
  * Attribution that accompanies API requests. The encoded shape is bounded for
  * proxy/header safety and contains no raw free text or identifiers.
  */
+/**
+ * The MCP host's cancellation signal for the tool call in progress, if any.
+ *
+ * Carried on the same AsyncLocalStorage context that already carries
+ * attribution, so every request helper picks it up without threading a
+ * parameter through all 36 tool handlers (#84).
+ */
+export function currentToolAbortSignal(): AbortSignal | undefined {
+  return toolCallContext.getStore()?.signal;
+}
+
 export function currentToolAttributionHeaders(): Record<string, string> {
   const context = toolCallContext.getStore();
   if (!context) return {};
 
-  const boundedShape: Record<
-    string,
-    string | number | boolean | string[]
-  > = {};
+  const boundedShape: Record<string, string | number | boolean | string[]> = {};
   for (const [key, value] of Object.entries(context.argumentShape)) {
     const candidate = { ...boundedShape, [key]: value };
     if (encodeURIComponent(JSON.stringify(candidate)).length <= 400) {
