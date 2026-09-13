@@ -1535,20 +1535,36 @@ export function classifyRateLimit(
  * enforcement_check_failed the API's own `recovery.action` is "retry". Telling
  * them to buy more of an allowance they still have is the defect (#101).
  */
+/**
+ * Name a non-durable 429 for what the API said it is. Shared by the read path
+ * (#101) and the authenticated alert/subscription path (#109) so both describe
+ * the same condition the same way.
+ */
+export function rateLimitLabel(
+  classification: RateLimitClassification,
+): string {
+  if (
+    classification.window === "enforcement_check" ||
+    classification.blockReason === "enforcement_check_failed"
+  ) {
+    return "Rate limit check unavailable (HTTP 429) — the API could not verify this account's allowance. This is a server-side check failure, not a plan limit";
+  }
+  if (
+    classification.window === "hourly_circuit_breaker" ||
+    classification.blockReason === "hourly_circuit_breaker"
+  ) {
+    return "Hourly safety limit (HTTP 429) — this is a short-window burst guard, not a plan quota, and a larger plan does not lift it";
+  }
+  return "Rate limit exceeded (HTTP 429) — the API asked for a slower request rate";
+}
+
 function buildRateLimitError(
   classification: RateLimitClassification,
   detail: string,
   retryAfterMs: number | null,
   attempts: number,
 ): ApiGateError {
-  const label =
-    classification.window === "enforcement_check" ||
-    classification.blockReason === "enforcement_check_failed"
-      ? "Rate limit check unavailable (HTTP 429) — the API could not verify this account's allowance. This is a server-side check failure, not a plan limit"
-      : classification.window === "hourly_circuit_breaker" ||
-          classification.blockReason === "hourly_circuit_breaker"
-        ? "Hourly safety limit (HTTP 429) — this is a short-window burst guard, not a plan quota, and a larger plan does not lift it"
-        : "Rate limit exceeded (HTTP 429) — the API asked for a slower request rate";
+  const label = rateLimitLabel(classification);
   const retried =
     attempts > 1 ? ` Retried ${attempts} times without success.` : "";
   return new ApiGateError(
@@ -1984,6 +2000,15 @@ export interface AuthRequestResult {
   ok: boolean;
   status: number;
   body: unknown;
+  /**
+   * Response headers, when the transport supplied them. Carried so the error
+   * renderer can classify a 429 on the API's own X-RateLimit-* contract rather
+   * than on the status code alone (#109). Optional: absent means "no contract
+   * available", which classifies as transient — never as an upgrade pitch.
+   */
+  headers?: HeaderSource;
+  /** Raw response body text, for the same classifier (#109). */
+  rawBody?: string;
 }
 
 /** Accept current { status, data } responses and legacy direct CRUD bodies. */
@@ -2053,7 +2078,13 @@ export async function makeAuthRequest(
       }
     }
 
-    return { ok: response.ok, status: response.status, body: parsed };
+    return {
+      ok: response.ok,
+      status: response.status,
+      body: parsed,
+      headers: response.headers,
+      rawBody: text,
+    };
   } catch (error) {
     if (deadline.signal.aborted || isAbortError(error)) {
       console.error(
@@ -2106,8 +2137,27 @@ export function alertHttpError(
     else if (typeof obj.error === "string") detail = obj.error;
     else if (obj.errors) detail = JSON.stringify(obj.errors);
   }
+  // A 429 is classified on the API's own signal, exactly as the read path does
+  // since #101/#108 — never on the status code alone. enforcement_check_failed
+  // and hourly_circuit_breaker are operational: the caller has not run out of
+  // anything, and selling them a bigger plan is a wrong answer (#109). An
+  // absent or unrecognised contract fails open to transient, so an unknown
+  // signal can never become an upgrade pitch.
+  if (result.status === 429) {
+    const classification = classifyRateLimit(
+      result.headers ?? {},
+      result.rawBody ?? "",
+    );
+    if (classification.kind !== "durable_quota") {
+      return `Could not ${action}. ${rateLimitLabel(classification)}${
+        detail ? `: ${detail}` : "."
+      } Retry shortly; check current usage with opa_get_account_status.`;
+    }
+  }
+
   let msg = `Could not ${action} (HTTP ${result.status})${detail ? `: ${detail}` : "."}`;
-  // Tier/feature gate or rate limit — add the upgrade nudge (#17).
+  // Genuine plan gate (402/403) or durable quota exhaustion (429) — the only
+  // cases where a larger plan actually changes the outcome (#17, #109).
   if (result.status === 402 || result.status === 403 || result.status === 429) {
     msg += ` Upgrade: ${UPGRADE_URL} — compare plans with the opa_get_plans tool; check current usage with opa_get_account_status.`;
   }
