@@ -1,0 +1,1435 @@
+{
+  "$comment": "API-to-MCP capability ledger (#77). One row per operation in the published OpenAPI contract. Checked by `npm run check:capability-ledger` against the live contract, build/capabilities.json and src/index.ts. Bump ledgerVersion and append to changes for every decision change, and link the change from the release notes.",
+  "schemaVersion": "1.0.0",
+  "ledgerVersion": 1,
+  "source": {
+    "openapi": {
+      "url": "https://api.oilpriceapi.com/openapi.json",
+      "canonicalAlias": "https://api.oilpriceapi.com/.well-known/openapi.json",
+      "servedBy": "OilpriceAPI/oilpriceapi-api ApplicationController#swagger_spec: swagger/v1/swagger.json plus discovery samples injected at runtime",
+      "comparedLiveOnEveryCheck": true,
+      "operationsAtSeed": 113,
+      "seededAt": "2026-09-13"
+    },
+    "routePolicy": {
+      "$comment": "families[].pathPrefixes and their audiences are a snapshot of this file. It is not published, so the check fails once the snapshot is older than maxAgeDays.",
+      "repository": "OilpriceAPI/oilpriceapi-api",
+      "path": "config/openapi_route_policy.yml",
+      "sourceCommit": "531e29899d80261c43c24b8677cbb20c06f974c5",
+      "sourceCommitDate": "2026-09-13T18:43:15Z",
+      "maxAgeDays": 30
+    }
+  },
+  "definitions": {
+    "status": {
+      "exposed": "At least one registered MCP tool calls this operation (tools lists them; via names the literal path when the tool calls an alias).",
+      "not_exposed": "No MCP tool calls it. disposition and reason are required."
+    },
+    "disposition": {
+      "selected": "Chosen for an MCP addition; selection names the rank and the tracking issue.",
+      "deferred": "A candidate, not scheduled. The reason states what would change the decision.",
+      "alias": "Duplicates another operation the ledger already accounts for.",
+      "unsupported": "Deliberately never exposed through an LLM tool.",
+      "internal": "Operations or first-party plumbing, not a customer workflow."
+    },
+    "familyStatus": {
+      "exposed": "Every operation in the family that the MCP needs is reachable.",
+      "partial": "Some operations are exposed; the rest have row-level decisions.",
+      "not_exposed": "No tool reaches the family."
+    }
+  },
+  "demandEvidence": {
+    "window": "30 days ending 2026-09-13T20:02Z",
+    "systemOfRecord": "production api_requests joined to users (read-only)",
+    "population": "Authenticated accounts with at least one successful (2xx/3xx) call on the operation in the window.",
+    "exclusions": [
+      "users.internal_service or users.admin",
+      "internal email domains (oilpriceapi.com, metirilabs.com) and smoke/e2e/synthetic accounts",
+      "accounts created inside the window (younger than the measurement window)",
+      "catalogue sweepers: accounts calling 25 or more distinct method+path keys"
+    ],
+    "ranking": "Distinct established accounts per workflow family, tie-broken by accounts with repeat use on two or more days. Account-level counts are kept out of this public repository; the query is named mcp-77-demand-export in the pull request that seeded this ledger.",
+    "rankedUnexposedFamilies": [
+      "1 date-range price history (selected)",
+      "2 futures settlement history (selected; ahead of marine and commodity detail on repeat and paid accounts)",
+      "3 marine ports, all-port prices and history (selected; tied with commodity detail on accounts, ahead on repeat use)",
+      "4 commodity detail and coverage (deferred)",
+      "5 spreads and indicators beyond current crack/basis/margin (deferred)",
+      "no measured demand: natural-gas fundamentals, macro, /v1/forecasts, webhooks, well-lifecycle state/cohort views"
+    ],
+    "excludedFromRanking": "GET /v1/analytics/performance had broad but shallow traffic (about three calls per account, little repeat use). It is account usage analytics, not a market-data workflow, and not in the canonical contract."
+  },
+  "selections": [
+    {
+      "rank": 1,
+      "workflow": "Date-range price history",
+      "family": "prices",
+      "issue": "https://github.com/OilpriceAPI/mcp-server/issues/123",
+      "operations": [
+        "GET /v1/prices/historical",
+        "GET /v1/prices"
+      ],
+      "requirements": [
+        "input-schema",
+        "entitlement-behavior",
+        "unit-tests",
+        "live-contract-entry"
+      ]
+    },
+    {
+      "rank": 2,
+      "workflow": "Futures settlement history",
+      "family": "futures",
+      "issue": "https://github.com/OilpriceAPI/mcp-server/issues/124",
+      "operations": [
+        "GET /v1/futures/brent/historical",
+        "GET /v1/futures/wti/historical",
+        "GET /v1/futures/natural-gas/historical"
+      ],
+      "requirements": [
+        "input-schema",
+        "entitlement-behavior",
+        "unit-tests",
+        "live-contract-entry"
+      ]
+    },
+    {
+      "rank": 3,
+      "workflow": "Marine ports, all-port prices and marine-fuel history",
+      "family": "marine",
+      "issue": "https://github.com/OilpriceAPI/mcp-server/issues/125",
+      "operations": [
+        "GET /v1/marine-ports",
+        "GET /v1/marine-ports/{port_code}",
+        "GET /v1/prices/marine-fuels",
+        "GET /v1/prices/marine-fuels/historical"
+      ],
+      "requirements": [
+        "input-schema",
+        "entitlement-behavior",
+        "unit-tests",
+        "live-contract-entry"
+      ]
+    }
+  ],
+  "families": [
+    {
+      "id": "prices",
+      "title": "Spot, fixed-window and date-range prices",
+      "status": "partial",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_price",
+        "opa_compare_prices",
+        "opa_market_overview",
+        "opa_get_history",
+        "opa_get_diesel_by_state"
+      ],
+      "reason": "Latest, all-prices and fixed past_* windows are exposed; date-range and paginated history are selection 1."
+    },
+    {
+      "id": "demo",
+      "title": "Keyless demo and discovery samples",
+      "status": "partial",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_price",
+        "opa_compare_prices",
+        "opa_list_commodities",
+        "opa_market_overview"
+      ],
+      "reason": "Keyless tools serve GET /v1/demo/prices; per-code demo and runtime discovery samples are aliases."
+    },
+    {
+      "id": "commodities",
+      "title": "Commodity catalogue, detail and coverage",
+      "status": "partial",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_list_commodities"
+      ],
+      "reason": "Catalogue is exposed; per-code detail and coverage are the next candidates after the selections."
+    },
+    {
+      "id": "storage",
+      "title": "Oil storage (Cushing, SPR)",
+      "status": "exposed",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_storage"
+      ],
+      "reason": "Cushing is canonical OpenAPI; SPR is served from the preview storage family.",
+      "pathPrefixes": [
+        {
+          "prefix": "/v1/storage",
+          "audience": "product_preview"
+        }
+      ]
+    },
+    {
+      "id": "futures",
+      "title": "Canonical futures (Brent, WTI, NYMEX natural gas)",
+      "status": "partial",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_futures"
+      ],
+      "reason": "Latest contracts are exposed; settlement history is selection 2; calendar spreads are deferred."
+    },
+    {
+      "id": "futures-expanded",
+      "title": "Expanded futures: gasoil, TTF, JKM, carbon, forward curves, OHLC and intraday",
+      "status": "partial",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_futures",
+        "opa_get_futures_curve"
+      ],
+      "reason": "Latest and curve for all eight instruments are exposed through preview /v1/futures/{slug} and /curve routes. OHLC, intraday and non-canonical history stay deferred until the API publishes stable schemas (route policy: product_preview).",
+      "pathPrefixes": [
+        {
+          "prefix": "/v1/futures",
+          "audience": "product_preview"
+        }
+      ]
+    },
+    {
+      "id": "gasoil-crack",
+      "title": "European gasoil crack spread",
+      "status": "not_exposed",
+      "owner": "mcp-server",
+      "reason": "Canonical operation exists (GET /v1/spreads/gasoil-crack) but measured demand is low; candidate to fold into opa_get_spread."
+    },
+    {
+      "id": "marine",
+      "title": "Marine fuels and ports",
+      "status": "partial",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_marine_fuels"
+      ],
+      "reason": "Latest prices are exposed through the compatibility alias /v1/marine-fuels/latest; ports, all-port prices and history are selection 3, which also moves the tool to the canonical path.",
+      "pathPrefixes": [
+        {
+          "prefix": "/v1/marine-fuels",
+          "audience": "compatibility"
+        }
+      ]
+    },
+    {
+      "id": "fuel-surcharge",
+      "title": "LTL and parcel carrier fuel surcharges",
+      "status": "exposed",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_fuel_surcharge"
+      ],
+      "reason": "All six canonical operations are reachable through opa_get_fuel_surcharge."
+    },
+    {
+      "id": "drilling",
+      "title": "Rig counts and drilling intelligence",
+      "status": "partial",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_rig_counts",
+        "opa_get_drilling"
+      ],
+      "reason": "Latest rig counts and the drilling summary are exposed; basin-level detail and rig-count history are deferred."
+    },
+    {
+      "id": "webhooks",
+      "title": "Webhook endpoints",
+      "status": "not_exposed",
+      "owner": "mcp-server",
+      "reason": "Delivery to customer infrastructure is configuration, not an agent action; price watches are exposed as subscriptions."
+    },
+    {
+      "id": "api-keys",
+      "title": "API key management",
+      "status": "not_exposed",
+      "owner": "mcp-server",
+      "reason": "Secrets are never issued, listed or rotated through an LLM tool call."
+    },
+    {
+      "id": "retail-energy",
+      "title": "Regional retail diesel, gasoline and electricity",
+      "status": "not_exposed",
+      "owner": "mcp-server",
+      "reason": "State diesel is reachable through opa_get_diesel_by_state on /v1/prices/latest; the regional endpoints had little or no measured demand."
+    },
+    {
+      "id": "account",
+      "title": "Account status",
+      "status": "partial",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_account_status"
+      ],
+      "reason": "opa_get_account_status reads /v1/dashboard, which the API route policy classifies as browser-session dashboard data. It answers with an API key today (verified 2026-09-13); the documented GET /v1/account is deferred.",
+      "pathPrefixes": [
+        {
+          "prefix": "/v1/dashboard",
+          "audience": "dashboard"
+        }
+      ]
+    },
+    {
+      "id": "plans",
+      "title": "Plans and limits",
+      "status": "partial",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_plans"
+      ],
+      "reason": "opa_get_plans reads the website pricing helper /v1/pricing; GET /v1/meta/limits is deferred.",
+      "pathPrefixes": [
+        {
+          "prefix": "/v1/pricing",
+          "audience": "website"
+        }
+      ]
+    },
+    {
+      "id": "market-brief",
+      "title": "Multi-commodity market brief",
+      "status": "exposed",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_market_brief"
+      ],
+      "reason": "Canonical operation exposed; the underscore alias is recorded as an alias."
+    },
+    {
+      "id": "subscription-lifecycle",
+      "title": "Price-watch subscription lifecycle",
+      "status": "partial",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_create_price_subscription",
+        "opa_list_subscriptions",
+        "opa_delete_subscription",
+        "opa_get_subscription_events"
+      ],
+      "reason": "Create, list, delete and event polling are exposed under --scope write/read; update, pause and resume need a write-scope decision."
+    },
+    {
+      "id": "price-alerts",
+      "title": "Legacy price alerts",
+      "status": "exposed",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_create_price_alert",
+        "opa_list_price_alerts",
+        "opa_delete_price_alert",
+        "opa_get_alert_triggers"
+      ],
+      "reason": "Served from the preview /v1/alerts family, which the API route policy calls legacy in favour of subscriptions. Kept for existing MCP users; a deprecation decision is open.",
+      "pathPrefixes": [
+        {
+          "prefix": "/v1/alerts",
+          "audience": "product_preview"
+        }
+      ]
+    },
+    {
+      "id": "well-production",
+      "title": "Well production",
+      "status": "exposed",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_well_production",
+        "opa_lookup_well"
+      ],
+      "reason": "Summary, states, wells, top producers and cycle-time operations are exposed; /summary is an alias."
+    },
+    {
+      "id": "well-lifecycle",
+      "title": "FracFocus, permits and well lifecycle",
+      "status": "partial",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_lookup_well",
+        "opa_get_well_permits",
+        "opa_search_well_permits",
+        "opa_get_well_activity"
+      ],
+      "reason": "Per-well lifecycle and the preview permit family are exposed; lifecycle state availability and cohorts are deferred.",
+      "pathPrefixes": [
+        {
+          "prefix": "/v1/ei/well-permits",
+          "audience": "product_preview"
+        }
+      ]
+    },
+    {
+      "id": "spreads",
+      "title": "Crack, basis, margin, curve-structure and physical-premium spreads",
+      "status": "partial",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_spread"
+      ],
+      "reason": "Current crack, basis and margin are exposed; history, all-series, curve-structure and physical-premium views are deferred on low demand."
+    },
+    {
+      "id": "indicators",
+      "title": "Analyst indicators (fuel switching, price context, storage analytics, CFTC, annotations)",
+      "status": "not_exposed",
+      "owner": "mcp-server",
+      "reason": "Ten canonical operations with low or no measured demand; no MCP tool yet."
+    },
+    {
+      "id": "forecasts",
+      "title": "Forecasts",
+      "status": "partial",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_forecasts"
+      ],
+      "reason": "EIA short-term forecasts are exposed through the preview /v1/ei/forecasts route. The separate /v1/forecasts model family is deferred: no stable schema and no measured demand.",
+      "pathPrefixes": [
+        {
+          "prefix": "/v1/ei/forecasts",
+          "audience": "product_preview"
+        }
+      ]
+    },
+    {
+      "id": "energy-intelligence",
+      "title": "Energy intelligence (OPEC production, inventories)",
+      "status": "exposed",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_opec_production",
+        "opa_get_oil_inventories"
+      ],
+      "reason": "Served from the preview /v1/ei family, which has no canonical OpenAPI operations yet.",
+      "pathPrefixes": [
+        {
+          "prefix": "/v1/ei",
+          "audience": "product_preview"
+        }
+      ]
+    },
+    {
+      "id": "natural-gas-hubs",
+      "title": "US natural-gas hub prices",
+      "status": "exposed",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_natural_gas_hubs"
+      ],
+      "reason": "Served from the preview /v1/natural-gas family.",
+      "pathPrefixes": [
+        {
+          "prefix": "/v1/natural-gas",
+          "audience": "product_preview"
+        }
+      ]
+    },
+    {
+      "id": "natural-gas-fundamentals",
+      "title": "Natural-gas fundamentals",
+      "status": "not_exposed",
+      "owner": "mcp-server",
+      "reason": "Preview family (/v1/fundamentals) with no stable response schema and no measured demand in the selection window."
+    },
+    {
+      "id": "macro-calendar",
+      "title": "Macro calendar",
+      "status": "not_exposed",
+      "owner": "mcp-server",
+      "reason": "Preview family (/v1/macro) with no stable response schema and no measured demand in the selection window."
+    },
+    {
+      "id": "data-quality",
+      "title": "Data-quality reports",
+      "status": "exposed",
+      "owner": "mcp-server",
+      "tools": [
+        "opa_get_data_quality"
+      ],
+      "reason": "Served from the preview /v1/data-quality family.",
+      "pathPrefixes": [
+        {
+          "prefix": "/v1/data-quality",
+          "audience": "product_preview"
+        }
+      ]
+    }
+  ],
+  "mcpOnlyTools": [
+    {
+      "tool": "opa_get_product_facts",
+      "reason": "Reads the packaged, checksum-verified product-facts artifact; no REST operation."
+    }
+  ],
+  "operations": [
+    {
+      "operation": "DELETE /v1/api-keys/{id}",
+      "family": "api-keys",
+      "status": "not_exposed",
+      "disposition": "unsupported",
+      "owner": "mcp-server",
+      "reason": "Revokes credentials; never routed through an LLM tool call."
+    },
+    {
+      "operation": "DELETE /v1/subscriptions/{id}",
+      "family": "subscription-lifecycle",
+      "status": "exposed",
+      "tools": [
+        "opa_delete_subscription"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "DELETE /v1/webhooks/{webhook_id}",
+      "family": "webhooks",
+      "status": "not_exposed",
+      "disposition": "unsupported",
+      "owner": "mcp-server",
+      "reason": "Changes delivery to customer infrastructure; not an action to take from an LLM tool call."
+    },
+    {
+      "operation": "GET /sample",
+      "family": "demo",
+      "status": "not_exposed",
+      "disposition": "alias",
+      "owner": "mcp-server",
+      "reason": "Keyless discovery sample injected into the served contract at runtime; the MCP keyless path uses GET /v1/demo/prices."
+    },
+    {
+      "operation": "GET /v1/account",
+      "family": "account",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "opa_get_account_status reads /v1/dashboard today; moving it to this documented operation is a separate decision."
+    },
+    {
+      "operation": "GET /v1/api-keys",
+      "family": "api-keys",
+      "status": "not_exposed",
+      "disposition": "unsupported",
+      "owner": "mcp-server",
+      "reason": "Key management exposes or rotates secrets; never routed through an LLM tool call."
+    },
+    {
+      "operation": "GET /v1/commodities",
+      "family": "commodities",
+      "status": "exposed",
+      "tools": [
+        "opa_list_commodities"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/commodities/categories",
+      "family": "commodities",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "opa_list_commodities already groups the catalogue; negligible measured demand."
+    },
+    {
+      "operation": "GET /v1/commodities/{code}",
+      "family": "commodities",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Next candidate after the three selections (ranked 4th on measured demand, with far less repeat use than marine)."
+    },
+    {
+      "operation": "GET /v1/commodities/{code}/coverage",
+      "family": "commodities",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Next candidate after the three selections; would let an agent ask what this account can access for one code."
+    },
+    {
+      "operation": "GET /v1/demo/prices",
+      "family": "demo",
+      "status": "exposed",
+      "tools": [
+        "opa_get_price",
+        "opa_compare_prices",
+        "opa_list_commodities",
+        "opa_market_overview"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/demo/prices/{code}",
+      "family": "demo",
+      "status": "not_exposed",
+      "disposition": "alias",
+      "owner": "mcp-server",
+      "reason": "Single-code view of the demo set; keyless tools read GET /v1/demo/prices once."
+    },
+    {
+      "operation": "GET /v1/diesel-prices",
+      "family": "retail-energy",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Regional retail series; opa_get_diesel_by_state covers state diesel through /v1/prices/latest. Low measured demand."
+    },
+    {
+      "operation": "GET /v1/drilling-intelligence",
+      "family": "drilling",
+      "status": "not_exposed",
+      "disposition": "alias",
+      "owner": "mcp-server",
+      "reason": "Same summary opa_get_drilling reads from GET /v1/drilling/latest."
+    },
+    {
+      "operation": "GET /v1/drilling-intelligence/completions",
+      "family": "drilling",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Basin-level detail beyond the opa_get_drilling summary. Low measured demand."
+    },
+    {
+      "operation": "GET /v1/drilling-intelligence/duc-wells",
+      "family": "drilling",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Basin-level detail beyond the opa_get_drilling summary. Low measured demand."
+    },
+    {
+      "operation": "GET /v1/drilling-intelligence/frac-spreads",
+      "family": "drilling",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Basin-level detail beyond the opa_get_drilling summary. Low measured demand."
+    },
+    {
+      "operation": "GET /v1/drilling-intelligence/latest",
+      "family": "drilling",
+      "status": "not_exposed",
+      "disposition": "alias",
+      "owner": "mcp-server",
+      "reason": "Same summary opa_get_drilling reads from GET /v1/drilling/latest."
+    },
+    {
+      "operation": "GET /v1/drilling-intelligence/summary",
+      "family": "drilling",
+      "status": "not_exposed",
+      "disposition": "alias",
+      "owner": "mcp-server",
+      "reason": "Same summary opa_get_drilling reads from GET /v1/drilling/latest."
+    },
+    {
+      "operation": "GET /v1/drilling-intelligence/well-permits",
+      "family": "drilling",
+      "status": "not_exposed",
+      "disposition": "alias",
+      "owner": "mcp-server",
+      "reason": "Permit counts; opa_get_well_permits reads the richer /v1/ei/well-permits family."
+    },
+    {
+      "operation": "GET /v1/drilling-intelligence/wells-drilled",
+      "family": "drilling",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Basin-level detail beyond the opa_get_drilling summary. Low measured demand."
+    },
+    {
+      "operation": "GET /v1/drilling/latest",
+      "family": "drilling",
+      "status": "exposed",
+      "tools": [
+        "opa_get_drilling"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/electricity",
+      "family": "retail-energy",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Retail electricity by state and sector; no measured demand in the selection window."
+    },
+    {
+      "operation": "GET /v1/fuel-surcharge",
+      "family": "fuel-surcharge",
+      "status": "exposed",
+      "tools": [
+        "opa_get_fuel_surcharge"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/fuel-surcharge/parcel",
+      "family": "fuel-surcharge",
+      "status": "exposed",
+      "tools": [
+        "opa_get_fuel_surcharge"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/fuel-surcharge/parcel/{carrier}/history",
+      "family": "fuel-surcharge",
+      "status": "exposed",
+      "tools": [
+        "opa_get_fuel_surcharge"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/fuel-surcharge/parcel/{carrier}/latest",
+      "family": "fuel-surcharge",
+      "status": "exposed",
+      "tools": [
+        "opa_get_fuel_surcharge"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/fuel-surcharge/{carrier}/history",
+      "family": "fuel-surcharge",
+      "status": "exposed",
+      "tools": [
+        "opa_get_fuel_surcharge"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/fuel-surcharge/{carrier}/latest",
+      "family": "fuel-surcharge",
+      "status": "exposed",
+      "tools": [
+        "opa_get_fuel_surcharge"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/futures/brent",
+      "family": "futures",
+      "status": "exposed",
+      "tools": [
+        "opa_get_futures"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/futures/brent/historical",
+      "family": "futures",
+      "status": "not_exposed",
+      "disposition": "selected",
+      "selection": 2,
+      "owner": "mcp-server",
+      "reason": "Settlement history; opa_get_futures returns the current front month only. Selection 2."
+    },
+    {
+      "operation": "GET /v1/futures/brent/spreads",
+      "family": "futures",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Calendar spreads are derivable from opa_get_futures_curve; revisit alongside selection 2 (#124)."
+    },
+    {
+      "operation": "GET /v1/futures/ice-brent",
+      "family": "futures",
+      "status": "not_exposed",
+      "disposition": "alias",
+      "owner": "mcp-server",
+      "reason": "Venue alias of GET /v1/futures/brent; opa_get_futures maps ice-brent input to the canonical slug."
+    },
+    {
+      "operation": "GET /v1/futures/ice-wti",
+      "family": "futures",
+      "status": "not_exposed",
+      "disposition": "alias",
+      "owner": "mcp-server",
+      "reason": "Venue alias of GET /v1/futures/wti; opa_get_futures maps ice-wti input to the canonical slug."
+    },
+    {
+      "operation": "GET /v1/futures/natural-gas",
+      "family": "futures",
+      "status": "exposed",
+      "tools": [
+        "opa_get_futures"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/futures/natural-gas/historical",
+      "family": "futures",
+      "status": "not_exposed",
+      "disposition": "selected",
+      "selection": 2,
+      "owner": "mcp-server",
+      "reason": "Settlement history; opa_get_futures returns the current front month only. Selection 2."
+    },
+    {
+      "operation": "GET /v1/futures/natural-gas/spreads",
+      "family": "futures",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Calendar spreads are derivable from opa_get_futures_curve; revisit alongside selection 2 (#124)."
+    },
+    {
+      "operation": "GET /v1/futures/wti",
+      "family": "futures",
+      "status": "exposed",
+      "tools": [
+        "opa_get_futures"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/futures/wti/historical",
+      "family": "futures",
+      "status": "not_exposed",
+      "disposition": "selected",
+      "selection": 2,
+      "owner": "mcp-server",
+      "reason": "Settlement history; opa_get_futures returns the current front month only. Selection 2."
+    },
+    {
+      "operation": "GET /v1/futures/wti/spreads",
+      "family": "futures",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Calendar spreads are derivable from opa_get_futures_curve; revisit alongside selection 2 (#124)."
+    },
+    {
+      "operation": "GET /v1/gasoline-prices",
+      "family": "retail-energy",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Regional retail gasoline; no measured demand in the selection window."
+    },
+    {
+      "operation": "GET /v1/indicators/annotations",
+      "family": "indicators",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Analyst indicator with low measured demand; no MCP tool yet."
+    },
+    {
+      "operation": "GET /v1/indicators/annotations/batch",
+      "family": "indicators",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Analyst indicator with no measured demand in the selection window."
+    },
+    {
+      "operation": "GET /v1/indicators/cftc-positioning",
+      "family": "indicators",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Analyst indicator with no measured demand in the selection window."
+    },
+    {
+      "operation": "GET /v1/indicators/cftc-positioning/all",
+      "family": "indicators",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Analyst indicator with no measured demand in the selection window."
+    },
+    {
+      "operation": "GET /v1/indicators/cftc-positioning/historical",
+      "family": "indicators",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Analyst indicator with no measured demand in the selection window."
+    },
+    {
+      "operation": "GET /v1/indicators/fuel-switching",
+      "family": "indicators",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Analyst indicator with low measured demand; no MCP tool yet."
+    },
+    {
+      "operation": "GET /v1/indicators/fuel-switching/historical",
+      "family": "indicators",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Analyst indicator with low measured demand; no MCP tool yet."
+    },
+    {
+      "operation": "GET /v1/indicators/price-context",
+      "family": "indicators",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Analyst indicator with low measured demand; no MCP tool yet."
+    },
+    {
+      "operation": "GET /v1/indicators/storage-analytics",
+      "family": "indicators",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Analyst indicator with low measured demand; no MCP tool yet."
+    },
+    {
+      "operation": "GET /v1/indicators/storage-analytics/all",
+      "family": "indicators",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Analyst indicator with low measured demand; no MCP tool yet."
+    },
+    {
+      "operation": "GET /v1/marine-ports",
+      "family": "marine",
+      "status": "not_exposed",
+      "disposition": "selected",
+      "selection": 3,
+      "owner": "mcp-server",
+      "reason": "Port directory, so an agent can resolve a port before pricing it. Selection 3."
+    },
+    {
+      "operation": "GET /v1/marine-ports/{port_code}",
+      "family": "marine",
+      "status": "not_exposed",
+      "disposition": "selected",
+      "selection": 3,
+      "owner": "mcp-server",
+      "reason": "Single-port detail with prices. Selection 3."
+    },
+    {
+      "operation": "GET /v1/market-brief",
+      "family": "market-brief",
+      "status": "exposed",
+      "tools": [
+        "opa_get_market_brief"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/market_brief",
+      "family": "market-brief",
+      "status": "not_exposed",
+      "disposition": "alias",
+      "owner": "mcp-server",
+      "reason": "Underscore alias of GET /v1/market-brief."
+    },
+    {
+      "operation": "GET /v1/meta/limits",
+      "family": "plans",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "opa_get_plans reads /v1/pricing today; machine-readable limits could replace it."
+    },
+    {
+      "operation": "GET /v1/prices",
+      "family": "prices",
+      "status": "not_exposed",
+      "disposition": "selected",
+      "selection": 1,
+      "owner": "mcp-server",
+      "reason": "Paginated history; opa_get_history reaches only the fixed past_* windows. Selection 1."
+    },
+    {
+      "operation": "GET /v1/prices/all",
+      "family": "prices",
+      "status": "exposed",
+      "tools": [
+        "opa_market_overview"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/prices/all/health",
+      "family": "prices",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Catalogue-wide freshness; opa_get_data_quality covers per-code quality through the preview data-quality family."
+    },
+    {
+      "operation": "GET /v1/prices/historical",
+      "family": "prices",
+      "status": "not_exposed",
+      "disposition": "selected",
+      "selection": 1,
+      "owner": "mcp-server",
+      "reason": "Arbitrary date-range history; opa_get_history reaches only the fixed past_* windows. Selection 1."
+    },
+    {
+      "operation": "GET /v1/prices/latest",
+      "family": "prices",
+      "status": "exposed",
+      "tools": [
+        "opa_get_price",
+        "opa_compare_prices",
+        "opa_get_diesel_by_state"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/prices/marine-fuels",
+      "family": "marine",
+      "status": "not_exposed",
+      "disposition": "selected",
+      "selection": 3,
+      "owner": "mcp-server",
+      "reason": "All-port marine fuel prices; opa_get_marine_fuels returns latest only. Selection 3."
+    },
+    {
+      "operation": "GET /v1/prices/marine-fuels/historical",
+      "family": "marine",
+      "status": "not_exposed",
+      "disposition": "selected",
+      "selection": 3,
+      "owner": "mcp-server",
+      "reason": "Marine fuel history; opa_get_marine_fuels returns latest only. Selection 3."
+    },
+    {
+      "operation": "GET /v1/prices/marine-fuels/latest",
+      "family": "marine",
+      "status": "exposed",
+      "tools": [
+        "opa_get_marine_fuels"
+      ],
+      "via": "/v1/marine-fuels/latest",
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/prices/past_day",
+      "family": "prices",
+      "status": "exposed",
+      "tools": [
+        "opa_get_history"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/prices/past_month",
+      "family": "prices",
+      "status": "exposed",
+      "tools": [
+        "opa_get_history"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/prices/past_week",
+      "family": "prices",
+      "status": "exposed",
+      "tools": [
+        "opa_get_history"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/prices/past_year",
+      "family": "prices",
+      "status": "exposed",
+      "tools": [
+        "opa_get_history"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/rig-counts",
+      "family": "drilling",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Historical rig counts; opa_get_rig_counts returns the latest week only. Low measured demand."
+    },
+    {
+      "operation": "GET /v1/rig-counts/latest",
+      "family": "drilling",
+      "status": "exposed",
+      "tools": [
+        "opa_get_rig_counts"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/sample",
+      "family": "demo",
+      "status": "not_exposed",
+      "disposition": "alias",
+      "owner": "mcp-server",
+      "reason": "Keyless discovery sample injected into the served contract at runtime; the MCP keyless path uses GET /v1/demo/prices."
+    },
+    {
+      "operation": "GET /v1/spreads/basis",
+      "family": "spreads",
+      "status": "exposed",
+      "tools": [
+        "opa_get_spread"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/spreads/basis/all",
+      "family": "spreads",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "All-series view; opa_get_spread returns one current value. Low measured demand."
+    },
+    {
+      "operation": "GET /v1/spreads/basis/historical",
+      "family": "spreads",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "History view; opa_get_spread returns the current value only. Low measured demand."
+    },
+    {
+      "operation": "GET /v1/spreads/crack",
+      "family": "spreads",
+      "status": "exposed",
+      "tools": [
+        "opa_get_spread"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/spreads/crack/all",
+      "family": "spreads",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "All-series view; opa_get_spread returns one current value. Low measured demand."
+    },
+    {
+      "operation": "GET /v1/spreads/crack/historical",
+      "family": "spreads",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "History view; opa_get_spread returns the current value only. Low measured demand."
+    },
+    {
+      "operation": "GET /v1/spreads/curve-structure",
+      "family": "spreads",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Overlaps the market-structure analysis opa_get_futures_curve already returns."
+    },
+    {
+      "operation": "GET /v1/spreads/curve-structure/all",
+      "family": "spreads",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Overlaps the market-structure analysis opa_get_futures_curve already returns."
+    },
+    {
+      "operation": "GET /v1/spreads/gasoil-crack",
+      "family": "gasoil-crack",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "European gasoil crack; low measured demand. Candidate to fold into opa_get_spread as a fourth type."
+    },
+    {
+      "operation": "GET /v1/spreads/margin",
+      "family": "spreads",
+      "status": "exposed",
+      "tools": [
+        "opa_get_spread"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/spreads/margin/all",
+      "family": "spreads",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "All-series view; opa_get_spread returns one current value. Low measured demand."
+    },
+    {
+      "operation": "GET /v1/spreads/margin/historical",
+      "family": "spreads",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "History view; opa_get_spread returns the current value only. Low measured demand."
+    },
+    {
+      "operation": "GET /v1/spreads/physical-premium",
+      "family": "spreads",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Physical premiums; low measured demand."
+    },
+    {
+      "operation": "GET /v1/spreads/physical-premium/all",
+      "family": "spreads",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Physical premiums; low measured demand."
+    },
+    {
+      "operation": "GET /v1/spreads/physical-premium/historical",
+      "family": "spreads",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Physical premiums; low measured demand."
+    },
+    {
+      "operation": "GET /v1/storage/cushing",
+      "family": "storage",
+      "status": "exposed",
+      "tools": [
+        "opa_get_storage"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/subscriptions",
+      "family": "subscription-lifecycle",
+      "status": "exposed",
+      "tools": [
+        "opa_list_subscriptions"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/subscriptions/events",
+      "family": "subscription-lifecycle",
+      "status": "exposed",
+      "tools": [
+        "opa_get_subscription_events"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/subscriptions/{id}",
+      "family": "subscription-lifecycle",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "opa_list_subscriptions already returns each watch; single-watch read adds little for an agent."
+    },
+    {
+      "operation": "GET /v1/webhooks",
+      "family": "webhooks",
+      "status": "not_exposed",
+      "disposition": "unsupported",
+      "owner": "mcp-server",
+      "reason": "Webhook endpoints deliver to customer infrastructure; agent-driven watches use the subscription tools."
+    },
+    {
+      "operation": "GET /v1/webhooks/{webhook_id}",
+      "family": "webhooks",
+      "status": "not_exposed",
+      "disposition": "unsupported",
+      "owner": "mcp-server",
+      "reason": "Webhook endpoints deliver to customer infrastructure; agent-driven watches use the subscription tools."
+    },
+    {
+      "operation": "GET /v1/well-lifecycle/cohorts",
+      "family": "well-lifecycle",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Cohort analytics; no measured demand in the selection window."
+    },
+    {
+      "operation": "GET /v1/well-lifecycle/states",
+      "family": "well-lifecycle",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "State availability for the lifecycle join; opa_lookup_well reports per-well availability. No measured demand."
+    },
+    {
+      "operation": "GET /v1/well-lifecycle/states/{state_code}",
+      "family": "well-lifecycle",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "State availability for the lifecycle join; opa_lookup_well reports per-well availability. No measured demand."
+    },
+    {
+      "operation": "GET /v1/well-lifecycle/wells/{api_number}",
+      "family": "well-lifecycle",
+      "status": "exposed",
+      "tools": [
+        "opa_lookup_well"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/well-production",
+      "family": "well-production",
+      "status": "exposed",
+      "tools": [
+        "opa_get_well_production"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/well-production/cycle-time",
+      "family": "well-production",
+      "status": "exposed",
+      "tools": [
+        "opa_get_well_production"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/well-production/cycle-time/cohorts",
+      "family": "well-production",
+      "status": "exposed",
+      "tools": [
+        "opa_get_well_production"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/well-production/states",
+      "family": "well-production",
+      "status": "exposed",
+      "tools": [
+        "opa_get_well_production"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/well-production/states/{state_code}",
+      "family": "well-production",
+      "status": "exposed",
+      "tools": [
+        "opa_get_well_production"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/well-production/summary",
+      "family": "well-production",
+      "status": "not_exposed",
+      "disposition": "alias",
+      "owner": "mcp-server",
+      "reason": "Same summary as GET /v1/well-production, which opa_get_well_production reads."
+    },
+    {
+      "operation": "GET /v1/well-production/top-producers",
+      "family": "well-production",
+      "status": "exposed",
+      "tools": [
+        "opa_get_well_production"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "GET /v1/well-production/wells/{api_number}",
+      "family": "well-production",
+      "status": "exposed",
+      "tools": [
+        "opa_get_well_production",
+        "opa_lookup_well"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "PATCH /v1/subscriptions/{id}",
+      "family": "subscription-lifecycle",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Write action; needs an explicit write-scope decision before exposure."
+    },
+    {
+      "operation": "POST /v1/api-keys",
+      "family": "api-keys",
+      "status": "not_exposed",
+      "disposition": "unsupported",
+      "owner": "mcp-server",
+      "reason": "Creates a secret; never routed through an LLM tool call."
+    },
+    {
+      "operation": "POST /v1/api-keys/{id}/roll",
+      "family": "api-keys",
+      "status": "not_exposed",
+      "disposition": "unsupported",
+      "owner": "mcp-server",
+      "reason": "Rotates a secret; never routed through an LLM tool call."
+    },
+    {
+      "operation": "POST /v1/prices/batch",
+      "family": "prices",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "opa_compare_prices already reads 2-5 codes through /v1/prices/latest; batch lookup had negligible measured demand."
+    },
+    {
+      "operation": "POST /v1/subscriptions",
+      "family": "subscription-lifecycle",
+      "status": "exposed",
+      "tools": [
+        "opa_create_price_subscription"
+      ],
+      "owner": "mcp-server"
+    },
+    {
+      "operation": "POST /v1/subscriptions/{id}/pause",
+      "family": "subscription-lifecycle",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Write action; needs an explicit write-scope decision before exposure."
+    },
+    {
+      "operation": "POST /v1/subscriptions/{id}/resume",
+      "family": "subscription-lifecycle",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Write action; needs an explicit write-scope decision before exposure."
+    },
+    {
+      "operation": "POST /v1/webhooks",
+      "family": "webhooks",
+      "status": "not_exposed",
+      "disposition": "unsupported",
+      "owner": "mcp-server",
+      "reason": "Registers delivery to customer infrastructure; not an action to take from an LLM tool call."
+    },
+    {
+      "operation": "PUT /v1/webhooks/{webhook_id}",
+      "family": "webhooks",
+      "status": "not_exposed",
+      "disposition": "unsupported",
+      "owner": "mcp-server",
+      "reason": "Changes delivery to customer infrastructure; not an action to take from an LLM tool call."
+    }
+  ],
+  "changes": [
+    {
+      "ledgerVersion": 1,
+      "date": "2026-09-13",
+      "issue": "https://github.com/OilpriceAPI/mcp-server/issues/77",
+      "summary": "Seeded from the published contract (113 operations) and the API route policy; selected date-range history (#123), futures settlement history (#124) and marine workflows (#125)."
+    }
+  ]
+}
