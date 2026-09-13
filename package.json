@@ -28,7 +28,8 @@
     "verify:release-metadata": "node scripts/verify-release-metadata.mjs",
     "verify:release-provenance": "node scripts/verify-release-provenance.mjs",
     "verify:mcp-registry-release": "node scripts/verify-mcp-registry-release.mjs",
-    "prepublishOnly": "npm audit --audit-level=low && npm run verify:release-metadata && npm run build && npm run smoke:public-claims"
+    "prepublishOnly": "npm audit --audit-level=low && npm run verify:release-metadata && npm run build && npm run smoke:public-claims",
+    "smoke:commodity-identity": "node scripts/commodity-identity-invariant.mjs"
   },
   "files": [
     "build/*.d.ts",
