@@ -1143,6 +1143,15 @@ async function extractErrorDetail(response: Response): Promise<string> {
       const obj = JSON.parse(text) as Record<string, unknown>;
       if (typeof obj.message === "string") return obj.message;
       if (typeof obj.error === "string") return obj.error;
+      // The API's current error envelope is nested: {"error":{"code":...,
+      // "message":"SPR storage data not available","status":404}}. Reading
+      // only the top level dropped every one of these messages on the floor
+      // (#93), which is how a 404 reached the user as an entitlement hint.
+      if (obj.error && typeof obj.error === "object") {
+        const nested = obj.error as Record<string, unknown>;
+        if (typeof nested.message === "string") return nested.message;
+        if (typeof nested.code === "string") return nested.code;
+      }
       if (obj.errors) return JSON.stringify(obj.errors);
       return "";
     } catch {
@@ -1175,10 +1184,33 @@ async function buildGateError(response: Response): Promise<ApiGateError> {
  * exhausted) so tier-limit gates surface the exact limit + upgrade link (#17).
  * Returns null on other failures (401, 404, 5xx exhausted, network).
  */
+/**
+ * Why a request did not return data. `status` is the HTTP status (0 on a
+ * transport failure) and `detail` is the API's own error message when it sent
+ * one. Tools need this to report the REAL cause instead of guessing (#93).
+ */
+export interface ApiRequestOutcome<T> {
+  data: T | null;
+  status: number;
+  detail: string;
+}
+
 export async function makeApiRequest<T>(
   endpoint: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<T | null> {
+  return (await requestApi<T>(endpoint, fetchFn)).data;
+}
+
+/**
+ * The full-fidelity form of {@link makeApiRequest}: identical request, retry
+ * and 402/403/429 gate behaviour, but returns WHY it failed rather than a bare
+ * null. `makeApiRequest` is a thin wrapper so existing callers are unchanged.
+ */
+export async function requestApi<T>(
+  endpoint: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<ApiRequestOutcome<T>> {
   const headers: Record<string, string> = {
     ...clientAttributionHeaders(),
     ...currentToolAttributionHeaders(),
@@ -1197,14 +1229,22 @@ export async function makeApiRequest<T>(
       const response = await fetchFn(`${API_BASE}${endpoint}`, { headers });
 
       if (response.ok) {
-        return (await response.json()) as T;
+        return {
+          data: (await response.json()) as T,
+          status: response.status,
+          detail: "",
+        };
       }
 
       if (response.status === 401) {
         console.error(
           `Authentication failed. Set OILPRICEAPI_KEY environment variable. Get a key at ${SIGNUP_URL}`,
         );
-        return null;
+        return {
+          data: null,
+          status: 401,
+          detail: await extractErrorDetail(response),
+        };
       }
 
       // Tier/feature gate — surface the exact limit + upgrade link (#17).
@@ -1233,7 +1273,11 @@ export async function makeApiRequest<T>(
       console.error(
         `HTTP ${response.status}: ${response.statusText} for ${endpoint}`,
       );
-      return null;
+      return {
+        data: null,
+        status: response.status,
+        detail: await extractErrorDetail(response),
+      };
     } catch (error) {
       if (error instanceof ApiGateError) throw error;
       if (attempt === maxRetries) {
@@ -1241,14 +1285,45 @@ export async function makeApiRequest<T>(
           `API request failed after ${maxRetries + 1} attempts: ${endpoint}`,
           error,
         );
-        return null;
+        return {
+          data: null,
+          status: 0,
+          detail: error instanceof Error ? error.message : String(error),
+        };
       }
       const delay = Math.pow(2, attempt) * 1000;
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 
-  return null;
+  return { data: null, status: 0, detail: "" };
+}
+
+/**
+ * Turn a failed {@link requestApi} outcome into a sentence naming the ACTUAL
+ * cause. Never mentions entitlement: 402/403 throw ApiGateError before they
+ * ever reach here, so anything that lands here is a missing dataset, an auth
+ * problem, or a server/transport failure — and telling the user to upgrade
+ * their plan for any of those is a wrong answer (#93).
+ */
+export function describeRequestFailure(
+  label: string,
+  outcome: ApiRequestOutcome<unknown>,
+): string {
+  const detail = outcome.detail ? `: ${outcome.detail}` : "";
+  if (outcome.status === 404) {
+    return `${label} is not currently available from the API (HTTP 404${detail}). The endpoint is routed but the dataset is not populated, so this is a data-availability limit on the API side — not an account or plan restriction.`;
+  }
+  if (outcome.status === 401) {
+    return `${label} could not be read because authentication failed (HTTP 401${detail}). Check that OILPRICEAPI_KEY is set to a valid key; get one at ${SIGNUP_URL}.`;
+  }
+  if (outcome.status >= 500) {
+    return `${label} could not be read because the API returned HTTP ${outcome.status}${detail}. That is a temporary server-side failure — retry shortly.`;
+  }
+  if (outcome.status === 0) {
+    return `${label} could not be read because the request to the API failed${detail || " (network or transport error)"}. Retry shortly.`;
+  }
+  return `${label} could not be read: the API returned HTTP ${outcome.status}${detail}.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -2909,39 +2984,62 @@ server.registerTool(
     if (!getApiKey()) return keylessTeaserResult("opa_get_storage");
 
     const sections: string[] = ["# Oil Storage Levels\n"];
+    // Every facility the caller asked for that did NOT come back, with the
+    // reason the API gave. Previously these were dropped: `all` returned a
+    // successful-looking answer with the SPR half silently missing, and `spr`
+    // returned an entitlement hint for what is actually an empty dataset (#93).
+    const unavailable: string[] = [];
     let hasData = false;
 
-    if (facility === "cushing" || facility === "all") {
-      const response = await makeApiRequest<
-        ApiResponse<Record<string, unknown>>
-      >("/v1/storage/cushing");
-      if (response?.status === "success") {
-        hasData = true;
-        sections.push("## Cushing, Oklahoma (WTI Hub)\n");
-        sections.push(
-          "```json\n" + JSON.stringify(response.data, null, 2) + "\n```\n",
-        );
-      }
-    }
+    const facilities: Array<{ key: string; endpoint: string; label: string }> =
+      [
+        {
+          key: "cushing",
+          endpoint: "/v1/storage/cushing",
+          label: "Cushing, Oklahoma (WTI Hub)",
+        },
+        {
+          key: "spr",
+          endpoint: "/v1/storage/spr",
+          label: "Strategic Petroleum Reserve (SPR)",
+        },
+      ];
 
-    if (facility === "spr" || facility === "all") {
-      const response =
-        await makeApiRequest<ApiResponse<Record<string, unknown>>>(
-          "/v1/storage/spr",
-        );
-      if (response?.status === "success") {
+    for (const f of facilities) {
+      if (facility !== f.key && facility !== "all") continue;
+
+      const outcome = await requestApi<ApiResponse<Record<string, unknown>>>(
+        f.endpoint,
+      );
+
+      if (outcome.data?.status === "success") {
         hasData = true;
-        sections.push("## Strategic Petroleum Reserve (SPR)\n");
+        sections.push(`## ${f.label}\n`);
         sections.push(
-          "```json\n" + JSON.stringify(response.data, null, 2) + "\n```\n",
+          "```json\n" + JSON.stringify(outcome.data.data, null, 2) + "\n```\n",
         );
+        continue;
       }
+
+      unavailable.push(
+        outcome.data
+          ? `${f.label} — the API answered but returned no usable storage record.`
+          : describeRequestFailure(`${f.label} storage data`, outcome),
+      );
     }
 
     if (!hasData) {
       return errorResult(
-        "Storage data not available. Check opa_get_plans for the account's current energy-intelligence entitlement, then retry.",
+        unavailable.length > 0
+          ? unavailable.join("\n")
+          : `No storage facility was requested for '${facility}'.`,
       );
+    }
+
+    if (unavailable.length > 0) {
+      sections.push("## Not returned\n");
+      for (const note of unavailable) sections.push(`- ${note}`);
+      sections.push("");
     }
 
     sections.push("_Data from [OilPriceAPI](https://oilpriceapi.com)_");
@@ -4654,8 +4752,9 @@ server.registerTool(
       );
     }
 
-    const created = (unwrapSuccessData(result.body) as { subscription?: WatchRecord } | null)
-      ?.subscription;
+    const created = (
+      unwrapSuccessData(result.body) as { subscription?: WatchRecord } | null
+    )?.subscription;
     let text = "# Price Subscription Created\n\n";
     text += created
       ? formatWatchLine(created)
@@ -4697,8 +4796,11 @@ server.registerTool(
     }
 
     const watches =
-      (unwrapSuccessData(result.body) as { subscriptions?: WatchRecord[] } | null)
-        ?.subscriptions ?? [];
+      (
+        unwrapSuccessData(result.body) as {
+          subscriptions?: WatchRecord[];
+        } | null
+      )?.subscriptions ?? [];
 
     if (watches.length === 0) {
       return textResult(
