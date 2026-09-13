@@ -143,16 +143,38 @@ function httpFailure(status: number): DoctorCheck {
   };
 }
 
-async function boundedFetch(
+/**
+ * Fetch under a deadline that spans the BODY READ, not just the headers (#99).
+ *
+ * The previous shape returned the Response and cleared its abort timer in
+ * `finally`, so the caller's `.json()` ran with the timer already cancelled: an
+ * upstream that sent headers promptly and then stalled mid-body held opa_doctor
+ * open indefinitely — the exact failure this function exists to prevent, moved
+ * one step later. Same defect class as #84.
+ *
+ * `consume` runs INSIDE the same try, while the signal is still live, so an
+ * abort rejects the body read. `src/productFacts.ts` `fetchCanonical` is the
+ * in-repo reference implementation of this shape.
+ *
+ * `consume` is only invoked for an ok response; callers branch on the status
+ * before they parse, so a failing response never needs its body read.
+ */
+async function boundedFetch<T = never>(
   fetchImpl: typeof fetch,
   url: string,
   init: RequestInit,
   timeoutMs: number,
-): Promise<Response> {
+  consume?: (response: Response) => Promise<T>,
+): Promise<{ response: Response; body?: T }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetchImpl(url, { ...init, signal: controller.signal });
+    const response = await fetchImpl(url, {
+      ...init,
+      signal: controller.signal,
+    });
+    if (!consume || !response.ok) return { response };
+    return { response, body: await consume(response) };
   } finally {
     clearTimeout(timeout);
   }
@@ -280,7 +302,7 @@ export async function runDoctor(
   }
 
   try {
-    const health = await boundedFetch(
+    const { response: health } = await boundedFetch(
       fetchImpl,
       `${options.baseUrl.replace(/\/$/, "")}/health`,
       { headers: { Accept: "application/json" } },
@@ -312,7 +334,7 @@ export async function runDoctor(
 
   if (options.demo) {
     try {
-      const response = await boundedFetch(
+      const { response } = await boundedFetch(
         fetchImpl,
         `${options.baseUrl.replace(/\/$/, "")}/v1/demo/prices`,
         { headers: { Accept: "application/json" } },
@@ -358,7 +380,8 @@ export async function runDoctor(
   });
 
   try {
-    const response = await boundedFetch(
+    // The body read stays inside the deadline (#99).
+    const { response, body: accountBody } = await boundedFetch(
       fetchImpl,
       `${options.baseUrl.replace(/\/$/, "")}/v1/account`,
       {
@@ -368,12 +391,13 @@ export async function runDoctor(
         },
       },
       timeoutMs,
+      (r) => r.json() as Promise<unknown>,
     );
     if (!response.ok) {
       checks.push(httpFailure(response.status));
       return finish("account", checks);
     }
-    let account = safeAccount(await response.json());
+    let account = safeAccount(accountBody);
     const quotaExhausted = account.quota && account.quota.remaining <= 0;
     const quotaWarning =
       account.quota && !quotaExhausted && account.quota.percentUsed >= 80;
@@ -395,17 +419,19 @@ export async function runDoctor(
     });
     if (quotaExhausted) return finish("account", checks, account);
 
-    const dashboardResponse = await boundedFetch(
-      fetchImpl,
-      `${options.baseUrl.replace(/\/$/, "")}/v1/dashboard`,
-      {
-        headers: {
-          Accept: "application/json",
-          Authorization: `Bearer ${options.apiKey}`,
+    const { response: dashboardResponse, body: dashboardBody } =
+      await boundedFetch(
+        fetchImpl,
+        `${options.baseUrl.replace(/\/$/, "")}/v1/dashboard`,
+        {
+          headers: {
+            Accept: "application/json",
+            Authorization: `Bearer ${options.apiKey}`,
+          },
         },
-      },
-      timeoutMs,
-    );
+        timeoutMs,
+        (r) => r.json() as Promise<unknown>,
+      );
     if (!dashboardResponse.ok) {
       const failure = httpFailure(dashboardResponse.status);
       checks.push({
@@ -416,7 +442,7 @@ export async function runDoctor(
       return finish("account", checks, account);
     }
 
-    const dashboard = safeAccount(await dashboardResponse.json());
+    const dashboard = safeAccount(dashboardBody);
     account = {
       plan: dashboard.plan === "unknown" ? account.plan : dashboard.plan,
       features: dashboard.features,
