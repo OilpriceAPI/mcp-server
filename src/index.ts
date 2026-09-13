@@ -391,6 +391,7 @@ interface FuturesLatestContract {
 interface FuturesCurveData {
   analysis_date?: string;
   curve_type?: string;
+  currency?: string;
   total_contracts?: number;
   front_month?: FuturesCurveContract;
   back_month?: FuturesCurveContract;
@@ -401,6 +402,7 @@ interface FuturesCurveContract {
   contract_month: string;
   contract_code?: string;
   settlement_price: number;
+  currency?: string;
   trading_date?: string;
   months_to_expiry?: number;
 }
@@ -493,6 +495,84 @@ export const FUTURES_CONTRACT_NAMES: Record<
   UKA: "UK Carbon Allowance (UKA)",
   "uk-carbon": "UK Carbon Allowance (UKA)",
 };
+
+// ---------------------------------------------------------------------------
+// Futures quote basis (#87)
+//
+// Every futures contract settles in the currency and unit fixed by its
+// exchange contract specification — it is not market data and it does not
+// vary by response. Rendering a TTF settlement as "$80.15" when the contract
+// is EUR/MWh is a WRONG ANSWER, in the same class as returning the wrong
+// commodity (#90), because no conversion happened: only the symbol changed.
+//
+// Currencies below were verified against production on 2026-09-13 via
+// GET /v1/futures/{slug} -> front_month.currency:
+//   brent USD · wti USD · gasoil USD · natural-gas USD · lng-jkm USD
+//   ttf-gas EUR · eu-carbon EUR · uk-carbon GBP
+//
+// The response currency, where present, always wins over this table. The
+// table is the fallback for GET /v1/futures/{slug}/curve, which returns no
+// currency field at any level (also verified live the same day). It is NOT an
+// FX table and no conversion is ever performed.
+// ---------------------------------------------------------------------------
+
+export interface FuturesQuoteBasis {
+  currency: string;
+  unit: string;
+}
+
+export const FUTURES_INSTRUMENT_QUOTE: Record<string, FuturesQuoteBasis> = {
+  brent: { currency: "USD", unit: "bbl" },
+  wti: { currency: "USD", unit: "bbl" },
+  gasoil: { currency: "USD", unit: "tonne" },
+  "natural-gas": { currency: "USD", unit: "MMBtu" },
+  "ttf-gas": { currency: "EUR", unit: "MWh" },
+  "lng-jkm": { currency: "USD", unit: "MMBtu" },
+  "eu-carbon": { currency: "EUR", unit: "tonne CO2" },
+  "uk-carbon": { currency: "GBP", unit: "tonne CO2" },
+};
+
+/**
+ * Symbol for a currency code. GBp is SUBDIVIDED sterling (pence) and is a
+ * hundredth of GBP — rendering it with a pound sign overstates the price by
+ * 100x, so it never gets one.
+ */
+function currencySymbol(currency: string): string {
+  if (currency === "USD") return "$";
+  if (currency === "EUR") return "\u20ac";
+  if (currency === "GBP") return "\u00a3";
+  return "";
+}
+
+/**
+ * Render a futures price with the currency the API reported, falling back to
+ * the instrument's contract specification. Never assumes USD; when neither
+ * source knows the currency the bare number is returned with an explicit
+ * note rather than an invented dollar sign.
+ */
+export function formatFuturesPrice(
+  price: number,
+  currency: string | undefined,
+  basis: FuturesQuoteBasis | undefined,
+): string {
+  const code = currency ?? basis?.currency;
+  const amount = price.toFixed(2);
+  if (!code) return `${amount} (currency not reported by the API)`;
+  const symbol = currencySymbol(code);
+  if (code === "GBp") return `${amount} GBp (pence sterling)`;
+  return symbol ? `${symbol}${amount}` : `${amount} ${code}`;
+}
+
+/** One-line statement of the quote basis, e.g. "EUR per MWh". */
+export function describeQuoteBasis(
+  currency: string | undefined,
+  basis: FuturesQuoteBasis | undefined,
+): string {
+  const code = currency ?? basis?.currency;
+  if (!code) return "Quoted in: currency not reported by the API";
+  const unit = basis?.unit;
+  return unit ? `Quoted in ${code} per ${unit}` : `Quoted in ${code}`;
+}
 
 interface MarineFuelPrice {
   port: string;
@@ -2400,12 +2480,16 @@ server.registerTool(
 
     const contractName = FUTURES_CONTRACT_NAMES[contract];
     const front = response.front_month ?? response.contracts[0];
+    // The response currency is authoritative; the instrument's contract
+    // specification is the fallback. Neither is ever assumed to be USD (#87).
+    const basis = FUTURES_INSTRUMENT_QUOTE[slug];
 
     let text = `# ${contractName} Futures (${contract})\n\n`;
-    text += `**Front Month (${front.contract_month})**: $${front.last_price.toFixed(2)}`;
+    text += `**Front Month (${front.contract_month})**: ${formatFuturesPrice(front.last_price, front.currency, basis)}`;
     if (front.change_percent !== undefined && front.change_percent !== null) {
       text += ` (${front.change_percent >= 0 ? "+" : ""}${front.change_percent.toFixed(2)}%)`;
     }
+    text += `\n\n_${describeQuoteBasis(front.currency, basis)}. No currency conversion is applied._`;
     if (response.source) {
       text += `\n\n_Source: ${response.source}_`;
     }
@@ -2449,12 +2533,18 @@ server.registerTool(
 
     const contractName = FUTURES_CONTRACT_NAMES[contract];
     const contracts = response.contracts;
+    // The curve endpoint sends no currency field (verified live 2026-09-13),
+    // so the instrument's contract specification is the source here. Any
+    // currency the API does send still wins (#87).
+    const basis = FUTURES_INSTRUMENT_QUOTE[slug];
+    const responseCurrency = response.currency ?? contracts[0]?.currency;
 
     let text = `# ${contractName} Futures Curve (${contract})\n\n`;
+    text += `_${describeQuoteBasis(responseCurrency, basis)}. No currency conversion is applied._\n\n`;
     text += `| Month | Settlement |\n|-------|------------|\n`;
 
     for (const c of contracts) {
-      text += `| ${c.contract_month} | $${c.settlement_price.toFixed(2)} |\n`;
+      text += `| ${c.contract_month} | ${formatFuturesPrice(c.settlement_price, c.currency ?? responseCurrency, basis)} |\n`;
     }
 
     const front = contracts[0].settlement_price;
@@ -2462,7 +2552,7 @@ server.registerTool(
     // Prefer the API's own curve classification when present.
     const structure =
       response.curve_type ?? (front > back ? "backwardation" : "contango");
-    text += `\n**Market Structure**: ${structure} (front $${front.toFixed(2)} vs back $${back.toFixed(2)})`;
+    text += `\n**Market Structure**: ${structure} (front ${formatFuturesPrice(front, responseCurrency, basis)} vs back ${formatFuturesPrice(back, responseCurrency, basis)})`;
     text += `\n\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
 
     return textResult(text);
@@ -4654,8 +4744,9 @@ server.registerTool(
       );
     }
 
-    const created = (unwrapSuccessData(result.body) as { subscription?: WatchRecord } | null)
-      ?.subscription;
+    const created = (
+      unwrapSuccessData(result.body) as { subscription?: WatchRecord } | null
+    )?.subscription;
     let text = "# Price Subscription Created\n\n";
     text += created
       ? formatWatchLine(created)
@@ -4697,8 +4788,11 @@ server.registerTool(
     }
 
     const watches =
-      (unwrapSuccessData(result.body) as { subscriptions?: WatchRecord[] } | null)
-        ?.subscriptions ?? [];
+      (
+        unwrapSuccessData(result.body) as {
+          subscriptions?: WatchRecord[];
+        } | null
+      )?.subscriptions ?? [];
 
     if (watches.length === 0) {
       return textResult(
