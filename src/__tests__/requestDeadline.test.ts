@@ -281,3 +281,85 @@ describe("a timed-out tool call reports a usable error (#84)", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// Interaction with #93/#94 (merged as PR #94).
+//
+// #93 made opa_get_storage report every requested facility that did not come
+// back instead of silently dropping it. #84 makes a cut-off request THROW.
+// Composed naively, a timeout on one facility discards a facility that already
+// succeeded — half the answer gone, which is the exact failure #93 exists to
+// prevent. These two tests pin the agreed behaviour.
+// ---------------------------------------------------------------------------
+describe("a deadline on one facility does not discard another (#84 x #93)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  /** Cushing answers 200; SPR stalls until its signal aborts. */
+  function splitFetch() {
+    return vi.fn((url: unknown, init?: { signal?: AbortSignal }) => {
+      if (new URL(String(url)).pathname === "/v1/storage/cushing") {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          headers: { get: () => null },
+          json: async () => ({
+            status: "success",
+            data: { code: "CUSHING_STORAGE", value: 24_100 },
+          }),
+          text: async () => "{}",
+        });
+      }
+      return new Promise((_resolve, reject) =>
+        init?.signal?.addEventListener("abort", () =>
+          reject(
+            Object.assign(new Error("This operation was aborted"), {
+              name: "AbortError",
+            }),
+          ),
+        ),
+      );
+    });
+  }
+
+  it("facility:'all' keeps the Cushing half and names the timeout", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    vi.stubGlobal("fetch", splitFetch());
+
+    const call = tools.opa_get_storage
+      .handler({ facility: "all" }, {})
+      .catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(REQUEST_DEADLINE_MS + 5_000);
+    const result = (await call) as ToolResult;
+
+    expect(result.isError).toBeUndefined();
+    const body = result.content.map((c) => c.text).join("\n");
+    expect(body).toContain("CUSHING_STORAGE");
+    expect(body).toContain("Not returned");
+    expect(body).toMatch(/timed out after 30s/);
+    // Still never the wrong cause.
+    expect(body).not.toMatch(/entitlement/i);
+  });
+
+  it("host cancellation still propagates — no half answer for a caller who left", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    vi.stubGlobal("fetch", splitFetch());
+
+    const host = new AbortController();
+    const call = tools.opa_get_storage
+      .handler({ facility: "all" }, { signal: host.signal })
+      .catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(1);
+    host.abort();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(String(await call)).toMatch(/cancelled before it completed/);
+  });
+});

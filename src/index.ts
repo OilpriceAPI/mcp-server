@@ -392,6 +392,7 @@ interface FuturesLatestContract {
 interface FuturesCurveData {
   analysis_date?: string;
   curve_type?: string;
+  currency?: string;
   total_contracts?: number;
   front_month?: FuturesCurveContract;
   back_month?: FuturesCurveContract;
@@ -402,6 +403,7 @@ interface FuturesCurveContract {
   contract_month: string;
   contract_code?: string;
   settlement_price: number;
+  currency?: string;
   trading_date?: string;
   months_to_expiry?: number;
 }
@@ -494,6 +496,84 @@ export const FUTURES_CONTRACT_NAMES: Record<
   UKA: "UK Carbon Allowance (UKA)",
   "uk-carbon": "UK Carbon Allowance (UKA)",
 };
+
+// ---------------------------------------------------------------------------
+// Futures quote basis (#87)
+//
+// Every futures contract settles in the currency and unit fixed by its
+// exchange contract specification — it is not market data and it does not
+// vary by response. Rendering a TTF settlement as "$80.15" when the contract
+// is EUR/MWh is a WRONG ANSWER, in the same class as returning the wrong
+// commodity (#90), because no conversion happened: only the symbol changed.
+//
+// Currencies below were verified against production on 2026-09-13 via
+// GET /v1/futures/{slug} -> front_month.currency:
+//   brent USD · wti USD · gasoil USD · natural-gas USD · lng-jkm USD
+//   ttf-gas EUR · eu-carbon EUR · uk-carbon GBP
+//
+// The response currency, where present, always wins over this table. The
+// table is the fallback for GET /v1/futures/{slug}/curve, which returns no
+// currency field at any level (also verified live the same day). It is NOT an
+// FX table and no conversion is ever performed.
+// ---------------------------------------------------------------------------
+
+export interface FuturesQuoteBasis {
+  currency: string;
+  unit: string;
+}
+
+export const FUTURES_INSTRUMENT_QUOTE: Record<string, FuturesQuoteBasis> = {
+  brent: { currency: "USD", unit: "bbl" },
+  wti: { currency: "USD", unit: "bbl" },
+  gasoil: { currency: "USD", unit: "tonne" },
+  "natural-gas": { currency: "USD", unit: "MMBtu" },
+  "ttf-gas": { currency: "EUR", unit: "MWh" },
+  "lng-jkm": { currency: "USD", unit: "MMBtu" },
+  "eu-carbon": { currency: "EUR", unit: "tonne CO2" },
+  "uk-carbon": { currency: "GBP", unit: "tonne CO2" },
+};
+
+/**
+ * Symbol for a currency code. GBp is SUBDIVIDED sterling (pence) and is a
+ * hundredth of GBP — rendering it with a pound sign overstates the price by
+ * 100x, so it never gets one.
+ */
+function currencySymbol(currency: string): string {
+  if (currency === "USD") return "$";
+  if (currency === "EUR") return "\u20ac";
+  if (currency === "GBP") return "\u00a3";
+  return "";
+}
+
+/**
+ * Render a futures price with the currency the API reported, falling back to
+ * the instrument's contract specification. Never assumes USD; when neither
+ * source knows the currency the bare number is returned with an explicit
+ * note rather than an invented dollar sign.
+ */
+export function formatFuturesPrice(
+  price: number,
+  currency: string | undefined,
+  basis: FuturesQuoteBasis | undefined,
+): string {
+  const code = currency ?? basis?.currency;
+  const amount = price.toFixed(2);
+  if (!code) return `${amount} (currency not reported by the API)`;
+  const symbol = currencySymbol(code);
+  if (code === "GBp") return `${amount} GBp (pence sterling)`;
+  return symbol ? `${symbol}${amount}` : `${amount} ${code}`;
+}
+
+/** One-line statement of the quote basis, e.g. "EUR per MWh". */
+export function describeQuoteBasis(
+  currency: string | undefined,
+  basis: FuturesQuoteBasis | undefined,
+): string {
+  const code = currency ?? basis?.currency;
+  if (!code) return "Quoted in: currency not reported by the API";
+  const unit = basis?.unit;
+  return unit ? `Quoted in ${code} per ${unit}` : `Quoted in ${code}`;
+}
 
 interface MarineFuelPrice {
   port: string;
@@ -1153,6 +1233,15 @@ async function extractErrorDetail(response: Response): Promise<string> {
       const obj = JSON.parse(text) as Record<string, unknown>;
       if (typeof obj.message === "string") return obj.message;
       if (typeof obj.error === "string") return obj.error;
+      // The API's current error envelope is nested: {"error":{"code":...,
+      // "message":"SPR storage data not available","status":404}}. Reading
+      // only the top level dropped every one of these messages on the floor
+      // (#93), which is how a 404 reached the user as an entitlement hint.
+      if (obj.error && typeof obj.error === "object") {
+        const nested = obj.error as Record<string, unknown>;
+        if (typeof nested.message === "string") return nested.message;
+        if (typeof nested.code === "string") return nested.code;
+      }
       if (obj.errors) return JSON.stringify(obj.errors);
       return "";
     } catch {
@@ -1161,6 +1250,110 @@ async function extractErrorDetail(response: Response): Promise<string> {
   } catch {
     return "";
   }
+}
+
+// ---------------------------------------------------------------------------
+// Retry policy (#86)
+//
+// Two rules, both about not wasting the caller's time inside an MCP session:
+//
+//   1. A retry budget. No single backoff may exceed MAX_RETRY_DELAY_MS,
+//      whatever Retry-After asks for. A tool call that sleeps for hours is
+//      never the right answer — the agent just hangs.
+//   2. Durable quota exhaustion is not retried at all. A monthly/daily/trial
+//      window does not reopen inside a retry budget, so re-sending the request
+//      three more times cannot succeed; it only delays the error the caller
+//      needs to see and spends three more requests doing it.
+// ---------------------------------------------------------------------------
+
+/** Longest any single backoff may be. Also the durable/transient threshold. */
+export const MAX_RETRY_DELAY_MS = 60_000;
+
+/**
+ * Parse Retry-After per RFC 9110: either delay-seconds or an HTTP-date.
+ * Returns the FULL requested delay in ms (unclamped, for classification), or
+ * null when absent or unparseable.
+ *
+ * parseInt() alone returned NaN for the HTTP-date form and passed negatives
+ * straight through. Math.min(NaN, 60) is NaN and setTimeout(fn, NaN) fires in
+ * 1ms ("TimeoutNaNWarning: NaN is not a number. Timeout duration was set to
+ * 1."), as does a negative delay — so a legal header silently removed the
+ * backoff entirely and the server was hit four times in a row.
+ */
+export function parseRetryAfterMs(
+  raw: string | null | undefined,
+  now: number = Date.now(),
+): number | null {
+  if (!raw) return null;
+  const trimmed = String(raw).trim();
+  if (/^\d+$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    return Number.isFinite(seconds) ? seconds * 1000 : null;
+  }
+  const at = Date.parse(trimmed);
+  if (Number.isNaN(at)) return null;
+  return Math.max(0, at - now);
+}
+
+/** Backoff for one attempt, always finite, positive and within the budget. */
+export function boundedRetryDelayMs(
+  retryAfterMs: number | null,
+  attempt: number,
+): number {
+  const base =
+    retryAfterMs !== null && retryAfterMs > 0
+      ? retryAfterMs
+      : Math.pow(2, attempt) * 1000;
+  return Math.min(Math.max(base, 1000), MAX_RETRY_DELAY_MS);
+}
+
+/**
+ * Quota windows that will not reopen within the retry budget. Matched against
+ * the raw response body so it works whatever error envelope the API uses.
+ */
+const DURABLE_QUOTA_PATTERN =
+  /\b(month|monthly|daily|per[-\s]?day|per[-\s]?month|trial|quota)\b/i;
+
+/**
+ * True when a 429 is a durable window rather than a recoverable burst. A
+ * Retry-After beyond the retry budget is durable by definition: the server
+ * itself says recovery is further away than we are willing to wait.
+ */
+export function isDurableRateLimit(
+  body: string,
+  retryAfterMs: number | null,
+): boolean {
+  if (retryAfterMs !== null && retryAfterMs > MAX_RETRY_DELAY_MS) return true;
+  return DURABLE_QUOTA_PATTERN.test(body);
+}
+
+/** Human reset hint for a durable limit, e.g. "resets in about 8h 47m". */
+function resetHint(retryAfterMs: number | null): string {
+  if (retryAfterMs === null || retryAfterMs <= 0) return "";
+  const totalMinutes = Math.round(retryAfterMs / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  const span =
+    hours > 0 ? `${hours}h ${minutes}m` : `${Math.max(totalMinutes, 1)}m`;
+  return ` The limit resets in about ${span} (server Retry-After).`;
+}
+
+/** Read a response body once, tolerating mocks without text(). */
+async function readBodyText(response: Response): Promise<string> {
+  try {
+    if (typeof response.text !== "function") return "";
+    return (await response.text()) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * buildGateError() consumes the body, so hand it a shim carrying the text we
+ * already read. It only ever touches `status` and `text()`.
+ */
+function replayResponse(status: number, body: string): Response {
+  return { status, text: async () => body } as unknown as Response;
 }
 
 /** Build the standard 402/403/429 gate error with the upgrade nudge. */
@@ -1197,9 +1390,17 @@ export const REQUEST_DEADLINE_MS = 30_000;
 
 /** Thrown when a request is cut off by the deadline or by host cancellation. */
 export class ApiTimeoutError extends Error {
-  constructor(message: string) {
+  /**
+   * Which of the two cut it off. Callers assembling a multi-part answer may
+   * degrade gracefully on "timeout" (one leg is missing, say so) but must NOT
+   * on "cancelled" — the caller has gone away and wants no answer at all.
+   */
+  reason: "timeout" | "cancelled";
+
+  constructor(message: string, reason: "timeout" | "cancelled") {
     super(message);
     this.name = "ApiTimeoutError";
+    this.reason = reason;
   }
 }
 
@@ -1257,9 +1458,11 @@ function deadlineError(deadline: RequestDeadline, endpoint: string): Error {
   return deadline.timedOut()
     ? new ApiTimeoutError(
         `The request to ${endpoint} timed out after ${Math.round(REQUEST_DEADLINE_MS / 1000)}s. The API did not respond in time — this is not a plan or permission problem. Retry in a moment; if it persists, check https://status.oilpriceapi.com.`,
+        "timeout",
       )
     : new ApiTimeoutError(
         `The request to ${endpoint} was cancelled before it completed.`,
+        "cancelled",
       );
 }
 
@@ -1286,10 +1489,33 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
  * exhausted) so tier-limit gates surface the exact limit + upgrade link (#17).
  * Returns null on other failures (401, 404, 5xx exhausted, network).
  */
+/**
+ * Why a request did not return data. `status` is the HTTP status (0 on a
+ * transport failure) and `detail` is the API's own error message when it sent
+ * one. Tools need this to report the REAL cause instead of guessing (#93).
+ */
+export interface ApiRequestOutcome<T> {
+  data: T | null;
+  status: number;
+  detail: string;
+}
+
 export async function makeApiRequest<T>(
   endpoint: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<T | null> {
+  return (await requestApi<T>(endpoint, fetchFn)).data;
+}
+
+/**
+ * The full-fidelity form of {@link makeApiRequest}: identical request, retry
+ * and 402/403/429 gate behaviour, but returns WHY it failed rather than a bare
+ * null. `makeApiRequest` is a thin wrapper so existing callers are unchanged.
+ */
+export async function requestApi<T>(
+  endpoint: string,
+  fetchFn: typeof fetch = fetch,
+): Promise<ApiRequestOutcome<T>> {
   const headers: Record<string, string> = {
     ...clientAttributionHeaders(),
     ...currentToolAttributionHeaders(),
@@ -1302,8 +1528,8 @@ export async function makeApiRequest<T>(
   }
 
   const maxRetries = 3;
-  // ONE budget for the whole call — attempts and backoff included — so a
-  // retrying tool cannot quietly cost 4x the deadline (#84).
+  // ONE budget for the whole call — every attempt and every backoff included —
+  // so a retrying tool cannot quietly cost 4x the deadline (#84).
   const deadline = startRequestDeadline();
 
   try {
@@ -1317,16 +1543,24 @@ export async function makeApiRequest<T>(
         });
 
         if (response.ok) {
-          // The body read stays inside the budget: a response that opens and
-          // then stalls is cut off too.
-          return (await response.json()) as T;
+          // The body read stays inside the budget (#84): a response that opens
+          // and then stalls mid-body is cut off too.
+          return {
+            data: (await response.json()) as T,
+            status: response.status,
+            detail: "",
+          };
         }
 
         if (response.status === 401) {
           console.error(
             `Authentication failed. Set OILPRICEAPI_KEY environment variable. Get a key at ${SIGNUP_URL}`,
           );
-          return null;
+          return {
+            data: null,
+            status: 401,
+            detail: await extractErrorDetail(response),
+          };
         }
 
         // Tier/feature gate — surface the exact limit + upgrade link (#17).
@@ -1334,33 +1568,61 @@ export async function makeApiRequest<T>(
           throw await buildGateError(response);
         }
 
-        // Retry on 429 and 5xx
-        if (
-          (response.status === 429 || response.status >= 500) &&
-          attempt < maxRetries
-        ) {
-          const retryAfter = response.headers.get("Retry-After");
-          const delay = retryAfter
-            ? Math.min(parseInt(retryAfter, 10), 60) * 1000
-            : Math.pow(2, attempt) * 1000;
-          await abortableSleep(delay, deadline.signal);
-          if (deadline.signal.aborted) throw deadlineError(deadline, endpoint);
-          continue;
+        if (response.status === 429) {
+          const retryAfterMs = parseRetryAfterMs(
+            response.headers.get("Retry-After"),
+          );
+          // Read the body once: it both classifies the limit and supplies the
+          // detail for the gate error.
+          const body = await readBodyText(response);
+
+          // Durable quota exhaustion — stop immediately (#86). Retrying cannot
+          // succeed and only spends more of an already-exhausted allowance.
+          if (isDurableRateLimit(body, retryAfterMs)) {
+            const gate = await buildGateError(replayResponse(429, body));
+            throw new ApiGateError(429, gate.message + resetHint(retryAfterMs));
+          }
+
+          if (attempt < maxRetries) {
+            await abortableSleep(
+              boundedRetryDelayMs(retryAfterMs, attempt),
+              deadline.signal,
+            );
+            if (deadline.signal.aborted)
+              throw deadlineError(deadline, endpoint);
+            continue;
+          }
+
+          // Transient limit, retries exhausted — surface it with the upgrade link.
+          throw await buildGateError(replayResponse(429, body));
         }
 
-        // 429 with retries exhausted — surface the rate limit + upgrade link.
-        if (response.status === 429) {
-          throw await buildGateError(response);
+        // Retry on 5xx, with the same bounded delay.
+        if (response.status >= 500 && attempt < maxRetries) {
+          const retryAfterMs = parseRetryAfterMs(
+            response.headers.get("Retry-After"),
+          );
+          await abortableSleep(
+            boundedRetryDelayMs(retryAfterMs, attempt),
+            deadline.signal,
+          );
+          if (deadline.signal.aborted) throw deadlineError(deadline, endpoint);
+          continue;
         }
 
         console.error(
           `HTTP ${response.status}: ${response.statusText} for ${endpoint}`,
         );
-        return null;
+        return {
+          data: null,
+          status: response.status,
+          detail: await extractErrorDetail(response),
+        };
       } catch (error) {
         if (error instanceof ApiGateError) throw error;
         if (error instanceof ApiTimeoutError) throw error;
-        // The deadline or the host fired: stop, do not spend more attempts.
+        // The deadline elapsed or the host cancelled: stop, and do not spend
+        // another attempt on a call nobody is waiting for any more (#84).
         if (deadline.signal.aborted || isAbortError(error)) {
           throw deadlineError(deadline, endpoint);
         }
@@ -1369,17 +1631,48 @@ export async function makeApiRequest<T>(
             `API request failed after ${maxRetries + 1} attempts: ${endpoint}`,
             error,
           );
-          return null;
+          return {
+            data: null,
+            status: 0,
+            detail: error instanceof Error ? error.message : String(error),
+          };
         }
         await abortableSleep(Math.pow(2, attempt) * 1000, deadline.signal);
         if (deadline.signal.aborted) throw deadlineError(deadline, endpoint);
       }
     }
 
-    return null;
+    return { data: null, status: 0, detail: "" };
   } finally {
     deadline.release();
   }
+}
+
+/**
+ * Turn a failed {@link requestApi} outcome into a sentence naming the ACTUAL
+ * cause. Never mentions entitlement: 402/403 throw ApiGateError before they
+ * ever reach here, so anything that lands here is a missing dataset, an auth
+ * problem, or a server/transport failure — and telling the user to upgrade
+ * their plan for any of those is a wrong answer (#93).
+ */
+export function describeRequestFailure(
+  label: string,
+  outcome: ApiRequestOutcome<unknown>,
+): string {
+  const detail = outcome.detail ? `: ${outcome.detail}` : "";
+  if (outcome.status === 404) {
+    return `${label} is not currently available from the API (HTTP 404${detail}). The endpoint is routed but the dataset is not populated, so this is a data-availability limit on the API side — not an account or plan restriction.`;
+  }
+  if (outcome.status === 401) {
+    return `${label} could not be read because authentication failed (HTTP 401${detail}). Check that OILPRICEAPI_KEY is set to a valid key; get one at ${SIGNUP_URL}.`;
+  }
+  if (outcome.status >= 500) {
+    return `${label} could not be read because the API returned HTTP ${outcome.status}${detail}. That is a temporary server-side failure — retry shortly.`;
+  }
+  if (outcome.status === 0) {
+    return `${label} could not be read because the request to the API failed${detail || " (network or transport error)"}. Retry shortly.`;
+  }
+  return `${label} could not be read: the API returned HTTP ${outcome.status}${detail}.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -2550,12 +2843,16 @@ server.registerTool(
 
     const contractName = FUTURES_CONTRACT_NAMES[contract];
     const front = response.front_month ?? response.contracts[0];
+    // The response currency is authoritative; the instrument's contract
+    // specification is the fallback. Neither is ever assumed to be USD (#87).
+    const basis = FUTURES_INSTRUMENT_QUOTE[slug];
 
     let text = `# ${contractName} Futures (${contract})\n\n`;
-    text += `**Front Month (${front.contract_month})**: $${front.last_price.toFixed(2)}`;
+    text += `**Front Month (${front.contract_month})**: ${formatFuturesPrice(front.last_price, front.currency, basis)}`;
     if (front.change_percent !== undefined && front.change_percent !== null) {
       text += ` (${front.change_percent >= 0 ? "+" : ""}${front.change_percent.toFixed(2)}%)`;
     }
+    text += `\n\n_${describeQuoteBasis(front.currency, basis)}. No currency conversion is applied._`;
     if (response.source) {
       text += `\n\n_Source: ${response.source}_`;
     }
@@ -2599,12 +2896,18 @@ server.registerTool(
 
     const contractName = FUTURES_CONTRACT_NAMES[contract];
     const contracts = response.contracts;
+    // The curve endpoint sends no currency field (verified live 2026-09-13),
+    // so the instrument's contract specification is the source here. Any
+    // currency the API does send still wins (#87).
+    const basis = FUTURES_INSTRUMENT_QUOTE[slug];
+    const responseCurrency = response.currency ?? contracts[0]?.currency;
 
     let text = `# ${contractName} Futures Curve (${contract})\n\n`;
+    text += `_${describeQuoteBasis(responseCurrency, basis)}. No currency conversion is applied._\n\n`;
     text += `| Month | Settlement |\n|-------|------------|\n`;
 
     for (const c of contracts) {
-      text += `| ${c.contract_month} | $${c.settlement_price.toFixed(2)} |\n`;
+      text += `| ${c.contract_month} | ${formatFuturesPrice(c.settlement_price, c.currency ?? responseCurrency, basis)} |\n`;
     }
 
     const front = contracts[0].settlement_price;
@@ -2612,7 +2915,7 @@ server.registerTool(
     // Prefer the API's own curve classification when present.
     const structure =
       response.curve_type ?? (front > back ? "backwardation" : "contango");
-    text += `\n**Market Structure**: ${structure} (front $${front.toFixed(2)} vs back $${back.toFixed(2)})`;
+    text += `\n**Market Structure**: ${structure} (front ${formatFuturesPrice(front, responseCurrency, basis)} vs back ${formatFuturesPrice(back, responseCurrency, basis)})`;
     text += `\n\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
 
     return textResult(text);
@@ -3059,39 +3362,79 @@ server.registerTool(
     if (!getApiKey()) return keylessTeaserResult("opa_get_storage");
 
     const sections: string[] = ["# Oil Storage Levels\n"];
+    // Every facility the caller asked for that did NOT come back, with the
+    // reason the API gave. Previously these were dropped: `all` returned a
+    // successful-looking answer with the SPR half silently missing, and `spr`
+    // returned an entitlement hint for what is actually an empty dataset (#93).
+    const unavailable: string[] = [];
     let hasData = false;
 
-    if (facility === "cushing" || facility === "all") {
-      const response = await makeApiRequest<
-        ApiResponse<Record<string, unknown>>
-      >("/v1/storage/cushing");
-      if (response?.status === "success") {
-        hasData = true;
-        sections.push("## Cushing, Oklahoma (WTI Hub)\n");
-        sections.push(
-          "```json\n" + JSON.stringify(response.data, null, 2) + "\n```\n",
-        );
-      }
-    }
+    const facilities: Array<{ key: string; endpoint: string; label: string }> =
+      [
+        {
+          key: "cushing",
+          endpoint: "/v1/storage/cushing",
+          label: "Cushing, Oklahoma (WTI Hub)",
+        },
+        {
+          key: "spr",
+          endpoint: "/v1/storage/spr",
+          label: "Strategic Petroleum Reserve (SPR)",
+        },
+      ];
 
-    if (facility === "spr" || facility === "all") {
-      const response =
-        await makeApiRequest<ApiResponse<Record<string, unknown>>>(
-          "/v1/storage/spr",
+    for (const f of facilities) {
+      if (facility !== f.key && facility !== "all") continue;
+
+      let outcome: ApiRequestOutcome<ApiResponse<Record<string, unknown>>>;
+      try {
+        outcome = await requestApi<ApiResponse<Record<string, unknown>>>(
+          f.endpoint,
         );
-      if (response?.status === "success") {
-        hasData = true;
-        sections.push("## Strategic Petroleum Reserve (SPR)\n");
-        sections.push(
-          "```json\n" + JSON.stringify(response.data, null, 2) + "\n```\n",
-        );
+      } catch (error) {
+        // A deadline on ONE facility must not discard another facility that
+        // already succeeded — that would silently drop half the answer, which
+        // is the exact failure #93 exists to prevent. Host cancellation is
+        // different: the caller wants no answer, so it propagates.
+        if (
+          error instanceof ApiTimeoutError &&
+          error.reason === "timeout" &&
+          facility === "all"
+        ) {
+          unavailable.push(`${f.label} storage data — ${error.message}`);
+          continue;
+        }
+        throw error;
       }
+
+      if (outcome.data?.status === "success") {
+        hasData = true;
+        sections.push(`## ${f.label}\n`);
+        sections.push(
+          "```json\n" + JSON.stringify(outcome.data.data, null, 2) + "\n```\n",
+        );
+        continue;
+      }
+
+      unavailable.push(
+        outcome.data
+          ? `${f.label} — the API answered but returned no usable storage record.`
+          : describeRequestFailure(`${f.label} storage data`, outcome),
+      );
     }
 
     if (!hasData) {
       return errorResult(
-        "Storage data not available. Check opa_get_plans for the account's current energy-intelligence entitlement, then retry.",
+        unavailable.length > 0
+          ? unavailable.join("\n")
+          : `No storage facility was requested for '${facility}'.`,
       );
+    }
+
+    if (unavailable.length > 0) {
+      sections.push("## Not returned\n");
+      for (const note of unavailable) sections.push(`- ${note}`);
+      sections.push("");
     }
 
     sections.push("_Data from [OilPriceAPI](https://oilpriceapi.com)_");
