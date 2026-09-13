@@ -1177,6 +1177,60 @@ function resolveOrError(
   return { error: errorResult(msg) };
 }
 
+// ---------------------------------------------------------------------------
+// Absent-field guards (#105)
+//
+// An MCP tool result is read by an agent that will relay it to a human as
+// fact. A field the API did not send must therefore never reach the transcript
+// as `undefined`, as `Invalid Date`, or silently replaced by a plausible
+// substitute. An answer that states its own gap is recoverable; a confident
+// wrong one is not.
+// ---------------------------------------------------------------------------
+
+/** The single marker every renderer uses for a field the API did not send. */
+export const NOT_REPORTED = "not reported";
+
+/**
+ * Render a scalar that came straight off an API payload. Returns NOT_REPORTED
+ * for null/undefined/empty rather than letting template interpolation print
+ * "undefined" or "null" where a value belongs.
+ */
+export function reportedValue(
+  value: unknown,
+  format?: (v: string | number) => string,
+): string {
+  if (value === null || value === undefined) return NOT_REPORTED;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return NOT_REPORTED;
+    return format ? format(value) : String(value);
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return NOT_REPORTED;
+    return format ? format(trimmed) : trimmed;
+  }
+  return NOT_REPORTED;
+}
+
+/**
+ * Format an API timestamp as a UTC display string, or state the gap. Never
+ * returns "Invalid Date": source-timestamping is the product's core claim, so
+ * a timestamp we cannot parse is reported as unparseable WITH the raw value,
+ * which is what makes the problem diagnosable upstream.
+ */
+export function formatUtcTimestamp(raw: unknown): string {
+  if (raw === null || raw === undefined || raw === "") return NOT_REPORTED;
+  const date = new Date(raw as string | number);
+  if (Number.isNaN(date.getTime())) {
+    return `unparseable timestamp from the API (\`${String(raw)}\`)`;
+  }
+  return `${date.toLocaleString("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC",
+  })} UTC`;
+}
+
 /**
  * Format a price for display
  */
@@ -1201,12 +1255,7 @@ export function formatPrice(data: PriceData): string {
 
   const timestamp = data.updated_at || data.created_at;
   if (timestamp) {
-    const date = new Date(timestamp);
-    result += `\n- Updated: ${date.toLocaleString("en-US", {
-      dateStyle: "medium",
-      timeStyle: "short",
-      timeZone: "UTC",
-    })} UTC`;
+    result += `\n- Updated: ${formatUtcTimestamp(timestamp)}`;
   }
 
   return result;
@@ -3036,7 +3085,7 @@ server.registerTool(
     const basis = FUTURES_INSTRUMENT_QUOTE[slug];
 
     let text = `# ${contractName} Futures (${contract})\n\n`;
-    text += `**Front Month (${front.contract_month})**: ${formatFuturesPrice(front.last_price, front.currency, basis)}`;
+    text += `**Front Month (${reportedValue(front.contract_month)})**: ${formatFuturesPrice(front.last_price, front.currency, basis)}`;
     if (front.change_percent !== undefined && front.change_percent !== null) {
       text += ` (${front.change_percent >= 0 ? "+" : ""}${front.change_percent.toFixed(2)}%)`;
     }
@@ -3265,7 +3314,9 @@ server.registerTool(
     text += `|------|-----------|-------|----------|------|\n`;
 
     for (const p of prices) {
-      text += `| ${p.port} | ${p.fuel_type} | ${p.price.toFixed(2)} | ${p.currency} | ${p.unit} |\n`;
+      // A bare 512.50 with its currency and unit missing reads as dollars to
+      // an agent. The number is only quotable alongside both (#105).
+      text += `| ${reportedValue(p.port)} | ${reportedValue(p.fuel_type)} | ${p.price.toFixed(2)} | ${reportedValue(p.currency)} | ${reportedValue(p.unit)} |\n`;
     }
 
     text += `\n_${prices.length} prices | Data from [OilPriceAPI](https://oilpriceapi.com)_`;
@@ -3299,14 +3350,14 @@ server.registerTool(
 
     const data = response.data;
     let text = `# US Rig Count (Baker Hughes)\n\n`;
-    text += `- **Oil Rigs**: ${data.oil}\n`;
-    text += `- **Gas Rigs**: ${data.gas}\n`;
-    text += `- **Total**: ${data.total}\n`;
+    text += `- **Oil Rigs**: ${reportedValue(data.oil)}\n`;
+    text += `- **Gas Rigs**: ${reportedValue(data.gas)}\n`;
+    text += `- **Total**: ${reportedValue(data.total)}\n`;
     if (data.change_from_prior_week !== undefined) {
       const sign = data.change_from_prior_week >= 0 ? "+" : "";
       text += `- **Change from Prior Week**: ${sign}${data.change_from_prior_week}\n`;
     }
-    text += `- **Date**: ${data.date}\n`;
+    text += `- **Date**: ${reportedValue(data.date)}\n`;
     text += `\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
 
     return textResult(text);
@@ -3445,7 +3496,7 @@ server.registerTool(
     }
     const timestamp = data.updated_at || data.created_at;
     if (timestamp) {
-      text += `- **Updated**: ${new Date(timestamp).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" })} UTC\n`;
+      text += `- **Updated**: ${formatUtcTimestamp(timestamp)}\n`;
     }
     text += `- **Source**: AAA\n`;
     text += `\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
@@ -4406,14 +4457,19 @@ export function formatWellProduction(
     if (d.top_states?.length) {
       text += `## Top Producing States\n`;
       for (const s of d.top_states) {
-        text += `- **${s.state}** (${s.period}): ${formatProductionMonthLine(s)}\n`;
+        text += `- **${reportedValue(s.state)}** (${reportedValue(s.period)}): ${formatProductionMonthLine(s)}\n`;
       }
     }
   } else if (view === "states") {
     const d = data as WellProductionStatesData;
-    text += `Period ${d.period ?? "latest"} — ${d.count ?? d.states?.length ?? 0} states reporting.\n\n`;
-    for (const s of d.states ?? []) {
-      text += `- **${s.state}**: ${formatProductionMonthLine(s)}\n`;
+    const rows = d.states ?? [];
+    text += `Period ${d.period ?? "latest"} — ${d.count ?? rows.length} states reporting.\n\n`;
+    for (const s of rows) {
+      text += `- **${reportedValue(s.state)}**: ${formatProductionMonthLine(s)}\n`;
+    }
+    if (rows.length === 0) {
+      // A count with no rows is a gap, not a listing (#105).
+      text += `_The API reported a state count but returned no state rows; the per-state figures are unavailable for this period._\n`;
     }
   } else if (view === "state" || view === "well") {
     const d = data as WellProductionSeriesData;
@@ -4428,7 +4484,7 @@ export function formatWellProduction(
     }
     text += `## Monthly Production (${d.count ?? d.data?.length ?? 0} months)\n`;
     for (const m of d.data ?? []) {
-      text += `- **${m.period}**: ${formatProductionMonthLine(m)}\n`;
+      text += `- **${reportedValue(m.period)}**: ${formatProductionMonthLine(m)}\n`;
     }
   } else if (view === "top_producers") {
     const d = data as WellProductionTopProducersData;
@@ -4979,19 +5035,30 @@ server.registerTool(
       ? (result.body as AlertRecord[])
       : [];
 
-    let triggered = alerts.filter(
+    const everTriggered = alerts.filter(
       (a) => typeof a.trigger_count === "number" && a.trigger_count > 0,
     );
 
+    // An alert with trigger_count > 0 but no parseable last_triggered_at HAS
+    // fired; we simply cannot place it in the requested window. Dropping it
+    // silently produced the success text "No price alerts have triggered
+    // since X" for an alert that had triggered four times (#105).
+    const undated: AlertRecord[] = [];
+    let triggered = everTriggered;
+
     if (sinceTime !== null) {
-      triggered = triggered.filter((a) => {
-        if (!a.last_triggered_at) return false;
-        const t = Date.parse(a.last_triggered_at);
-        return !Number.isNaN(t) && t >= sinceTime!;
-      });
+      triggered = [];
+      for (const a of everTriggered) {
+        const t = a.last_triggered_at ? Date.parse(a.last_triggered_at) : NaN;
+        if (Number.isNaN(t)) {
+          undated.push(a);
+        } else if (t >= sinceTime) {
+          triggered.push(a);
+        }
+      }
     }
 
-    if (triggered.length === 0) {
+    if (triggered.length === 0 && undated.length === 0) {
       return textResult(
         since
           ? `No price alerts have triggered since ${since}.`
@@ -5005,16 +5072,35 @@ server.registerTool(
       return tb - ta;
     });
 
-    const sections = [`# Recent Alert Triggers (${triggered.length})\n`];
-    for (const a of triggered) {
+    const describe = (a: AlertRecord) => {
       const label =
         a.summary ||
         a.condition ||
-        `${a.commodity_code} ${a.condition_operator} ${a.condition_value}`;
-      sections.push(
-        `- **${a.name || label}** (id: \`${a.id}\`) — ${a.trigger_count} trigger(s), last at ${a.last_triggered_at}`,
-      );
+        `${reportedValue(a.commodity_code)} ${reportedValue(a.condition_operator)} ${reportedValue(a.condition_value)}`;
+      const last = a.last_triggered_at
+        ? formatUtcTimestamp(a.last_triggered_at)
+        : NOT_REPORTED;
+      return `- **${a.name || label}** (id: \`${reportedValue(a.id)}\`) — ${reportedValue(a.trigger_count)} trigger(s), last at ${last}`;
+    };
+
+    const sections = [
+      `# Recent Alert Triggers (${triggered.length + undated.length})\n`,
+    ];
+    if (since && undated.length > 0) {
+      sections.push(`## Triggered since ${since} (${triggered.length})\n`);
     }
+    for (const a of triggered) sections.push(describe(a));
+
+    if (undated.length > 0) {
+      sections.push(
+        `\n## Triggered, but not placeable in the requested window (${undated.length})\n`,
+      );
+      sections.push(
+        `_These alerts report a trigger count but no usable \`last_triggered_at\`, so it cannot be determined whether they fired since ${since}. They are NOT evidence that nothing triggered._\n`,
+      );
+      for (const a of undated) sections.push(describe(a));
+    }
+
     sections.push(`\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
     return textResult(sections.join("\n"));
   },
@@ -5503,9 +5589,20 @@ server.registerTool(
 
     const data = envelope?.data;
     const events = data?.events ?? [];
-    const cursor = data?.cursor ?? since ?? 0;
+    // The cursor drives a loop the agent will actually run. Falling back to
+    // the caller's own `since` (or 0) made the agent re-read the same events
+    // forever and report each replay as new (#105). A cursor the API did not
+    // send is reported as missing, never substituted.
+    const cursor = typeof data?.cursor === "number" ? data.cursor : null;
 
     if (events.length === 0) {
+      if (cursor === null) {
+        return textResult(
+          `No new subscription events since cursor ${since ?? 0}. ` +
+            "The API did not return a next cursor, so there is no newer position to advance to — " +
+            `poll again later with the same \`since\` value (${since ?? 0}).`,
+        );
+      }
       return textResult(
         `No new subscription events since cursor ${since ?? 0}. Cursor is ${cursor}. ` +
           "Poll again later for new snapshots.",
@@ -5515,7 +5612,7 @@ server.registerTool(
     const sections = [`# Subscription Events (${events.length})\n`];
     for (const e of events) {
       sections.push(
-        `## Event seq ${e.seq}${e.observed_at ? ` — ${e.observed_at}` : ""} (watch \`${e.watch_id}\`)`,
+        `## Event seq ${reportedValue(e.seq)}${e.observed_at ? ` — ${e.observed_at}` : ""} (watch \`${reportedValue(e.watch_id)}\`)`,
       );
       sections.push("```json");
       sections.push(
@@ -5523,12 +5620,21 @@ server.registerTool(
       );
       sections.push("```");
     }
-    sections.push(
-      `\n**Next cursor**: \`${cursor}\`${data?.has_more ? " (more events available — poll again)" : ""}`,
-    );
-    sections.push(
-      "\n_Pass the next cursor as `since` on your next poll to get only newer events._",
-    );
+    if (cursor === null) {
+      sections.push(
+        "\n**Next cursor**: not returned by the API for this batch.",
+      );
+      sections.push(
+        `\n_Do NOT re-poll with \`since: ${since ?? 0}\` — that would return these same ${events.length} event(s) again and they would read as new. Retry this call; if the cursor is still absent, report the missing cursor rather than advancing the loop._`,
+      );
+    } else {
+      sections.push(
+        `\n**Next cursor**: \`${cursor}\`${data?.has_more ? " (more events available — poll again)" : ""}`,
+      );
+      sections.push(
+        "\n_Pass the next cursor as `since` on your next poll to get only newer events._",
+      );
+    }
     sections.push(`\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
     return textResult(sections.join("\n"));
   },
