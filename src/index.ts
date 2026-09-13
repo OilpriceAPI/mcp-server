@@ -584,17 +584,88 @@ export function describeQuoteBasis(
   return unit ? `Quoted in ${code} per ${unit}` : `Quoted in ${code}`;
 }
 
-interface MarineFuelPrice {
-  port: string;
-  fuel_type: string;
-  price: number;
-  currency: string;
-  unit: string;
+// Shape of GET /v1/marine-fuels/latest as served by the current API (verified
+// live 2026-09-13). `prices[]` is a list of PORTS, each nesting its fuels. The
+// pre-#120 formatter read a flat `{port, fuel_type, price, currency, unit}`
+// record the endpoint has never sent, and threw on `price.toFixed`. Every field
+// is optional here because the renderer must state an absence, not assume it.
+interface MarineFuelQuote {
+  code?: string;
+  fuel_type?: string;
+  fuel_name?: string;
+  price?: number;
+  formatted?: string;
+  currency?: string;
+  unit?: string;
+  source?: string;
+  timestamp?: string;
+  quality_grade?: string;
+  as_of?: string;
+  collected_at?: string;
+  synthetic?: boolean;
+  stale?: boolean;
+  age_days?: number;
+}
+
+interface MarineFuelPort {
+  port_code?: string;
+  port_name?: string;
+  country?: string;
   region?: string;
+  fuels?: MarineFuelQuote[];
 }
 
 interface MarineFuelsData {
-  prices: MarineFuelPrice[];
+  prices: MarineFuelPort[];
+  filters?: { port?: string | null; fuel_type?: string | null };
+}
+
+/** Uppercase alphanumerics only: "mgo_05s", "MGO 0.5S" and "MGO05S" compare equal. */
+function marineKey(value: unknown): string {
+  return typeof value === "string"
+    ? value.toUpperCase().replace(/[^A-Z0-9]/g, "")
+    : "";
+}
+
+/**
+ * Trade names for a fuel_type the API reports under another label. IFO380 is
+ * the 380 cSt residual fuel the API reports as HFO_380 (ISO 8217 RMG380 in the
+ * live `quality_grade`), and the name this tool advertised before #120.
+ */
+const MARINE_FUEL_ALIASES: Record<string, string> = { IFO380: "HFO380" };
+
+function marinePortMatches(port: MarineFuelPort, wanted: string): boolean {
+  const key = marineKey(wanted);
+  return (
+    key !== "" &&
+    (marineKey(port.port_code) === key || marineKey(port.port_name) === key)
+  );
+}
+
+function marineFuelMatches(fuel: MarineFuelQuote, wanted: string): boolean {
+  const raw = marineKey(wanted);
+  if (!raw) return false;
+  const key = MARINE_FUEL_ALIASES[raw] ?? raw;
+  const type = marineKey(fuel.fuel_type);
+  // Exact type or code, or a family prefix: "MGO" is the API's MGO_05S.
+  return (
+    type === key || marineKey(fuel.code) === key || (type !== "" && type.startsWith(key))
+  );
+}
+
+function marinePortLabel(port: MarineFuelPort): string {
+  const name = reportedValue(port.port_name);
+  const code = reportedValue(port.port_code);
+  if (name === NOT_REPORTED && code === NOT_REPORTED) return NOT_REPORTED;
+  if (name === NOT_REPORTED) return code;
+  if (code === NOT_REPORTED) return name;
+  return `${name} (${code})`;
+}
+
+function marineStaleCell(stale: unknown): string {
+  if (stale === true) return "**yes**";
+  if (stale === false) return "no";
+  return NOT_REPORTED;
 }
 
 // Shape of GET /v1/rig-counts/latest as served by the current API (verified
@@ -3480,60 +3551,116 @@ server.registerTool(
   {
     title: "Get Marine Fuel Prices",
     description:
-      "Get latest marine fuel (bunker) prices returned for the account. Use when the user asks about bunker fuel, marine fuel, VLSFO, MGO, IFO380, or shipping fuel costs. Can filter by port (e.g., SINGAPORE, ROTTERDAM, HOUSTON) and/or fuel type (VLSFO, MGO, IFO380). Returns available port prices. " +
+      "Get latest marine fuel (bunker) prices returned for the account, one row per port and fuel, each with the currency, unit, as-of time, age in days and stale flag the API reports. Use when the user asks about bunker fuel, marine fuel, VLSFO, MGO, IFO380, or shipping fuel costs. Filter by port name or UN/LOCODE (e.g., Singapore or SGSIN, Rotterdam or NLRTM) and/or by the fuel type the API reports: VLSFO, MGO_05S (MGO), HFO_380 (IFO380). " +
       ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       port: z
         .string()
         .optional()
         .describe(
-          "Filter by port name (e.g., 'SINGAPORE', 'ROTTERDAM', 'HOUSTON')",
+          "Filter by port name or UN/LOCODE, case-insensitive (e.g., 'Singapore' or 'SGSIN', 'Houston' or 'USHOU')",
         ),
       fuel_type: z
         .string()
         .optional()
-        .describe("Filter by fuel type: VLSFO, MGO, or IFO380"),
+        .describe(
+          "Filter by fuel type as the API reports it: VLSFO, MGO_05S (MGO also matches), HFO_380 (IFO380 also matches)",
+        ),
     },
     annotations: READ_TOOL_ANNOTATIONS,
   },
   async ({ port, fuel_type }) => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_marine_fuels");
 
-    let endpoint = "/v1/marine-fuels/latest";
-    const params: string[] = [];
-    if (port) params.push(`port=${encodeURIComponent(port)}`);
-    if (fuel_type) params.push(`fuel_type=${encodeURIComponent(fuel_type)}`);
-    if (params.length) endpoint += `?${params.join("&")}`;
-
-    const outcome = await requestApi<ApiResponse<MarineFuelsData>>(endpoint);
+    // Always request the full list and filter here (#120). Live on 2026-09-13
+    // the API's `port` filter matched UN/LOCODEs only and its `fuel_type`
+    // filter matched no fuel_type at all, each answering an empty 200
+    // (OilpriceAPI/oilpriceapi-api#7774). Forwarding either turned every
+    // filtered call into a confident "no data".
+    const outcome = await requestApi<ApiResponse<MarineFuelsData>>(
+      "/v1/marine-fuels/latest",
+    );
     const response = outcome.data;
+    const ports =
+      response &&
+      response.status === "success" &&
+      Array.isArray(response.data?.prices)
+        ? response.data.prices
+        : [];
 
-    if (
-      !response ||
-      response.status !== "success" ||
-      !response.data.prices?.length
-    ) {
-      return errorResult(
+    const unavailable = () =>
+      errorResult(
         describeUnavailable(
           "Marine fuel price data",
           outcome,
           "No marine fuel price data available: the API answered but returned no bunker prices for this request.",
         ),
       );
+    if (ports.length === 0) return unavailable();
+
+    const rows: Array<{ port: MarineFuelPort; fuel: MarineFuelQuote }> = [];
+    const portsWithoutFuels: MarineFuelPort[] = [];
+    for (const candidate of ports) {
+      if (port && !marinePortMatches(candidate, port)) continue;
+      const fuels = Array.isArray(candidate.fuels) ? candidate.fuels : [];
+      if (fuels.length === 0) portsWithoutFuels.push(candidate);
+      for (const fuel of fuels) {
+        if (fuel_type && !marineFuelMatches(fuel, fuel_type)) continue;
+        rows.push({ port: candidate, fuel });
+      }
     }
 
-    const prices = response.data.prices;
+    const filters = [
+      port ? `port "${port}"` : "",
+      fuel_type ? `fuel type "${fuel_type}"` : "",
+    ].filter(Boolean);
+
+    if (rows.length === 0) {
+      if (filters.length === 0) return unavailable();
+      // Name what the API DID return, so the caller can retry with a value
+      // that exists instead of concluding the dataset is empty.
+      const fuelTypes = [
+        ...new Set(
+          ports.flatMap((p) =>
+            (Array.isArray(p.fuels) ? p.fuels : [])
+              .map((f) => reportedValue(f.fuel_type))
+              .filter((t) => t !== NOT_REPORTED),
+          ),
+        ),
+      ];
+      return errorResult(
+        `No marine fuel price matched ${filters.join(" and ")}. The API returned ${ports.length} port(s): ${ports.map(marinePortLabel).join(", ")}; fuel types: ${fuelTypes.join(", ") || NOT_REPORTED}. Match port by name or UN/LOCODE and fuel_type by one of those types.`,
+      );
+    }
+
     let text = "# Marine Fuel Prices\n\n";
-    text += `| Port | Fuel Type | Price | Currency | Unit |\n`;
-    text += `|------|-----------|-------|----------|------|\n`;
-
-    for (const p of prices) {
-      // A bare 512.50 with its currency and unit missing reads as dollars to
-      // an agent. The number is only quotable alongside both (#105).
-      text += `| ${reportedValue(p.port)} | ${reportedValue(p.fuel_type)} | ${p.price.toFixed(2)} | ${reportedValue(p.currency)} | ${reportedValue(p.unit)} |\n`;
+    if (filters.length) {
+      text += `_Filtered by ${filters.join(" and ")} across the ${ports.length} ports the API returned._\n\n`;
+    }
+    const stale = rows.filter(({ fuel }) => fuel.stale === true).length;
+    if (stale > 0) {
+      text += `_${stale} of ${rows.length} prices are flagged stale by the API. Check As of and Age before quoting them as current._\n\n`;
+    }
+    const synthetic = rows.filter(({ fuel }) => fuel.synthetic === true).length;
+    if (synthetic > 0) {
+      text += `_${synthetic} of ${rows.length} prices carry \`synthetic: true\` from the API._\n\n`;
     }
 
-    text += `\n_${prices.length} prices | Data from [OilPriceAPI](https://oilpriceapi.com)_`;
+    // A bare 720 with its currency and unit missing reads as dollars to an
+    // agent. Every cell is the API's own value or says it was not reported
+    // (#105): no `$`, no assumed unit, no substituted timestamp.
+    text += `| Port | Fuel Type | Price | Currency | Unit | As of | Age (days) | Stale |\n`;
+    text += `|------|-----------|-------|----------|------|-------|------------|-------|\n`;
+    for (const { port: p, fuel } of rows) {
+      text += `| ${marinePortLabel(p)} | ${reportedValue(fuel.fuel_type)} | ${reportedValue(fuel.price)} | ${reportedValue(fuel.currency)} | ${reportedValue(fuel.unit)} | ${reportedValue(fuel.as_of)} | ${reportedValue(fuel.age_days)} | ${marineStaleCell(fuel.stale)} |\n`;
+    }
+
+    if (portsWithoutFuels.length) {
+      text += `\n_${portsWithoutFuels.map(marinePortLabel).join(", ")}: returned by the API with no fuel prices._\n`;
+    }
+
+    const portCount = new Set(rows.map(({ port: p }) => p)).size;
+    text += `\n_${rows.length} price${rows.length === 1 ? "" : "s"} across ${portCount} port${portCount === 1 ? "" : "s"} | Data from [OilPriceAPI](https://oilpriceapi.com)_`;
 
     return textResult(text);
   },
