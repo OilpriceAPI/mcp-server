@@ -1,0 +1,33 @@
+# New, isolated App Platform app. APP_URL binds its stable HTTPS ingress.
+# Do not apply this spec to either existing API/frontend app.
+name: oilpriceapi-openai-mcp
+region: nyc
+services:
+  - name: energy-mcp
+    github:
+      repo: OilpriceAPI/mcp-server
+      branch: main
+      deploy_on_push: false
+    dockerfile_path: Dockerfile.remote
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-1gb
+    envs:
+      - key: OILPRICEAPI_MCP_PUBLIC_URL
+        scope: RUN_TIME
+        value: ${APP_URL}
+      - key: NODE_ENV
+        scope: RUN_TIME
+        value: production
+    health_check:
+      http_path: /health
+      initial_delay_seconds: 10
+      period_seconds: 15
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 3
+    routes:
+      - path: /
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DOMAIN_FAILED

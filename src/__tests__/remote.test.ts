@@ -1,0 +1,335 @@
+import { createHash } from "node:crypto";
+import { PluginOAuth } from "../pluginOAuth.js";
+import { createServer as createProbeServer, request } from "node:http";
+import { describe, it, expect } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { createRemoteServer, VelocityLimit } from "../remote.js";
+async function service(
+  test: (base: string) => Promise<void>,
+  rateLimit?: VelocityLimit,
+  oauthEnabled = false,
+  writeEvent?: (event: unknown) => void,
+) {
+  const probe = createProbeServer();
+  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const port = (probe.address() as { port: number }).port;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  const oauth = oauthEnabled
+    ? new PluginOAuth(
+        `https://127.0.0.1:${port}`,
+        async () =>
+          new Response(
+            JSON.stringify({
+              status: "success",
+              data: { price: 90, code: "WTI_USD" },
+            }),
+          ),
+      )
+    : undefined;
+  const server = createRemoteServer({
+    oauth,
+    writeEvent,
+    publicUrl: `https://127.0.0.1:${port}`,
+    rateLimit,
+    challenge: "verbatim-value\n",
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({
+          status: "success",
+          data: {
+            prices: [
+              {
+                code: "WTI_USD",
+                name: "WTI Futures",
+                price: 90,
+                currency: "USD",
+                updated_at: "2026-10-01",
+              },
+            ],
+          },
+        }),
+      ),
+  });
+  await new Promise<void>((resolve) =>
+    server.listen(port, "127.0.0.1", resolve),
+  );
+  const address = server.address() as { port: number };
+  try {
+    await test(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
+const headers = { Host: "plugin.example" };
+describe("Streamable HTTP service", () => {
+  it("attributes only deliberate browser handoffs and prevents open redirects", async () => {
+    const events: unknown[] = [];
+    await service(
+      async (base) => {
+        const path = base + "/handoff/futures";
+        const plain = await fetch(path, { redirect: "manual" });
+        expect(plain.status).toBe(303);
+        expect(plain.headers.get("location")).toBe(
+          "https://www.oilpriceapi.com/auth/signup?utm_source=openai-plugin&utm_medium=plugin&utm_campaign=energy-markets&utm_content=futures",
+        );
+        expect(events).toHaveLength(0);
+        const navigate = (excluded = false) =>
+          new Promise<number>((resolve) =>
+            request(
+              path,
+              {
+                headers: {
+                  "Sec-Fetch-Mode": "navigate",
+                  "Sec-Fetch-Dest": "document",
+                  "Sec-Fetch-User": "?1",
+                  ...(excluded ? { "X-OPA-Telemetry-Exclude": "1" } : {}),
+                },
+              },
+              (res) => {
+                res.resume();
+                resolve(res.statusCode!);
+              },
+            ).end(),
+          );
+        expect(await navigate()).toBe(303);
+        expect(events).toEqual([
+          {
+            event: "plugin_handoff_visit",
+            dataset_category: "futures",
+            plugin_version: "0.1.0",
+            population: "browser_navigation_proxy",
+          },
+        ]);
+        await navigate(true);
+        expect(events).toHaveLength(1);
+        expect(
+          (
+            await fetch(path + "?redirect=https://evil.example", {
+              redirect: "manual",
+            })
+          ).status,
+        ).toBe(404);
+        expect(
+          (await fetch(base + "/handoff/private", { redirect: "manual" }))
+            .status,
+        ).toBe(404);
+      },
+      undefined,
+      false,
+      (event) => events.push(event),
+    );
+  });
+
+  it("initializes, lists exactly seven read tools and calls demo end to end", async () =>
+    service(async (base) => {
+      const client = new Client({ name: "test", version: "1" });
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL(base + "/mcp"), {
+          requestInit: { headers },
+        }),
+      );
+      try {
+        const tools = await client.listTools();
+        expect(tools.tools.map((t) => t.name).sort()).toEqual([
+          "energy_compare",
+          "energy_drilling",
+          "energy_futures_curve",
+          "energy_get_price",
+          "energy_history",
+          "energy_marine_fuels",
+          "energy_market_overview",
+        ]);
+        expect(tools.tools.every((t) => t.annotations?.readOnlyHint)).toBe(
+          true,
+        );
+        const result = await client.callTool({
+          name: "energy_get_price",
+          arguments: { benchmark: "WTI_USD" },
+        });
+        expect(result.structuredContent).toMatchObject({
+          availability: "available",
+          access: "demo",
+        });
+        const premium = await client.callTool({
+          name: "energy_drilling",
+          arguments: { geography: "Permian" },
+        });
+        expect(premium.isError).toBe(true);
+        expect(premium.structuredContent).toMatchObject({
+          outcome: "entitlement",
+        });
+      } finally {
+        await client.close();
+      }
+    }));
+  it("serves health and the supplied challenge verbatim", async () =>
+    service(async (base) => {
+      expect((await fetch(base + "/health", { headers })).status).toBe(200);
+      expect(
+        await (
+          await fetch(base + "/.well-known/openai-apps-challenge", { headers })
+        ).text(),
+      ).toBe("verbatim-value\n");
+    }));
+  it("rejects host/origin attacks and unknown routes", async () =>
+    service(async (base) => {
+      const badHost = await new Promise<number>((resolve) =>
+        request(base + "/mcp", { headers: { Host: "evil.example" } }, (res) => {
+          res.resume();
+          resolve(res.statusCode!);
+        }).end(),
+      );
+      expect(badHost).toBe(421);
+      expect(
+        (
+          await fetch(base + "/mcp", {
+            headers: { ...headers, Origin: "https://evil.example" },
+          })
+        ).status,
+      ).toBe(403);
+      expect((await fetch(base + "/unknown", { headers })).status).toBe(404);
+      expect((await fetch(base + "/mcp", { headers })).status).toBe(405);
+    }));
+  it("rejects malformed, oversized, batch and non-JSON requests", async () =>
+    service(async (base) => {
+      const post = (body: string, more = {}) =>
+        fetch(base + "/mcp", {
+          method: "POST",
+          headers: { ...headers, "Content-Type": "application/json", ...more },
+          body,
+        });
+      expect((await post("{")).status).toBe(400);
+      expect((await post("[]")).status).toBe(400);
+      expect((await post("x".repeat(20_000))).status).toBe(413);
+      expect((await post("{}", { "Content-Type": "text/plain" })).status).toBe(
+        415,
+      );
+      expect(
+        (await post("{}", { Authorization: "Bearer invalid" })).status,
+      ).toBe(401);
+    }));
+  it("enforces 429 regardless of spoofed forwarding headers", async () =>
+    service(async (base) => {
+      const post = () =>
+        fetch(base + "/mcp", {
+          method: "POST",
+          headers: {
+            ...headers,
+            "Content-Type": "application/json",
+            "X-Forwarded-For": String(Math.random()),
+          },
+          body: "{}",
+        });
+      await post();
+      const denied = await post();
+      expect(denied.status).toBe(429);
+      expect(denied.headers.get("Retry-After")).toBe("60");
+    }, new VelocityLimit(1)));
+  it("runs metadata, registration, linking, PKCE token exchange and revocation over HTTP", async () =>
+    service(
+      async (base) => {
+        const origin = base.replace("http:", "https:");
+        const resource = origin + "/mcp";
+        const meta = await (
+          await fetch(base + "/.well-known/oauth-authorization-server")
+        ).json();
+        expect(meta.issuer).toBe(origin + "/");
+        const protectedMeta = await (
+          await fetch(base + "/.well-known/oauth-protected-resource/mcp")
+        ).json();
+        expect(protectedMeta.resource).toBe(resource);
+        const registration = await fetch(base + "/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            redirect_uris: [
+              "https://chatgpt.com/connector_platform_oauth_redirect",
+            ],
+            token_endpoint_auth_method: "none",
+          }),
+        });
+        expect(registration.status).toBe(201);
+        const client = await registration.json();
+        const verifier = "x".repeat(43);
+        const challenge = createHash("sha256")
+          .update(verifier)
+          .digest("base64url");
+        const params = new URLSearchParams({
+          client_id: client.client_id,
+          response_type: "code",
+          redirect_uri: client.redirect_uris[0],
+          code_challenge: challenge,
+          code_challenge_method: "S256",
+          resource,
+          scope: "energy:read",
+          state: "test-state",
+        });
+        const consent = await fetch(base + "/authorize?" + params);
+        expect(consent.status).toBe(200);
+        const cookie = consent.headers.get("set-cookie")!.split(";")[0];
+        const flow = /name="flow" value="([^"]+)"/.exec(
+          await consent.text(),
+        )![1];
+        const linked = await fetch(base + "/link", {
+          method: "POST",
+          redirect: "manual",
+          headers: {
+            Origin: origin,
+            Cookie: cookie,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({ flow, key: "user-api-key-value-1234" }),
+        });
+        expect(linked.status).toBe(302);
+        const code = new URL(linked.headers.get("location")!).searchParams.get(
+          "code",
+        )!;
+        const token = await fetch(base + "/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            grant_type: "authorization_code",
+            client_id: client.client_id,
+            code,
+            code_verifier: verifier,
+            redirect_uri: client.redirect_uris[0],
+            resource,
+          }),
+        });
+        expect(token.status).toBe(200);
+        const tokens = await token.json();
+        expect(JSON.stringify(tokens)).not.toContain("user-api-key");
+        const revoke = await fetch(base + "/revoke", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            client_id: client.client_id,
+            token: tokens.access_token,
+          }),
+        });
+        expect(revoke.status).toBe(200);
+        const invalid = await fetch(base + "/mcp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + tokens.access_token,
+          },
+          body: "{}",
+        });
+        expect(invalid.status).toBe(401);
+        expect(invalid.headers.get("www-authenticate")).toContain(
+          "oauth-protected-resource/mcp",
+        );
+      },
+      undefined,
+      true,
+    ));
+  it("bounds limiter memory and expires windows", () => {
+    const limit = new VelocityLimit(1, 10, 1);
+    expect(limit.allow("a", 0)).toBe(true);
+    expect(limit.allow("a", 1)).toBe(false);
+    expect(limit.allow("b", 1)).toBe(false);
+    expect(limit.allow("b", 11)).toBe(true);
+  });
+});
