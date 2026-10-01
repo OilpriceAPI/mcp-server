@@ -1,14 +1,15 @@
-# New, isolated App Platform app. APP_URL binds its stable HTTPS ingress.
+# Isolated App Platform app. APP_URL binds its stable HTTPS ingress.
+# Reviewed source d125d77d457dbaeb7d646035a53a0960f2ec4611, immutable DOCR image.
 # Do not apply this spec to either existing API/frontend app.
 name: oilpriceapi-openai-mcp
 region: nyc
 services:
   - name: energy-mcp
-    github:
-      repo: OilpriceAPI/mcp-server
-      branch: main
-      deploy_on_push: false
-    dockerfile_path: Dockerfile.remote
+    image:
+      registry_type: DOCR
+      registry: opa-2025-registry
+      repository: oilpriceapi-openai-mcp
+      digest: sha256:3bdd8453729ba6ab7023d85447e3e660500c10ab0f1008eaa4be42a994c8ab48
     http_port: 8080
     instance_count: 1
     instance_size_slug: apps-s-1vcpu-1gb

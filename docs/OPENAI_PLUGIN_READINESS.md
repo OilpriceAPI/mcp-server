@@ -1,6 +1,18 @@
 # OilPriceAPI OpenAI plugin V1 — readiness record
 
-Status: implemented locally; not merged, deployed or submitted. Reviewed against official OpenAI documentation on 2026-10-01.
+Status: MCP merged and deployed; not submitted. Reviewed against official OpenAI documentation on 2026-10-01. Website privacy release remains tracked in PR #2246.
+
+## Production receipt — 2026-10-01
+
+- MCP PR #134 merged at `d125d77d457dbaeb7d646035a53a0960f2ec4611` after adversarial review; 516 tests and CI passed. The post-merge tree matched the reviewed branch; package and public-claims compatibility smoke passed.
+- Stable HTTPS endpoint: `https://oilpriceapi-openai-mcp-dafbh.ondigitalocean.app/mcp`.
+- Separate DigitalOcean app `4a89cb34-72a3-4daf-a893-0628699ded26`, deployment `392cc795-9791-4721-864b-0a5b305a5aca`, ACTIVE. Neither existing API nor frontend spec changed for MCP.
+- Immutable image `sha256:3bdd8453729ba6ab7023d85447e3e660500c10ab0f1008eaa4be42a994c8ab48` from the reviewed source. GitHub-source creation failed because the DO integration lacked repo access; DOCR deployment avoids expanding that access.
+- Production health, initialize, seven-tool inventory, usable anonymous Brent/WTI comparison and overview, source context, premium boundaries and bulk caps passed. Malformed JSON, batches, attacker Origin, invalid bearer-token reflection, open-redirect attempts and absent domain challenge were tested live.
+- Production operational logs confirmed internal-test exclusion and explicit entitlement outcomes; no new application errors appeared in the reviewed logs.
+- Full positive authenticated dataset evaluation and natural-language review prompts remain unverified. Task-to-payment attribution and portal/demo-recording requirements are not complete.
+- Rollback: deploy a prior verified image digest in this isolated app; for this first release, disable the new app rather than alter either existing serving app. Reconnecting is required after an OAuth-store restart.
+- Pre-merge adversarial findings and fixes: `docs/ADVERSARIAL_REVIEW_20261001.md`.
 
 ## Phase 0 findings
 
@@ -46,7 +58,7 @@ The requested subtitle is 31 characters; the current directory limit is 30. The 
 - Build/boot `Dockerfile.remote`; initialize -> tools/list -> demo calls through HTTP.
 - Run `node scripts/smoke-remote.mjs https://YOUR-HOST/mcp`. This checks contracts, not natural-language refusal behavior. Exactly five positive and three negative prompt cases are in `openai-plugin/review-tests.json`; evaluate them in ChatGPT/Codex and record the demo before submission.
 - Anonymous curve/history/marine/drilling tests prove entitlement boundaries only. Authenticated usable curve/history/marine requires an entitled test account. Permian remains unavailable until the existing service supplies an appropriate contract; do not mark that positive case as a usable basin result.
-- Local live demo smoke currently receives the shared caller IP's 429 quota boundary. A successful production demo price/comparison is still required.
+- Local shared caller IP previously hit the demo 429 quota. The independent production app's anonymous comparison and overview now passed without a shared credential.
 - Keep serving/auth changes out of production until the Friday elevated-risk window (Friday >=21:00 UTC), required review and green CI. The frontend has its own protected-main deploy workflow; do not bypass it.
 - Deploy a separate, one-instance DigitalOcean app with HTTPS, `/health` checks, deployment-failure alerts and rollback to the prior source SHA/digest. Verify customer-critical calls and inspect new errors after release.
 - Generate ZIP with `npm run package:openai -- https://YOUR-HOST/mcp`. ZIP has no credentials. It remains a draft until all production gates pass.
