@@ -35,3 +35,10 @@ outside the usual window; it does not change the standing rule.
 Record the actual merged SHA, deployed SHA, production assertions and remaining
 limitations in the release handoff. Never infer a successful production price
 response from container health or from unit fixtures.
+
+The post-merge account-boundary review reproduced a third issue: validating an
+OAuth connection through WTI tied account linking to price quota and benchmark
+availability. Validation now uses the maintained MCP's `/v1/dashboard` account
+endpoint, which bypasses data API quota. Only its success envelope is checked;
+no account payload is returned to the model or logged. Market-data tools still
+enforce entitlements and quotas through their existing REST endpoints.
