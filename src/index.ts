@@ -41,6 +41,7 @@
  * @see https://modelcontextprotocol.io
  */
 
+import { requestCredential } from "./requestCredential.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { readFileSync, realpathSync } from "node:fs";
@@ -117,6 +118,8 @@ export function clientAttributionHeaders(): Record<string, string> {
  * module load) so demo-mode behavior is testable and reflects the live env.
  */
 export function getApiKey(): string | undefined {
+  const context = requestCredential();
+  if (context) return context.key;
   return process.env.OILPRICEAPI_KEY || process.env.OIL_PRICE_API_KEY;
 }
 

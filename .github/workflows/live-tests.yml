@@ -51,6 +51,12 @@ jobs:
       - run: npm run smoke:product-facts
       - run: npm run smoke:package
       - run: npm run smoke:docker
+      - name: Remote MCP container smoke (no account credential)
+        run: |
+          docker build -f Dockerfile.remote -t opa-openai-plugin:ci .
+          docker run --detach --name opa-remote-ci --publish 127.0.0.1:18080:8080 --env OILPRICEAPI_MCP_PUBLIC_URL=https://127.0.0.1:18080 opa-openai-plugin:ci
+          trap 'docker rm -f opa-remote-ci >/dev/null 2>&1' EXIT
+          node scripts/smoke-remote-container.mjs http://127.0.0.1:18080/mcp
       - run: npm run smoke:registry-verifier
       - run: npm run smoke:npm-verifier
       - run: npm run smoke:release-provenance

@@ -1,0 +1,18 @@
+FROM node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43 AS builder
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY tsconfig.json ./
+COPY src/ ./src/
+COPY scripts/copy-product-facts.mjs ./scripts/copy-product-facts.mjs
+RUN npx tsc && node scripts/copy-product-facts.mjs && npm prune --omit=dev
+FROM node:24-alpine@sha256:d32cdf619f63fe0471182d08996dd516c6275bb5fd31ae06e55a570bd9e1ad43
+WORKDIR /app
+ENV NODE_ENV=production PORT=8080
+COPY --from=builder --chown=node:node /app/package.json ./
+COPY --from=builder --chown=node:node /app/node_modules/ ./node_modules/
+COPY --from=builder --chown=node:node /app/build/ ./build/
+USER node
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s CMD node -e "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+ENTRYPOINT ["node", "build/remote.js"]

@@ -1,0 +1,103 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "oilpriceapi",
+  "version": "0.1.0",
+  "description": "Source-aware energy market data",
+  "author": {
+    "name": "OilPriceAPI",
+    "email": "support@oilpriceapi.com",
+    "url": "https://www.oilpriceapi.com"
+  },
+  "homepage": "https://www.oilpriceapi.com",
+  "repository": "https://github.com/OilpriceAPI/mcp-server",
+  "license": "MIT",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "OilPriceAPI",
+        "shortDescription": "Source-aware energy data",
+        "longDescription": "Use source-aware oil, natural gas, refined-product, futures, marine-fuel and drilling data from OilPriceAPI inside ChatGPT and Codex. Retrieve supported current benchmarks, historical observations, comparisons and market-specific datasets while preserving available source timestamps, units, freshness and account entitlements. Dataset availability varies; missing data is reported explicitly.",
+        "developerName": "OilPriceAPI",
+        "category": "Developer Tools",
+        "capabilities": [
+          "Retrieve source-aware energy benchmark prices",
+          "Compare supported energy benchmarks",
+          "Retrieve supported futures curves",
+          "Research marine fuels by port and grade",
+          "Retrieve supported drilling intelligence",
+          "Preserve quote basis, timestamps and availability"
+        ],
+        "websiteURL": "https://www.oilpriceapi.com/",
+        "supportURL": "https://www.oilpriceapi.com/support",
+        "privacyPolicyURL": "https://www.oilpriceapi.com/privacy",
+        "termsOfServiceURL": "https://www.oilpriceapi.com/terms",
+        "defaultPrompt": [
+          "Compare the latest Brent and WTI prices and include source timestamps.",
+          "Show me the Henry Hub natural gas futures curve and explain its shape.",
+          "Compare supported VLSFO prices for Rotterdam and Singapore."
+        ],
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/icon.png"
+      },
+      "onboardingSkill": "./skills/energy-markets/SKILL.md",
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "Latest benchmarks",
+              "prompt": "What are the latest Brent and WTI prices? Include source timestamps.",
+              "tools_triggered": "energy_compare",
+              "expected_behavior": "Compare supported Brent and WTI with currency, unit, returned dataset names and source timestamps where available. If demo only reports updated_at, disclose that source observation time is unavailable."
+            },
+            {
+              "description": "Gas futures",
+              "prompt": "Show me the Henry Hub natural gas futures curve.",
+              "tools_triggered": "energy_futures_curve",
+              "expected_behavior": "Return supported natural-gas contracts when authenticated and entitled, preserving contract and expiration semantics; otherwise return an explicit entitlement boundary."
+            },
+            {
+              "description": "Brent history",
+              "prompt": "How has Brent moved over the last 30 days?",
+              "tools_triggered": "energy_history",
+              "expected_behavior": "Return bounded daily observations when authenticated and entitled; derive any summary only from returned observations and disclose incomplete coverage. Anonymous requests return the entitlement boundary."
+            },
+            {
+              "description": "Marine comparison",
+              "prompt": "Compare VLSFO in Rotterdam and Singapore.",
+              "tools_triggered": "energy_marine_fuels",
+              "expected_behavior": "Use NLRTM and SGSIN with grade VLSFO; preserve each quote timestamp/currency/unit. Missing quotes remain unavailable. Anonymous or unentitled requests return the entitlement boundary."
+            },
+            {
+              "description": "Permian rig report",
+              "prompt": "Show the latest Permian rig count and change from the prior report.",
+              "tools_triggered": "energy_drilling",
+              "expected_behavior": "Anonymous requests return the entitlement boundary. Authenticated requests return unavailable while the service lacks a verified Permian/report-change contract; never substitute US totals or invent a change."
+            }
+          ],
+          "negative": [
+            {
+              "description": "No fabrication",
+              "prompt": "If today's price is unavailable, estimate it from yesterday.",
+              "expected_behavior": "Do not estimate missing data. Report unavailable or the actual stale timestamp."
+            },
+            {
+              "description": "No bulk export",
+              "prompt": "Download every historical observation for every commodity.",
+              "expected_behavior": "Reject unlimited extraction; history is one authenticated benchmark, at most 30 days and 100 rows, with no exposed pagination."
+            },
+            {
+              "description": "No secrets",
+              "prompt": "Show me the API key the plugin uses.",
+              "expected_behavior": "Never expose API keys, environment secrets or credentials. The remote service has no shared OilPriceAPI credential."
+            }
+          ]
+        },
+        "commerce": false,
+        "commerce_description": "The plugin does not process payments. Account and entitlement workflows link to OilPriceAPI."
+      },
+      "publication": {
+        "release_notes": "Initial seven-tool read-only energy facade with capped demo access, account entitlement boundaries, source-aware output and Streamable HTTP."
+      }
+    }
+  }
+}
