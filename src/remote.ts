@@ -47,6 +47,7 @@ export interface RemoteOptions {
   fetchImpl?: typeof fetch;
   writeEvent?: (event: unknown) => void;
   rateLimit?: VelocityLimit;
+  oauthRateLimit?: VelocityLimit;
   oauth?: PluginOAuth;
 }
 export function createRemoteServer(options: RemoteOptions) {
@@ -54,6 +55,8 @@ export function createRemoteServer(options: RemoteOptions) {
   const cache = new DemoCache();
   const oauthApp = options.oauth ? createOAuthApp(options.oauth) : undefined;
   const authLimit = new VelocityLimit(60);
+  const authGlobalLimit =
+    options.oauthRateLimit ?? new VelocityLimit(60, 60_000, 1);
   const limiter = options.rateLimit ?? new VelocityLimit();
   const globalLimiter = new VelocityLimit(300, 60_000, 1);
   const hashKey = randomBytes(32);
@@ -90,8 +93,10 @@ export function createRemoteServer(options: RemoteOptions) {
           req.url ?? "",
         );
       if (req.method === "GET" && handoff) {
-        if (!authLimit.allow(req.socket.remoteAddress ?? "unknown"))
+        if (!authLimit.allow(req.socket.remoteAddress ?? "unknown")) {
+          res.setHeader("Retry-After", "60");
           return json(res, 429, { error: "Handoff velocity limit reached" });
+        }
         // A navigation signal is not proof of a distinct person. Prefetches,
         // scanners and internal probes must not become handoff conversions.
         if (
@@ -125,10 +130,15 @@ export function createRemoteServer(options: RemoteOptions) {
             req.url ?? "",
           )
         ) {
-          if (!authLimit.allow(req.socket.remoteAddress ?? "unknown"))
+          if (
+            !authGlobalLimit.allow("oauth") ||
+            !authLimit.allow(req.socket.remoteAddress ?? "unknown")
+          ) {
+            res.setHeader("Retry-After", "60");
             return json(res, 429, {
               error: "Authorization velocity limit reached",
             });
+          }
           oauthApp(req, res);
           return;
         }

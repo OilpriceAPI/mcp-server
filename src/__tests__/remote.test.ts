@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { PluginOAuth } from "../pluginOAuth.js";
 import { createServer as createProbeServer, request } from "node:http";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createRemoteServer, VelocityLimit } from "../remote.js";
@@ -10,6 +10,7 @@ async function service(
   rateLimit?: VelocityLimit,
   oauthEnabled = false,
   writeEvent?: (event: unknown) => void,
+  oauthRateLimit?: VelocityLimit,
 ) {
   const probe = createProbeServer();
   await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve));
@@ -32,6 +33,7 @@ async function service(
     writeEvent,
     publicUrl: `https://127.0.0.1:${port}`,
     rateLimit,
+    oauthRateLimit,
     challenge: "verbatim-value\n",
     fetchImpl: async () =>
       new Response(
@@ -63,6 +65,54 @@ async function service(
 }
 const headers = { Host: "plugin.example" };
 describe("Streamable HTTP service", () => {
+  it("ignores untrusted forwarding headers on OAuth without logging a proxy misconfiguration", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await service(
+        async (base) => {
+          const response = await fetch(base + "/register", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Forwarded-For": "192.0.2.1",
+            },
+            body: JSON.stringify({
+              redirect_uris: ["http://127.0.0.1:8976/callback"],
+              token_endpoint_auth_method: "none",
+            }),
+          });
+          expect(response.status).toBe(201);
+          expect(errors).not.toHaveBeenCalled();
+        },
+        undefined,
+        true,
+      );
+    } finally {
+      errors.mockRestore();
+    }
+  });
+  it("globally caps OAuth across rotating claimed client addresses", async () =>
+    service(
+      async (base) => {
+        for (let i = 0; i < 2; i++) {
+          const response = await fetch(
+            base + "/.well-known/oauth-authorization-server",
+            { headers: { "X-Forwarded-For": `192.0.2.${i}` } },
+          );
+          expect(response.status).toBe(200);
+        }
+        const limited = await fetch(
+          base + "/.well-known/oauth-authorization-server",
+          { headers: { "X-Forwarded-For": "198.51.100.1" } },
+        );
+        expect(limited.status).toBe(429);
+        expect(limited.headers.get("retry-after")).toBe("60");
+      },
+      undefined,
+      true,
+      undefined,
+      new VelocityLimit(2),
+    ));
   it("attributes only deliberate browser handoffs and prevents open redirects", async () => {
     const events: unknown[] = [];
     await service(

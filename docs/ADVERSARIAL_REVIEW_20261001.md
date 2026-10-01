@@ -42,3 +42,13 @@ availability. Validation now uses the maintained MCP's `/v1/dashboard` account
 endpoint, which bypasses data API quota. Only its success envelope is checked;
 no account payload is returned to the model or logged. Market-data tools still
 enforce entitlements and quotas through their existing REST endpoints.
+
+Production authenticated review then passed price/comparison, 12 Henry Hub
+curve contracts, 22 Brent daily observations and two VLSFO port quotes. Permian
+remained explicitly unavailable. OAuth grant and revocation passed. The log
+review found SDK proxy warnings because DigitalOcean forwards X-Forwarded-For
+while this service intentionally uses connected peers. The SDK's warning-only
+forwarded-header validation is explicitly disabled; trust-proxy stays false and
+all SDK endpoint limits stay active. A global 60/min OAuth cap additionally
+bounds rotating ingress peers. Native OAuth/handoff 429s now include Retry-After.
+Regression tests reproduced the warnings and missing retry hint before the fix.
