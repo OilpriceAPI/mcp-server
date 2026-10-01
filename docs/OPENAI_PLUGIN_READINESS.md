@@ -1,16 +1,19 @@
 # OilPriceAPI OpenAI plugin V1 — readiness record
 
-Status: MCP merged and deployed; not submitted. Reviewed against official OpenAI documentation on 2026-10-01. Website privacy release remains tracked in PR #2246.
+Status: MCP and website privacy merged and deployed; not submitted. Reviewed against official OpenAI documentation on 2026-10-01.
 
 ## Production receipt — 2026-10-01
 
 - MCP PR #134 merged at `d125d77d457dbaeb7d646035a53a0960f2ec4611` after adversarial review; 516 tests and CI passed. The post-merge tree matched the reviewed branch; package and public-claims compatibility smoke passed.
 - Stable HTTPS endpoint: `https://oilpriceapi-openai-mcp-dafbh.ondigitalocean.app/mcp`.
-- Separate DigitalOcean app `4a89cb34-72a3-4daf-a893-0628699ded26`, deployment `392cc795-9791-4721-864b-0a5b305a5aca`, ACTIVE. Neither existing API nor frontend spec changed for MCP.
-- Immutable image `sha256:3bdd8453729ba6ab7023d85447e3e660500c10ab0f1008eaa4be42a994c8ab48` from the reviewed source. GitHub-source creation failed because the DO integration lacked repo access; DOCR deployment avoids expanding that access.
+- Separate DigitalOcean app `4a89cb34-72a3-4daf-a893-0628699ded26`, final deployment `98c7e488-08b4-445c-9db4-e0535da5e664`, verified ACTIVE. Neither existing API nor frontend spec changed for MCP.
+- Final immutable image `sha256:f612c1e64bd81ae06f0a7d8e3518e3325e529e84e87cdc8444655e23db97d3f2` from the reviewed source. GitHub-source creation failed because the DO integration lacked repo access; DOCR deployment avoids expanding that access.
 - Production health, initialize, seven-tool inventory, usable anonymous Brent/WTI comparison and overview, source context, premium boundaries and bulk caps passed. Malformed JSON, batches, attacker Origin, invalid bearer-token reflection, open-redirect attempts and absent domain challenge were tested live.
-- Production operational logs confirmed internal-test exclusion and explicit entitlement outcomes; no new application errors appeared in the reviewed logs.
-- Full positive authenticated dataset evaluation and natural-language review prompts remain unverified. Task-to-payment attribution and portal/demo-recording requirements are not complete.
+- Final-deployment operational logs confirmed internal-test exclusion and explicit entitlement outcomes; no validation warnings or exceptions appeared in the 14 reviewed log lines after final-image review. Adversarial transport/origin/token-reflection/handoff and OAuth redirect/invalid-key checks were rerun successfully on this image.
+- Authenticated production tool-contract review passed with the existing synthetic account: current comparison, 12 Henry Hub curve contracts, 22 Brent observations and both VLSFO port quotes. OAuth grant and revocation were first verified in run `36833978145`; final-image anonymous/authenticated review passed in run `36836356533`. Permian remains unavailable. Natural-language review prompts, task-to-payment attribution and portal/demo-recording requirements are not complete.
+- Privacy PR #2246 merged as `e85ccff08b95d450a105b2741fc5041a2e6d387b`; canonical deployment run `36832739351` passed all gates, 27 money pages and signup/confirmation/key/authenticated-call/dashboard recovery smoke. `/privacy` returned HTTPS 200 with the OpenAI disclosure; home/support/terms returned 200.
+- Post-merge fixes #136 and #138 decouple account linking from price quota and preserve untrusted forwarding headers while globally bounding OAuth to 60/min. The final reviewed runtime source is `46d54cf79d5d85b6804d10b78fc88490c7b76a4c`; its image is pinned in the app spec. The complete suite is 522 passing tests.
+- `openai-plugin-review.yml` runs internal anonymous contract checks every four hours; authenticated review is manual and receives the existing synthetic key only from protected main. It logs no credentials and revokes its OAuth connection. Notification delivery is not inferred from workflow success.
 - Rollback: deploy a prior verified image digest in this isolated app; for this first release, disable the new app rather than alter either existing serving app. Reconnecting is required after an OAuth-store restart.
 - Pre-merge adversarial findings and fixes: `docs/ADVERSARIAL_REVIEW_20261001.md`.
 
@@ -26,7 +29,7 @@ Status: MCP merged and deployed; not submitted. Reviewed against official OpenAI
 - Marine uses the maintained MCP's full-list REST mapping because its documented server filters have returned empty successful responses; the facade returns only requested exact ports/grade, <=2 quotes. No pagination or broad export.
 - Drilling uses `/v1/drilling/latest`. Its current contract is national/geographic rig counts, not Permian basin counts. It supplies a global snapshot update time, not a per-geography report period; the facade does not relabel it. Aggregate deltas are not a prior-report change for one geography.
 - DigitalOcean currently hosts separate API and frontend App Platform apps. API: `4f18d37d-c9c5-4906-9850-304fb355efda`; frontend: `4cf05d8d-32ae-4cea-9e3b-2993b41bd11b`. The prepared new-app spec uses DigitalOcean’s runtime `${APP_URL}` binding for its stable HTTPS ingress. The new MCP must be a separate app; no MCP database connections or changes to either serving app.
-- Website, `/support`, `/privacy`, `/terms` all return HTTPS 200. The production privacy page lacks this plugin-specific disclosure; a separate website PR prepares it.
+- Website, `/support`, `/privacy`, `/terms` all return HTTPS 200. At initial inspection the privacy page lacked plugin-specific disclosure; PR #2246 subsequently deployed it and the public page was verified.
 
 ## Transport / OAuth / controls
 
@@ -34,7 +37,7 @@ Run `npm run build && npm run start:remote` with `OILPRICEAPI_MCP_PUBLIC_URL=htt
 
 OAuth uses SDK authorization routing, S256 PKCE, read-only scope and exact resource/client/redirect binding. The user's key is validated through REST before a one-use authorization code is issued. API keys never appear in responses, URLs or telemetry. Opaque access tokens expire in one hour; refresh tokens rotate and expire after seven days. Revocation removes all active tokens for that connected credential. The store is bounded and memory-only; **single instance required** and restart clears client registrations/tokens, requiring reconnect. Persistent account linking is a follow-up before scaling beyond this experiment.
 
-The remote has host/origin checks, JSON-only requests, 16 KiB request cap, no batch/pagination, bounded rate-limit memory, connected-peer and global velocity controls, <=20 active MCP requests, HTTP deadlines and per-tool/upstream budgets. Forwarding headers are not trusted. A reverse proxy's peer may represent several clients; configure additional edge per-client controls before scaling. The SDK additionally limits OAuth routes.
+The remote has host/origin checks, JSON-only requests, 16 KiB request cap, no batch/pagination, bounded rate-limit memory, connected-peer and global velocity controls, <=20 active MCP requests, HTTP deadlines and per-tool/upstream budgets. Forwarding headers are not trusted. OAuth additionally has a global 60/min limit independent of ingress-peer rotation, plus the SDK's endpoint limits. A reverse proxy's peer may represent several clients; configure additional edge per-client controls before scaling.
 
 Read annotations: read-only=true, destructive=false, idempotent=true, open-world=true. Justification: tools fetch existing public/account-permitted OilPriceAPI REST data; no market records, alerts, watches or account entitlements are written. Routine operational logging is incidental to reads.
 
@@ -48,7 +51,7 @@ Handoffs use `utm_source=openai-plugin`, `utm_medium=plugin`, `utm_campaign=ener
 
 `scripts/plugin-readout.mjs` summarizes exported logs without turning calls into tasks; unmeasured funnel values remain null. `docs/openai-plugin-cohort.sql` prepares aggregate-only first-touch signup/key/recorded-first-call analysis; its live execution and Stripe receipt reconciliation remain unverified.
 
-**Not yet verified:** production handoff visit event; signup -> key -> first successful authenticated request -> authoritative Stripe paid receipt; internal/test exclusion; reliable research-task boundaries; privacy-safe distinct-day repeats. The 30-day research conversion thresholds cannot be applied until their denominator is measured. Host `_meta["openai/session"]` identifies an anonymized conversation, not a logical job; any use must be labeled a proxy. Do not backfill tasks from raw call counts.
+**Not yet verified:** production handoff visit event; signup -> key -> first successful authenticated request -> authoritative Stripe paid receipt; downstream cohort internal/test exclusion; reliable research-task boundaries; privacy-safe distinct-day repeats. The 30-day research conversion thresholds cannot be applied until their denominator is measured. Host `_meta["openai/session"]` identifies an anonymized conversation, not a logical job; any use must be labeled a proxy. Do not backfill tasks from raw call counts.
 
 The requested subtitle is 31 characters; the current directory limit is 30. The packaged subtitle is "Source-aware energy data".
 
@@ -59,7 +62,7 @@ The requested subtitle is 31 characters; the current directory limit is 30. The 
 - Run `node scripts/smoke-remote.mjs https://YOUR-HOST/mcp`. This checks contracts, not natural-language refusal behavior. Exactly five positive and three negative prompt cases are in `openai-plugin/review-tests.json`; evaluate them in ChatGPT/Codex and record the demo before submission.
 - Anonymous curve/history/marine/drilling tests prove entitlement boundaries only. Authenticated usable curve/history/marine requires an entitled test account. Permian remains unavailable until the existing service supplies an appropriate contract; do not mark that positive case as a usable basin result.
 - Local shared caller IP previously hit the demo 429 quota. The independent production app's anonymous comparison and overview now passed without a shared credential.
-- Keep serving/auth changes out of production until the Friday elevated-risk window (Friday >=21:00 UTC), required review and green CI. The frontend has its own protected-main deploy workflow; do not bypass it.
+- The normal serving/auth window is Friday >=21:00 UTC. The user explicitly authorized this reviewed release outside that window on 2026-10-01; required review and green CI were completed. The frontend has its own protected-main deploy workflow; do not bypass it.
 - Deploy a separate, one-instance DigitalOcean app with HTTPS, `/health` checks, deployment-failure alerts and rollback to the prior source SHA/digest. Verify customer-critical calls and inspect new errors after release.
 - Generate ZIP with `npm run package:openai -- https://YOUR-HOST/mcp`. ZIP has no credentials. It remains a draft until all production gates pass.
 - `/.well-known/openai-apps-challenge` returns 404 until `OPENAI_APPS_CHALLENGE` is supplied. Serve the exact portal value verbatim; never invent it.
