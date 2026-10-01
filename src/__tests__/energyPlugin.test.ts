@@ -54,13 +54,11 @@ describe("public energy facade", () => {
     }
   });
   it("does not count malformed futures contracts as usable data", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValue(
-        response({
-          contracts: [{ contract_month: "2026-11", settlement_price: null }],
-        }),
-      );
+    const fetchImpl = vi.fn().mockResolvedValue(
+      response({
+        contracts: [{ contract_month: "2026-11", settlement_price: null }],
+      }),
+    );
     const data = await executeEnergyTool(
       "energy_futures_curve",
       { instrument: "brent" },
@@ -299,6 +297,46 @@ describe("public energy facade", () => {
     expect(fetchImpl.mock.calls[0][0]).toContain(
       "interval=1d&per_page=3&page=1",
     );
+  });
+  it("rejects history outside the requested window even when upstream ignores filters", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      response({
+        status: "success",
+        data: {
+          prices: [
+            { ...quote, as_of: "2020-01-01" },
+            { ...quote, as_of: "2099-01-01" },
+            { ...quote, as_of: "not-a-date" },
+            { ...quote },
+          ],
+        },
+      }),
+    );
+    const data = body(
+      await executeEnergyTool(
+        "energy_history",
+        { benchmark: quote.code, days: 1 },
+        { key: "credential", fetchImpl },
+      ),
+    );
+    expect(data.observations).toEqual([]);
+    expect(data.window_start).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+  it("rejects a successful futures response for a different instrument", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      response({
+        instrument: "wti",
+        contracts: [{ contract_month: "2026-11", settlement_price: 42 }],
+      }),
+    );
+    const data = body(
+      await executeEnergyTool(
+        "energy_futures_curve",
+        { instrument: "brent" },
+        { key: "credential", fetchImpl },
+      ),
+    );
+    expect(data.outcome).toBe("unavailable");
   });
   it("preserves futures contract semantics and non-USD basis", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(

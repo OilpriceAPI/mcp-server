@@ -382,12 +382,34 @@ export async function executeEnergyTool(
     } else {
       if (!options.key) throw new PluginFailure("entitlement");
       if (tool === "energy_history") {
+        const now = Date.now();
+        const windowStart = new Date(now - input.days * 86400000)
+          .toISOString()
+          .slice(0, 10);
+        const windowEnd = new Date(now).toISOString().slice(0, 10);
         const data = await api(
-          `/v1/prices/past_month?by_code=${input.benchmark}&interval=1d&per_page=${input.limit}&page=1&start_date=${new Date(Date.now() - input.days * 86400000).toISOString().slice(0, 10)}&end_date=${new Date().toISOString().slice(0, 10)}`,
+          `/v1/prices/past_month?by_code=${input.benchmark}&interval=1d&per_page=${input.limit}&page=1&start_date=${windowStart}&end_date=${windowEnd}`,
         );
         const rows = record(data.data).prices;
         if (!Array.isArray(rows)) throw new PluginFailure("unavailable");
-        const selected = rows.slice(0, input.limit);
+        const selected = rows.slice(0, input.limit).filter((raw) => {
+          const row = record(raw);
+          // Historical observation dates are distinct from publication updates.
+          const date =
+            row.source_timestamp ??
+            row.source_observed_at ??
+            row.observed_at ??
+            row.as_of ??
+            row.source_date ??
+            row.timestamp ??
+            row.created_at;
+          if (typeof date !== "string" || !Number.isFinite(Date.parse(date)))
+            return false;
+          const day = new Date(date).toISOString().slice(0, 10);
+          return (
+            day >= windowStart && day <= windowEnd && Date.parse(date) <= now
+          );
+        });
         if (
           selected.some(
             (row) => record(row).code && row.code !== input.benchmark,
@@ -405,12 +427,19 @@ export async function executeEnergyTool(
           benchmark: input.benchmark,
           observations,
           window_days: input.days,
+          window_start: windowStart,
+          window_end: windowEnd,
           row_limit: input.limit,
           completeness:
             "First bounded page only; do not infer complete window coverage or zero change from missing observations.",
         };
       } else if (tool === "energy_futures_curve") {
         const data = record(await api(`/v1/futures/${input.instrument}/curve`));
+        if (
+          typeof data.instrument === "string" &&
+          data.instrument !== input.instrument
+        )
+          throw new PluginFailure("unavailable");
         if (!Array.isArray(data.contracts))
           throw new PluginFailure("unavailable");
         const contracts = data.contracts
