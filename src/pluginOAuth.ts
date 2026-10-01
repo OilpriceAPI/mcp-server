@@ -338,6 +338,9 @@ export class PluginOAuth implements OAuthServerProvider {
 export function createOAuthApp(provider: PluginOAuth) {
   const app = express();
   app.disable("x-powered-by");
+  // Connected-peer limits are intentional. Caller forwarding headers never
+  // become trusted client identities; the native service also caps OAuth globally.
+  const rateLimit = { validate: { xForwardedForHeader: false } };
   app.use(
     mcpAuthRouter({
       provider,
@@ -345,6 +348,10 @@ export function createOAuthApp(provider: PluginOAuth) {
       resourceServerUrl: new URL(provider.resource),
       resourceName: "OilPriceAPI",
       scopesSupported: ["energy:read"],
+      authorizationOptions: { rateLimit },
+      clientRegistrationOptions: { rateLimit },
+      revocationOptions: { rateLimit },
+      tokenOptions: { rateLimit },
       serviceDocumentationUrl: new URL("https://www.oilpriceapi.com/support"),
     }),
   );
