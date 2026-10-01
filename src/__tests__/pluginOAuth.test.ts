@@ -6,17 +6,15 @@ const origin = "https://mcp.example";
 const verifier = "a".repeat(43);
 const challenge = createHash("sha256").update(verifier).digest("base64url");
 function setup(status = 200) {
-  const fetchImpl = vi
-    .fn()
-    .mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          status: "success",
-          data: { code: "WTI_USD", price: 90 },
-        }),
-        { status },
-      ),
-    );
+  const fetchImpl = vi.fn().mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        status: "success",
+        data: { code: "WTI_USD", price: 90 },
+      }),
+      { status },
+    ),
+  );
   const provider = new PluginOAuth(origin, fetchImpl);
   const client = provider.clientsStore.registerClient({
     redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"],
@@ -72,6 +70,66 @@ async function linked() {
 }
 afterEach(() => vi.useRealTimers());
 describe("plugin OAuth boundary", () => {
+  it.each([null, [], "not an account"])(
+    "fails closed on malformed account envelope %s",
+    async (data) => {
+      const provider = new PluginOAuth(
+        origin,
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ status: "success", data })),
+          ),
+      );
+      try {
+        const client = provider.clientsStore.registerClient({
+          redirect_uris: [
+            "https://chatgpt.com/connector_platform_oauth_redirect",
+          ],
+          token_endpoint_auth_method: "none",
+        });
+        const flow = await authorize(provider, client);
+        await expect(
+          provider.completeLink(flow, flow, "caller-key-value-1234"),
+        ).rejects.toThrow();
+      } finally {
+        provider.close();
+      }
+    },
+  );
+  it("validates the account without consuming a price request or depending on benchmark availability", async () => {
+    const fetchImpl = vi.fn(async (url: string | URL | Request) =>
+      String(url).endsWith("/v1/dashboard")
+        ? new Response(
+            JSON.stringify({ status: "success", data: { usage: {} } }),
+          )
+        : new Response(JSON.stringify({ error: "Price quota exhausted" }), {
+            status: 429,
+          }),
+    );
+    const provider = new PluginOAuth(origin, fetchImpl as typeof fetch);
+    try {
+      const client = provider.clientsStore.registerClient({
+        redirect_uris: [
+          "https://chatgpt.com/connector_platform_oauth_redirect",
+        ],
+        token_endpoint_auth_method: "none",
+      });
+      const flow = await authorize(provider, client);
+      const redirect = await provider.completeLink(
+        flow,
+        flow,
+        "caller-key-value-1234",
+      );
+      expect(new URL(redirect).searchParams.has("code")).toBe(true);
+      expect(fetchImpl.mock.calls[0][0]).toBe(
+        "https://api.oilpriceapi.com/v1/dashboard",
+      );
+      expect(redirect).not.toContain("caller-key-value");
+    } finally {
+      provider.close();
+    }
+  });
   it("links a verified key, preserves state and binds resource, client, redirect and PKCE", async () => {
     const { provider, client, fetchImpl, code, redirect } = await linked();
     expect(redirect.searchParams.get("state")).toBe("test-state");

@@ -187,7 +187,7 @@ export class PluginOAuth implements OAuthServerProvider {
     try {
       const response = await this.fetchImpl(
         (process.env.OILPRICEAPI_BASE_URL ?? "https://api.oilpriceapi.com") +
-          "/v1/prices/latest?by_code=WTI_USD",
+          "/v1/dashboard",
         {
           headers: {
             Authorization: `Bearer ${key}`,
@@ -206,7 +206,12 @@ export class PluginOAuth implements OAuthServerProvider {
           "OilPriceAPI could not validate the account. Retry later.",
         );
       const payload = await response.json();
-      if (payload?.status !== "success")
+      if (
+        payload?.status !== "success" ||
+        !payload.data ||
+        typeof payload.data !== "object" ||
+        Array.isArray(payload.data)
+      )
         throw new InvalidGrantError("OilPriceAPI did not verify this account.");
     } finally {
       clearTimeout(timer);
