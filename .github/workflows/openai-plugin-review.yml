@@ -1,0 +1,45 @@
+name: OpenAI MCP production review
+on:
+  workflow_dispatch:
+    inputs:
+      authenticated:
+        description: Review the synthetic account's entitled datasets and revoke its connection
+        type: boolean
+        default: true
+  schedule:
+    - cron: "17 */4 * * *"
+permissions:
+  contents: read
+concurrency:
+  group: openai-mcp-production-review
+  cancel-in-progress: false
+jobs:
+  anonymous:
+    if: github.repository == 'OilpriceAPI/mcp-server' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24"
+      - run: npm ci --ignore-scripts
+      - run: node scripts/smoke-remote.mjs https://oilpriceapi-openai-mcp-dafbh.ondigitalocean.app/mcp
+  authenticated:
+    if: github.repository == 'OilpriceAPI/mcp-server' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.authenticated
+    needs: anonymous
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "24"
+      - run: npm ci --ignore-scripts
+      - run: node scripts/smoke-remote-auth.mjs
+        env:
+          OILPRICEAPI_TEST_KEY: ${{ secrets.OILPRICEAPI_TEST_KEY }}
