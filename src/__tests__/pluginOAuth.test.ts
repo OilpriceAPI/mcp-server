@@ -70,6 +70,16 @@ async function linked() {
 }
 afterEach(() => vi.useRealTimers());
 describe("plugin OAuth boundary", () => {
+  it("rejects unregistered redirect destinations before rendering consent", async () => {
+    const { provider, client } = setup();
+    try {
+      await expect(authorize(provider, client, {
+        redirectUri: "https://attacker.invalid/callback",
+      })).rejects.toThrow("Redirect must match the registered client");
+    } finally {
+      provider.close();
+    }
+  });
   it.each([null, [], "not an account"])(
     "fails closed on malformed account envelope %s",
     async (data) => {

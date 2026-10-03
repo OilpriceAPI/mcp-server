@@ -134,6 +134,8 @@ export class PluginOAuth implements OAuthServerProvider {
     params: AuthorizationParams,
     res: Response,
   ) {
+    if (!client.redirect_uris.includes(params.redirectUri))
+      throw new InvalidRequestError("Redirect must match the registered client");
     if (params.resource?.href !== this.resource)
       throw new InvalidRequestError("Resource must match this MCP endpoint");
     if (params.scopes?.some((scope) => scope !== "energy:read"))
@@ -157,7 +159,7 @@ export class PluginOAuth implements OAuthServerProvider {
     res.setHeader("Cache-Control", "no-store");
     res.setHeader(
       "Content-Security-Policy",
-      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${new URL(params.redirectUri).origin}; frame-ancestors 'none'; base-uri 'none'`,
     );
     // no-referrer turns a browser form POST's Origin into null, defeating
     // our exact-origin CSRF check. Cross-origin referrers stay suppressed.
