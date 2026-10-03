@@ -320,6 +320,9 @@ describe("Streamable HTTP service", () => {
         // Browser form POSTs send Origin: null under no-referrer. Keep the
         // same-origin identity while suppressing referrers to other sites.
         expect(consent.headers.get("referrer-policy")).toBe("same-origin");
+        expect(consent.headers.get("content-security-policy")).toContain(
+          "form-action 'self' https://chatgpt.com;",
+        );
         const cookie = consent.headers.get("set-cookie")!.split(";")[0];
         const flow = /name="flow" value="([^"]+)"/.exec(
           await consent.text(),
