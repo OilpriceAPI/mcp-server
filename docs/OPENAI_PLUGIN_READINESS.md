@@ -2,7 +2,9 @@
 
 Status: MCP and website privacy merged and deployed; not submitted. Reviewed against official OpenAI documentation on 2026-10-01.
 
-Latest runtime repair and production receipt: [browser OAuth release, 2026-10-03](OAUTH_BROWSER_RELEASE_20261003.md).
+Latest demo-first runtime and anonymous production receipt: [2026-10-03](DEMO_FIRST_20261003.md).
+
+Browser repair receipt: [browser OAuth release, 2026-10-03](OAUTH_BROWSER_RELEASE_20261003.md).
 
 ## Production receipt — 2026-10-01
 
