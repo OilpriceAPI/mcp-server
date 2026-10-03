@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { PluginOAuth } from "../pluginOAuth.js";
 import { createServer as createProbeServer, request } from "node:http";
 import { describe, it, expect, vi } from "vitest";
+import { z } from "zod";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { createRemoteServer, VelocityLimit } from "../remote.js";
@@ -147,7 +148,7 @@ describe("Streamable HTTP service", () => {
           {
             event: "plugin_handoff_visit",
             dataset_category: "futures",
-            plugin_version: "0.1.0",
+            plugin_version: "0.1.1",
             population: "browser_navigation_proxy",
           },
         ]);
@@ -193,6 +194,18 @@ describe("Streamable HTTP service", () => {
         expect(tools.tools.every((t) => t.annotations?.readOnlyHint)).toBe(
           true,
         );
+        const wireTools = await client.request(
+          { method: "tools/list" },
+          z.object({ tools: z.array(z.looseObject({ name: z.string(), inputSchema: z.looseObject({}) })) }),
+        );
+        for (const tool of wireTools.tools) {
+          expect(tool.securitySchemes).toEqual([
+            { type: "noauth" },
+            { type: "oauth2", scopes: ["energy:read"] },
+          ]);
+          expect(tool._meta).toEqual({ securitySchemes: tool.securitySchemes });
+          expect(tool.inputSchema.additionalProperties).toBe(false);
+        }
         const result = await client.callTool({
           name: "energy_get_price",
           arguments: { benchmark: "WTI_USD" },
@@ -200,12 +213,14 @@ describe("Streamable HTTP service", () => {
         expect(result.structuredContent).toMatchObject({
           availability: "available",
           access: "demo",
+          website_url: "https://www.oilpriceapi.com/",
         });
         const premium = await client.callTool({
           name: "energy_drilling",
           arguments: { geography: "Permian" },
         });
         expect(premium.isError).toBe(true);
+        expect(premium._meta).toBeUndefined();
         expect(premium.structuredContent).toMatchObject({
           outcome: "entitlement",
         });

@@ -187,9 +187,16 @@ describe("public energy facade", () => {
       energy_drilling: { geography: "Permian" },
     }[tool];
     const fetchImpl = vi.fn();
-    expect(
-      body(await executeEnergyTool(tool, args, { fetchImpl })).outcome,
-    ).toBe("entitlement");
+    const result = await executeEnergyTool(tool, args, {
+      fetchImpl,
+      resourceUrl: "https://plugin.example/mcp",
+    });
+    expect(body(result)).toMatchObject({
+      outcome: "entitlement",
+      website_url: "https://www.oilpriceapi.com/",
+    });
+    expect(result).not.toHaveProperty('_meta.mcp/www_authenticate');
+    expect(body(result).handoff_url).toMatch(/^https:\/\/plugin\.example\/handoff\//);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
   it.each([401, 402, 403, 404, 500])(

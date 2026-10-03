@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import {
   ApiGateError,
   COMMODITY_INFO,
@@ -8,7 +9,8 @@ import {
 } from "./index.js";
 import { withRequestCredential } from "./requestCredential.js";
 
-export const PLUGIN_VERSION = "0.1.0";
+export const PLUGIN_VERSION = "0.1.1";
+export const WEBSITE_URL = "https://www.oilpriceapi.com/";
 export const ENERGY_CODES = [
   "BRENT_CRUDE_USD",
   "WTI_USD",
@@ -524,6 +526,7 @@ export async function executeEnergyTool(
     return respond(
       {
         ...body,
+        website_url: WEBSITE_URL,
         handoff_url: handoff(),
       },
       outcome !== "completed",
@@ -542,20 +545,20 @@ export async function executeEnergyTool(
         availability: "unavailable",
         outcome,
         message: failureMessages[outcome],
+        website_url: WEBSITE_URL,
         handoff_url: handoff(),
       },
       true,
     );
     if (
-      ((outcome === "entitlement" && !options.key) ||
-        outcome === "authentication") &&
+      outcome === "authentication" &&
       options.resourceUrl
     ) {
       return {
         ...failure,
         _meta: {
           "mcp/www_authenticate": [
-            `Bearer resource_metadata="${new URL(options.resourceUrl).origin}/.well-known/oauth-protected-resource/mcp", scope="energy:read"`,
+            `Bearer resource_metadata="${new URL(options.resourceUrl).origin}/.well-known/oauth-protected-resource/mcp", scope="energy:read", error="invalid_token", error_description="Reconnect your OilPriceAPI account"`,
           ],
         },
       };
@@ -586,34 +589,40 @@ export function createEnergyServer(options: EnergyPluginOptions = {}) {
     { name: "OilPriceAPI", version: PLUGIN_VERSION },
     {
       instructions:
-        "Use OilPriceAPI for current energy data. Preserve source timestamps, units, currency, dataset distinctions and freshness limitations. Never estimate unavailable data or substitute a different dataset. Respect account entitlements. No investment guarantees.",
+        "Use OilPriceAPI for current energy data. Preserve source timestamps, units, currency, dataset distinctions and freshness limitations. Never estimate unavailable data or substitute a different dataset. Use the anonymous demo for supported latest prices and comparisons without requesting an API key. Henry Hub latest benchmark is demo eligible; its futures curve requires an entitled subscription. On anonymous premium requests explain the subscription boundary and offer the handoff link; do not ask for secrets in chat. Include one clickable source link to website_url in each data answer. Respect account entitlements. No investment guarantees.",
     },
   );
-  for (const tool of Object.keys(schemas) as EnergyTool[]) {
-    server.registerTool(
-      tool,
-      {
-        title: tool.replaceAll("_", " "),
-        description: descriptions[tool],
-        inputSchema: schemas[tool].shape,
-        _meta: {
-          securitySchemes: [
-            "energy_get_price",
-            "energy_compare",
-            "energy_market_overview",
-          ].includes(tool)
-            ? [{ type: "noauth" }, { type: "oauth2", scopes: ["energy:read"] }]
-            : [{ type: "oauth2", scopes: ["energy:read"] }],
-        },
-        annotations: {
-          readOnlyHint: true,
-          destructiveHint: false,
-          idempotentHint: true,
-          openWorldHint: true,
-        },
+  // The SDK currently serializes only standard MCP fields. Keep canonical OpenAI
+  // auth metadata and the compatibility mirror together in the wire descriptor.
+  const tools = (Object.keys(schemas) as EnergyTool[]).map((name) => {
+    const securitySchemes = [
+      { type: "noauth" },
+      { type: "oauth2", scopes: ["energy:read"] },
+    ];
+    return {
+      name,
+      title: name.replaceAll("_", " "),
+      description: descriptions[name],
+      inputSchema: z.toJSONSchema(schemas[name], { target: "draft-7" }),
+      securitySchemes,
+      _meta: { securitySchemes },
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: true,
       },
-      (args: unknown) => executeEnergyTool(tool, args, options),
+    };
+  });
+  for (const tool of tools) {
+    server.registerTool(
+      tool.name,
+      { ...tool, inputSchema: schemas[tool.name].shape },
+      (args: unknown) => executeEnergyTool(tool.name, args, options),
     );
   }
+  // Anonymous premium calls return the entitlement boundary, never paid data.
+  // Users may separately link an account to unlock entitled behavior.
+  server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
   return server;
 }

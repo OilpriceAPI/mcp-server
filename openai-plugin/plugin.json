@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "oilpriceapi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Source-aware energy market data",
   "author": {
     "name": "OilPriceAPI",
@@ -33,7 +33,7 @@
         "termsOfServiceURL": "https://www.oilpriceapi.com/terms",
         "defaultPrompt": [
           "Compare the latest Brent and WTI prices and include source timestamps.",
-          "Show me the Henry Hub natural gas futures curve and explain its shape.",
+          "What is the latest Henry Hub natural gas benchmark? Include timestamps and freshness limitations.",
           "Compare supported VLSFO prices for Rotterdam and Singapore."
         ],
         "composerIcon": "./assets/icon.png",
@@ -96,7 +96,7 @@
         "commerce_description": "The plugin does not process payments. Account and entitlement workflows link to OilPriceAPI."
       },
       "publication": {
-        "release_notes": "Initial seven-tool read-only energy facade with capped demo access, account entitlement boundaries, source-aware output and Streamable HTTP."
+        "release_notes": "Keyless demo-first access, clickable OilPriceAPI source links, and explicit subscription boundaries for forward curves and other premium datasets."
       }
     }
   }

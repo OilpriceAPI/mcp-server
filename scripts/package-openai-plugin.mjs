@@ -53,7 +53,7 @@ const skill = await readFile(
 if (!skill.startsWith("---\nname: energy-markets\ndescription:"))
   throw new Error("Skill frontmatter is invalid");
 const zip = new URL(
-  "../artifacts/oilpriceapi-openai-plugin-0.1.0.zip",
+  `../artifacts/oilpriceapi-openai-plugin-${manifest.version}.zip`,
   import.meta.url,
 );
 await rm(zip, { force: true });
