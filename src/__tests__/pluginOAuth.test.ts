@@ -183,6 +183,86 @@ describe("plugin OAuth boundary", () => {
       provider.clientsStore.registerClient({ redirect_uris: [redirect] }),
     ).toThrow();
   });
+  it.each([
+    "https://claude.ai/api/mcp/auth_callback/extra",
+    "https://claude.ai/api/mcp/auth_callback?next=https://evil.example",
+    "https://claude.ai.evil.example/api/mcp/auth_callback",
+    "http://claude.ai/api/mcp/auth_callback",
+    "https://evil.example/api/mcp/auth_callback",
+  ])("rejects look-alike Claude callback %s", (redirect) => {
+    const { provider } = setup();
+    expect(() =>
+      provider.clientsStore.registerClient({
+        redirect_uris: [redirect],
+        token_endpoint_auth_method: "none",
+      }),
+    ).toThrow("Use the OpenAI or Claude callback");
+  });
+  it("links a Claude connection, names the return host and marks the platform", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "success", data: { usage: {} } })),
+    );
+    const provider = new PluginOAuth(origin, fetchImpl);
+    try {
+      const client = provider.clientsStore.registerClient({
+        redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
+        token_endpoint_auth_method: "none",
+      });
+      let html = "";
+      let flow = "";
+      const res = {
+        cookie: (_n: string, v: string) => {
+          flow = v;
+        },
+        setHeader: vi.fn(),
+        type: () => res,
+        send: (s: string) => {
+          html = s;
+        },
+      };
+      await provider.authorize(
+        client,
+        {
+          resource: new URL(origin + "/mcp"),
+          codeChallenge: challenge,
+          redirectUri: "https://claude.ai/api/mcp/auth_callback",
+          scopes: ["energy:read"],
+          state: "claude-state",
+        },
+        res as any,
+      );
+      expect(html).toContain("Returning to <strong>claude.ai</strong>");
+      expect(res.setHeader).toHaveBeenCalledWith(
+        "Content-Security-Policy",
+        expect.stringContaining("form-action 'self' https://claude.ai;"),
+      );
+      const redirect = new URL(
+        await provider.completeLink(flow, flow, "caller-key-value-1234"),
+      );
+      expect(redirect.origin + redirect.pathname).toBe(
+        "https://claude.ai/api/mcp/auth_callback",
+      );
+      expect(redirect.searchParams.get("state")).toBe("claude-state");
+      expect(redirect.searchParams.has("code")).toBe(true);
+      expect(fetchImpl.mock.calls[0][1].headers["X-Api-Client"]).toBe(
+        "oilpriceapi-claude-connector/0.1.0",
+      );
+    } finally {
+      provider.close();
+    }
+  });
+  it("keeps marking ChatGPT links as the OpenAI plugin", async () => {
+    const { provider, client, fetchImpl } = setup();
+    try {
+      const flow = await authorize(provider, client);
+      await provider.completeLink(flow, flow, "caller-key-value-1234");
+      expect(fetchImpl.mock.calls[0][1].headers["X-Api-Client"]).toBe(
+        "oilpriceapi-openai-plugin/0.1.0",
+      );
+    } finally {
+      provider.close();
+    }
+  });
   it("requires the exact protected resource and read-only scope", async () => {
     const { provider, client } = setup();
     await expect(

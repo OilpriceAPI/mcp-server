@@ -106,12 +106,24 @@ export class PluginOAuth implements OAuthServerProvider {
             url.hostname === "chatgpt.com" &&
             (url.pathname === "/connector_platform_oauth_redirect" ||
               /^\/connector\/oauth\/[A-Za-z0-9_-]+$/.test(url.pathname));
+          // Hosted Claude apps (web, Desktop, mobile, Cowork) use one fixed
+          // callback: https://claude.com/docs/connectors/building/authentication
+          const claude =
+            url.protocol === "https:" &&
+            url.hostname === "claude.ai" &&
+            url.pathname === "/api/mcp/auth_callback" &&
+            !url.search;
           const loopback =
             url.protocol === "http:" &&
             ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname);
-          if (url.username || url.password || url.hash || !(openai || loopback))
+          if (
+            url.username ||
+            url.password ||
+            url.hash ||
+            !(openai || claude || loopback)
+          )
             throw new InvalidClientMetadataError(
-              "Use the OpenAI callback or a native loopback callback",
+              "Use the OpenAI or Claude callback, or a native loopback callback",
             );
         }
         const client: OAuthClientInformationFull = {
@@ -167,7 +179,7 @@ export class PluginOAuth implements OAuthServerProvider {
     res
       .type("html")
       .send(
-        `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect OilPriceAPI</title><style>body{font:16px system-ui;max-width:34rem;margin:8vh auto;padding:24px;color:#15263b}input,button{font:inherit;padding:12px;width:100%;box-sizing:border-box;margin:8px 0}button{background:#153e63;color:white;border:0;border-radius:6px}a{color:#153e63}</style><h1>Connect OilPriceAPI</h1><p>Allow this plugin connection to read supported energy datasets using your account's existing entitlements. No write access is requested.</p><p>Paste your OilPriceAPI API key. It stays on the server and is never returned to the model. Connections expire and may require reconnecting after a service restart.</p><form method="post" action="/link"><input type="hidden" name="flow" value="${flow}"><label for="key">OilPriceAPI API key</label><input id="key" name="key" type="password" autocomplete="off" required maxlength="256"><button type="submit">Connect read access</button></form><p><a href="https://www.oilpriceapi.com/dashboard">Find your API key</a> · <a href="https://www.oilpriceapi.com/privacy">Privacy</a> · <a href="https://www.oilpriceapi.com/support">Support</a></p></html>`,
+        `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect OilPriceAPI</title><style>body{font:16px system-ui;max-width:34rem;margin:8vh auto;padding:24px;color:#15263b}input,button{font:inherit;padding:12px;width:100%;box-sizing:border-box;margin:8px 0}button{background:#153e63;color:white;border:0;border-radius:6px}a{color:#153e63}</style><h1>Connect OilPriceAPI</h1><p>Returning to <strong>${escapeHtml(new URL(params.redirectUri).host)}</strong> after you connect.</p><p>Allow this connection to read supported energy datasets using your account's existing entitlements. No write access is requested.</p><p>Paste your OilPriceAPI API key. It stays on the server and is never returned to the model. Connections expire and may require reconnecting after a service restart.</p><form method="post" action="/link"><input type="hidden" name="flow" value="${flow}"><label for="key">OilPriceAPI API key</label><input id="key" name="key" type="password" autocomplete="off" required maxlength="256"><button type="submit">Connect read access</button></form><p><a href="https://www.oilpriceapi.com/dashboard">Find your API key</a> · <a href="https://www.oilpriceapi.com/privacy">Privacy</a> · <a href="https://www.oilpriceapi.com/support">Support</a></p></html>`,
       );
   }
   async completeLink(
@@ -196,7 +208,7 @@ export class PluginOAuth implements OAuthServerProvider {
           headers: {
             Authorization: `Bearer ${key}`,
             Accept: "application/json",
-            "X-Api-Client": "oilpriceapi-openai-plugin/0.1.0",
+            "X-Api-Client": linkClient(grant.params.redirectUri),
           },
           signal: abort.signal,
         },
@@ -408,4 +420,21 @@ export function createOAuthApp(provider: PluginOAuth) {
     },
   );
   return app;
+}
+
+// One validation call per connection, so this marks which platform linked.
+function linkClient(redirectUri: string) {
+  return new URL(redirectUri).hostname === "claude.ai"
+    ? "oilpriceapi-claude-connector/0.1.0"
+    : "oilpriceapi-openai-plugin/0.1.0";
+}
+
+function escapeHtml(value: string) {
+  return value.replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        c
+      ]!,
+  );
 }
