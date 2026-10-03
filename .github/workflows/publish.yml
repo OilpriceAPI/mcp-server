@@ -130,7 +130,7 @@ jobs:
   publish:
     name: Publish verified package to npm
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     needs: verify
     env:
       EXPECTED_ARTIFACT_MANIFEST_SHA256: ${{ needs.verify.outputs.artifact_manifest_sha256 }}
@@ -203,11 +203,15 @@ jobs:
             exit 1
           fi
 
+          # npm can take several minutes to serve a new version (#148: ~90s on
+          # 3.4.2; ~5 min for oilpriceapi@2.1.0). Poll for up to 10 minutes.
+          NPM_RELEASE_ATTEMPTS=60 \
+          NPM_RELEASE_DELAY_MS=10000 \
           NPM_RELEASE_EXPECTED_NAME="$NAME" \
           NPM_RELEASE_EXPECTED_VERSION="$VERSION" \
           NPM_RELEASE_EXPECTED_INTEGRITY="$EXPECTED_INTEGRITY" \
           NPM_RELEASE_EXPECTED_SOURCE_COMMIT="$SOURCE_COMMIT" \
-            node verify-npm-release.mjs
+            timeout 12m node verify-npm-release.mjs
 
   # Publish to the official MCP registry (registry.modelcontextprotocol.io)
   # after npm succeeds. Pre-validation protects npm from known metadata drift;
