@@ -2,6 +2,8 @@
 
 Status: MCP and website privacy merged and deployed; not submitted. Reviewed against official OpenAI documentation on 2026-10-01.
 
+Latest runtime repair and production receipt: [browser OAuth release, 2026-10-03](OAUTH_BROWSER_RELEASE_20261003.md).
+
 ## Production receipt — 2026-10-01
 
 - MCP PR #134 merged at `d125d77d457dbaeb7d646035a53a0960f2ec4611` after adversarial review; 516 tests and CI passed. The post-merge tree matched the reviewed branch; package and public-claims compatibility smoke passed.
