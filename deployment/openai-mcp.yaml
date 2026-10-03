@@ -1,5 +1,5 @@
 # Isolated App Platform app. APP_URL binds its stable HTTPS ingress.
-# Reviewed source 46d54cf79d5d85b6804d10b78fc88490c7b76a4c, immutable DOCR image.
+# Reviewed source 61d1aa61d64030d22237806af72c97d05e40da36, immutable DOCR image.
 # Do not apply this spec to either existing API/frontend app.
 name: oilpriceapi-openai-mcp
 region: nyc
@@ -9,7 +9,7 @@ services:
       registry_type: DOCR
       registry: opa-2025-registry
       repository: oilpriceapi-openai-mcp
-      digest: sha256:f612c1e64bd81ae06f0a7d8e3518e3325e529e84e87cdc8444655e23db97d3f2
+      digest: sha256:eb043360d1ee8db2791e84d6112da8dc7538429928d7cea9472450bc35d3f313
     http_port: 8080
     instance_count: 1
     instance_size_slug: apps-s-1vcpu-1gb
