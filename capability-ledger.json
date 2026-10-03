@@ -1,7 +1,7 @@
 {
   "$comment": "API-to-MCP capability ledger (#77). One row per operation in the published OpenAPI contract. Checked by `npm run check:capability-ledger` against the live contract, build/capabilities.json and src/index.ts. Bump ledgerVersion and append to changes for every decision change, and link the change from the release notes.",
   "schemaVersion": "1.0.0",
-  "ledgerVersion": 1,
+  "ledgerVersion": 2,
   "source": {
     "openapi": {
       "url": "https://api.oilpriceapi.com/openapi.json",
@@ -1415,6 +1415,14 @@
       "disposition": "unsupported",
       "owner": "mcp-server",
       "reason": "Changes delivery to customer infrastructure; not an action to take from an LLM tool call."
+    },
+    {
+      "operation": "GET /v1/futures/rbob",
+      "family": "futures-expanded",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "New delayed RBOB curve contract is outside the current instrument enums. Revisit after validating delayed quotes versus prior-session settlement semantics and exact-decimal companion fields; do not substitute the latest gasoline benchmark."
     }
   ],
   "changes": [
@@ -1423,6 +1431,12 @@
       "date": "2026-09-13",
       "issue": "https://github.com/OilpriceAPI/mcp-server/issues/77",
       "summary": "Seeded from the published contract (113 operations) and the API route policy; selected date-range history (#123), futures settlement history (#124) and marine workflows (#125)."
+    },
+    {
+      "ledgerVersion": 2,
+      "date": "2026-10-03",
+      "issue": "https://github.com/OilpriceAPI/mcp-server/pull/143",
+      "summary": "Reconcile newly published premium RBOB curve as explicitly deferred; no runtime exposure or entitlement change."
     }
   ]
 }
