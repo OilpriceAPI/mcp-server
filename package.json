@@ -1,6 +1,6 @@
 {
   "name": "oilpriceapi-mcp",
-  "version": "3.4.1",
+  "version": "3.4.2",
   "mcpName": "io.github.OilpriceAPI/mcp-server",
   "description": "Source-timestamped oil, gas, and related energy data plus reviewed product facts for MCP clients.",
   "type": "module",
@@ -15,6 +15,7 @@
     "start:remote": "node build/remote.js",
     "smoke:remote": "node scripts/smoke-remote.mjs",
     "package:openai": "node scripts/package-openai-plugin.mjs",
+    "package:mcpb": "node scripts/package-mcpb.mjs",
     "test": "vitest run",
     "test:live": "node scripts/live-smoke.mjs",
     "check:capability-ledger": "node scripts/check-capability-ledger.mjs",
