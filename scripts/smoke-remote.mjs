@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 const endpoint = process.argv[2];
@@ -31,6 +32,16 @@ try {
     )
   )
     throw new Error("Unexpected public tool surface");
+  const descriptors = await client.request(
+    { method: "tools/list" },
+    z.object({ tools: z.array(z.looseObject({ name: z.string() })) }),
+  );
+  for (const tool of descriptors.tools) {
+    const schemes = [{ type: "noauth" }, { type: "oauth2", scopes: ["energy:read"] }];
+    if (JSON.stringify(tool.securitySchemes) !== JSON.stringify(schemes) ||
+        JSON.stringify(tool._meta?.securitySchemes) !== JSON.stringify(schemes))
+      throw new Error("Anonymous-first auth descriptor missing: " + tool.name);
+  }
   const cases = [
     [
       "latest",
@@ -75,6 +86,10 @@ try {
     const response = await client.callTool({ name: tool, arguments: args });
     const data = response.structuredContent;
     const text = JSON.stringify(response);
+    if (data?.website_url !== "https://www.oilpriceapi.com/")
+      throw new Error(name + " source website missing");
+    if (expected === "boundary" && response._meta?.["mcp/www_authenticate"])
+      throw new Error(name + " unexpectedly prompts account linking");
     if (credential && text.includes(credential))
       throw new Error("Credential exposure");
     if (/"(?:api_key|internal_id|customer_email)"/.test(text))
