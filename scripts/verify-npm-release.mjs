@@ -238,8 +238,8 @@ export async function verifyNpmRelease({
   expectedVersion,
   expectedIntegrity,
   expectedSourceCommit,
-  attempts = 12,
-  delayMs = 5_000,
+  attempts = 60,
+  delayMs = 10_000,
   timeoutMs = 10_000,
   fetchImpl = fetch,
 }) {
@@ -345,8 +345,8 @@ if (
       );
     }
 
-    const attempts = Number(process.env.NPM_RELEASE_ATTEMPTS || 12);
-    const delayMs = Number(process.env.NPM_RELEASE_DELAY_MS || 5_000);
+    const attempts = Number(process.env.NPM_RELEASE_ATTEMPTS || 60);
+    const delayMs = Number(process.env.NPM_RELEASE_DELAY_MS || 10_000);
     if (!Number.isInteger(attempts) || attempts < 1) {
       throw new Error("NPM_RELEASE_ATTEMPTS must be a positive integer");
     }
