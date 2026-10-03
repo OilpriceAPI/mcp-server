@@ -159,7 +159,9 @@ export class PluginOAuth implements OAuthServerProvider {
       "Content-Security-Policy",
       "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
     );
-    res.setHeader("Referrer-Policy", "no-referrer");
+    // no-referrer turns a browser form POST's Origin into null, defeating
+    // our exact-origin CSRF check. Cross-origin referrers stay suppressed.
+    res.setHeader("Referrer-Policy", "same-origin");
     res
       .type("html")
       .send(

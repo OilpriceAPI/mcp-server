@@ -317,10 +317,40 @@ describe("Streamable HTTP service", () => {
         });
         const consent = await fetch(base + "/authorize?" + params);
         expect(consent.status).toBe(200);
+        // Browser form POSTs send Origin: null under no-referrer. Keep the
+        // same-origin identity while suppressing referrers to other sites.
+        expect(consent.headers.get("referrer-policy")).toBe("same-origin");
         const cookie = consent.headers.get("set-cookie")!.split(";")[0];
         const flow = /name="flow" value="([^"]+)"/.exec(
           await consent.text(),
         )![1];
+        for (const rejectedOrigin of [undefined, "null", "https://attacker.invalid"]) {
+          const denied = await fetch(base + "/link", {
+            method: "POST",
+            redirect: "manual",
+            headers: {
+              ...(rejectedOrigin ? { Origin: rejectedOrigin } : {}),
+              Cookie: cookie,
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: new URLSearchParams({ flow, key: "user-api-key-value-1234" }),
+          });
+          expect(denied.status).toBe(403);
+          expect(denied.headers.has("location")).toBe(false);
+          expect(await denied.text()).not.toContain("user-api-key-value");
+        }
+        const mismatchedSession = await fetch(base + "/link", {
+          method: "POST",
+          redirect: "manual",
+          headers: {
+            Origin: origin,
+            Cookie: "opa_oauth_flow=wrong-session",
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: new URLSearchParams({ flow, key: "user-api-key-value-1234" }),
+        });
+        expect(mismatchedSession.status).toBe(400);
+        expect(mismatchedSession.headers.has("location")).toBe(false);
         const linked = await fetch(base + "/link", {
           method: "POST",
           redirect: "manual",
