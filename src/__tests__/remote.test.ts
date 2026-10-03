@@ -66,6 +66,44 @@ async function service(
 }
 const headers = { Host: "plugin.example" };
 describe("Streamable HTTP service", () => {
+  it("logs edge rejections so server-to-server failures are visible", async () => {
+    const events: any[] = [];
+    await service(
+      async (base) => {
+        const origin = await fetch(base + "/register", {
+          method: "POST",
+          headers: {
+            Origin: "https://attacker.invalid",
+            "Content-Type": "application/json",
+          },
+          body: "{}",
+        });
+        expect(origin.status).toBe(403);
+        const missing = await fetch(base + "/nope?token=secret");
+        expect(missing.status).toBe(404);
+      },
+      undefined,
+      true,
+      (event: unknown) => events.push(event),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: "remote_edge_rejected",
+        status: 403,
+        reason: "origin",
+        path: "/register",
+        origin: "https://attacker.invalid",
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: "remote_edge_rejected",
+        status: 404,
+        path: "/nope",
+      }),
+    );
+    expect(JSON.stringify(events)).not.toContain("secret");
+  });
   it("ignores untrusted forwarding headers on OAuth without logging a proxy misconfiguration", async () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -196,7 +234,14 @@ describe("Streamable HTTP service", () => {
         );
         const wireTools = await client.request(
           { method: "tools/list" },
-          z.object({ tools: z.array(z.looseObject({ name: z.string(), inputSchema: z.looseObject({}) })) }),
+          z.object({
+            tools: z.array(
+              z.looseObject({
+                name: z.string(),
+                inputSchema: z.looseObject({}),
+              }),
+            ),
+          }),
         );
         for (const tool of wireTools.tools) {
           expect(tool.securitySchemes).toEqual([
@@ -342,7 +387,11 @@ describe("Streamable HTTP service", () => {
         const flow = /name="flow" value="([^"]+)"/.exec(
           await consent.text(),
         )![1];
-        for (const rejectedOrigin of [undefined, "null", "https://attacker.invalid"]) {
+        for (const rejectedOrigin of [
+          undefined,
+          "null",
+          "https://attacker.invalid",
+        ]) {
           const denied = await fetch(base + "/link", {
             method: "POST",
             redirect: "manual",

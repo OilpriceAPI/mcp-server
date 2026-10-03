@@ -66,14 +66,31 @@ export function createRemoteServer(options: RemoteOptions) {
       res.setHeader("X-Content-Type-Options", "nosniff");
       if (req.method === "GET" && req.url === "/health")
         return json(res, 200, { status: "ok", version: PLUGIN_VERSION });
-      if (req.headers.host !== publicUrl.host)
+      // Platform connectors call us server-to-server, so an edge rejection
+      // is invisible to us unless it is logged.
+      const edgeReject = (status: number, reason: string) => {
+        options.writeEvent?.({
+          event: "remote_edge_rejected",
+          status,
+          reason,
+          method: req.method,
+          path: (req.url ?? "").split("?")[0].slice(0, 120),
+          host: String(req.headers.host ?? "").slice(0, 120),
+          origin: String(req.headers.origin ?? "").slice(0, 120),
+        });
+      };
+      if (req.headers.host !== publicUrl.host) {
+        edgeReject(421, "host");
         return json(res, 421, { error: "Invalid host" });
+      }
       if (
         req.headers.origin &&
         req.headers.origin !== publicUrl.origin &&
         !(options.allowedOrigins ?? []).includes(req.headers.origin)
-      )
+      ) {
+        edgeReject(403, "origin");
         return json(res, 403, { error: "Origin not allowed" });
+      }
       if (
         req.method === "GET" &&
         req.url === "/.well-known/openai-apps-challenge"
@@ -135,13 +152,18 @@ export function createRemoteServer(options: RemoteOptions) {
             !authLimit.allow(req.socket.remoteAddress ?? "unknown")
           ) {
             res.setHeader("Retry-After", "60");
+            edgeReject(429, "oauth_velocity");
             return json(res, 429, {
               error: "Authorization velocity limit reached",
             });
           }
+          res.on("finish", () => {
+            if (res.statusCode >= 400) edgeReject(res.statusCode, "oauth");
+          });
           oauthApp(req, res);
           return;
         }
+        edgeReject(404, "not_found");
         return json(res, 404, { error: "Not found" });
       }
       if (req.method !== "POST") {
