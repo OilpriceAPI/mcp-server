@@ -86,7 +86,8 @@ try {
     const response = await client.callTool({ name: tool, arguments: args });
     const data = response.structuredContent;
     const text = JSON.stringify(response);
-    if (data?.website_url !== "https://www.oilpriceapi.com/")
+    // SDK schema rejections precede the handler and contain no market data.
+    if (expected !== "invalid" && data?.website_url !== "https://www.oilpriceapi.com/")
       throw new Error(name + " source website missing");
     if (expected === "boundary" && response._meta?.["mcp/www_authenticate"])
       throw new Error(name + " unexpectedly prompts account linking");
