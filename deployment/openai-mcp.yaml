@@ -21,6 +21,10 @@ services:
       - key: NODE_ENV
         scope: RUN_TIME
         value: production
+      # Claude's hosted connector sends Origin: https://claude.ai on /register and /mcp.
+      - key: MCP_ALLOWED_ORIGINS
+        scope: RUN_TIME
+        value: https://claude.ai,https://claude.com
     health_check:
       http_path: /health
       initial_delay_seconds: 10
