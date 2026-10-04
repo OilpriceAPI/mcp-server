@@ -40,6 +40,13 @@ export class PluginOAuth implements OAuthServerProvider {
   private clients = new Map<string, OAuthClientInformationFull>();
   private forms = new Map<string, Grant>();
   private codes = new Map<string, Grant>();
+  // Completed links, kept briefly so a double-submitted form (Enter + click)
+  // gets the same redirect instead of a "session mismatch" error page that
+  // replaces the successful one.
+  private linked = new Map<
+    string,
+    { redirect: string; keyHash: string; expires: number }
+  >();
   private tokens = new Map<string, Token>();
   private refreshTokens = new Map<string, Token>();
   private cleanupTimer: ReturnType<typeof setInterval>;
@@ -70,7 +77,13 @@ export class PluginOAuth implements OAuthServerProvider {
     for (const [key, client] of this.clients)
       if ((client.client_id_issued_at ?? 0) * 1000 + 30 * 86400000 <= now)
         this.clients.delete(key);
-    for (const map of [this.forms, this.codes, this.tokens, this.refreshTokens])
+    for (const map of [
+      this.forms,
+      this.codes,
+      this.tokens,
+      this.refreshTokens,
+      this.linked,
+    ])
       for (const [key, value] of map) if (value.expires <= now) map.delete(key);
   }
   private capacity(map: Map<string, unknown>) {
@@ -199,7 +212,7 @@ export class PluginOAuth implements OAuthServerProvider {
     res
       .type("html")
       .send(
-        `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect OilPriceAPI</title><style>body{font:16px system-ui;max-width:34rem;margin:8vh auto;padding:24px;color:#15263b}input,button{font:inherit;padding:12px;width:100%;box-sizing:border-box;margin:8px 0}button{background:#153e63;color:white;border:0;border-radius:6px}a{color:#153e63}</style><h1>Connect OilPriceAPI</h1><p>Returning to <strong>${escapeHtml(new URL(params.redirectUri).host)}</strong> after you connect.</p><p>Allow this connection to read supported energy datasets using your account's existing entitlements. No write access is requested.</p><p>Paste your OilPriceAPI API key. It stays on the server and is never returned to the model. Connections expire and may require reconnecting after a service restart.</p><form method="post" action="/link"><input type="hidden" name="flow" value="${flow}"><label for="key">OilPriceAPI API key</label><input id="key" name="key" type="password" autocomplete="off" required maxlength="256"><button type="submit">Connect read access</button></form><p><a href="https://www.oilpriceapi.com/dashboard">Find your API key</a> · <a href="https://www.oilpriceapi.com/privacy">Privacy</a> · <a href="https://www.oilpriceapi.com/support">Support</a></p></html>`,
+        `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect OilPriceAPI</title><style>body{font:16px system-ui;max-width:34rem;margin:8vh auto;padding:24px;color:#15263b}input,button{font:inherit;padding:12px;width:100%;box-sizing:border-box;margin:8px 0}button{background:#153e63;color:white;border:0;border-radius:6px}a{color:#153e63}</style><h1>Connect OilPriceAPI</h1><p>Returning to <strong>${escapeHtml(new URL(params.redirectUri).host)}</strong> after you connect.</p><p>Allow this connection to read supported energy datasets using your account's existing entitlements. No write access is requested.</p><p>Paste your OilPriceAPI API key. It stays on the server and is never returned to the model. Connections expire and may require reconnecting after a service restart.</p><form method="post" action="/link"><input type="hidden" name="flow" value="${flow}"><label for="key">OilPriceAPI API key</label><input id="key" name="key" type="password" autocomplete="off" required maxlength="256"><button type="submit">Connect read access</button></form><p><a href="https://www.oilpriceapi.com/dashboard" target="_blank" rel="noopener noreferrer">Find your API key</a> · <a href="https://www.oilpriceapi.com/privacy" target="_blank" rel="noopener noreferrer">Privacy</a> · <a href="https://www.oilpriceapi.com/support" target="_blank" rel="noopener noreferrer">Support</a></p></html>`,
       );
   }
   async completeLink(
@@ -207,9 +220,11 @@ export class PluginOAuth implements OAuthServerProvider {
     cookieFlow: string | undefined,
     key: string,
   ) {
+    this.prune();
+    const done = flow ? this.linked.get(hash(flow)) : undefined;
+    if (done && equal(done.keyHash, hash(key))) return done.redirect;
     if (!cookieFlow || !equal(flow, cookieFlow))
       throw new InvalidRequestError("Authorization session mismatch");
-    this.prune();
     const grant = this.forms.get(hash(flow));
     if (!grant)
       throw new InvalidGrantError("Authorization session expired. Reconnect.");
@@ -260,6 +275,12 @@ export class PluginOAuth implements OAuthServerProvider {
     if (grant.params.state)
       redirect.searchParams.set("state", grant.params.state);
     redirect.searchParams.set("iss", this.origin + "/");
+    this.capacity(this.linked);
+    this.linked.set(hash(flow), {
+      redirect: redirect.href,
+      keyHash: hash(key),
+      expires: Date.now() + 60_000,
+    });
     return redirect.href;
   }
   async challengeForAuthorizationCode(
