@@ -9,7 +9,7 @@ Browser repair receipt: [browser OAuth release, 2026-10-03](OAUTH_BROWSER_RELEAS
 ## Production receipt — 2026-10-01
 
 - MCP PR #134 merged at `d125d77d457dbaeb7d646035a53a0960f2ec4611` after adversarial review; 516 tests and CI passed. The post-merge tree matched the reviewed branch; package and public-claims compatibility smoke passed.
-- Stable HTTPS endpoint: `https://oilpriceapi-openai-mcp-dafbh.ondigitalocean.app/mcp`.
+- Stable HTTPS endpoint: `https://mcp.oilpriceapi.com/mcp`.
 - Separate DigitalOcean app `4a89cb34-72a3-4daf-a893-0628699ded26`, final deployment `98c7e488-08b4-445c-9db4-e0535da5e664`, verified ACTIVE. Neither existing API nor frontend spec changed for MCP.
 - Final immutable image `sha256:f612c1e64bd81ae06f0a7d8e3518e3325e529e84e87cdc8444655e23db97d3f2` from the reviewed source. GitHub-source creation failed because the DO integration lacked repo access; DOCR deployment avoids expanding that access.
 - Production health, initialize, seven-tool inventory, usable anonymous Brent/WTI comparison and overview, source context, premium boundaries and bulk caps passed. Malformed JSON, batches, attacker Origin, invalid bearer-token reflection, open-redirect attempts and absent domain challenge were tested live.

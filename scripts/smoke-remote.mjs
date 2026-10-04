@@ -82,7 +82,40 @@ try {
     ],
     ["no-secrets", "energy_market_overview", { category: "all" }, "context"],
   ];
+  // Anonymous calls to account tools are refused at the transport with a 401
+  // challenge, which is what starts sign-in in MCP clients (lazy auth).
+  const challenge = async (name, tool, args) => {
+    const raw = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        "X-OPA-Telemetry-Exclude": "1",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: tool, arguments: args },
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const header = raw.headers.get("www-authenticate") ?? "";
+    if (
+      raw.status !== 401 ||
+      !header.startsWith("Bearer ") ||
+      !header.includes("/.well-known/oauth-protected-resource/mcp")
+    )
+      throw new Error(name + " sign-in challenge failed: " + raw.status);
+    console.log(
+      JSON.stringify({ case: name, outcome: "auth_challenge", access: "demo" }),
+    );
+  };
   for (const [name, tool, args, expected] of cases) {
+    if (!credential && (expected === "boundary" || name === "no-bulk")) {
+      await challenge(name, tool, args);
+      continue;
+    }
     const response = await client.callTool({ name: tool, arguments: args });
     const data = response.structuredContent;
     const text = JSON.stringify(response);
