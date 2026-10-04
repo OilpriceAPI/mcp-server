@@ -80,6 +80,14 @@ const schemas = {
     .strict(),
 };
 export type EnergyTool = keyof typeof schemas;
+// Tools that need a linked account. Anonymous calls to these get an HTTP 401
+// challenge at the transport (see remote.ts) so clients can start sign-in.
+export const ACCOUNT_TOOLS: ReadonlySet<string> = new Set<EnergyTool>([
+  "energy_history",
+  "energy_futures_curve",
+  "energy_marine_fuels",
+  "energy_drilling",
+]);
 const descriptions: Record<EnergyTool, string> = {
   energy_get_price:
     "Read one supported latest energy benchmark. Preserve dataset name, currency, unit and all available source/freshness fields. Latest benchmarks may be futures; never relabel them spot or settlement. Demo is available without signup.",

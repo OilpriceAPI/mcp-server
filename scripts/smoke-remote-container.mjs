@@ -23,22 +23,38 @@ await client.connect(
 try {
   const tools = await client.listTools();
   if (tools.tools.length !== 7) throw new Error("Wrong tool inventory");
-  const boundary = await client.callTool({
-    name: "energy_futures_curve",
-    arguments: { instrument: "natural-gas" },
+  // Anonymous account-tool calls get a 401 sign-in challenge (lazy auth).
+  const boundary = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      "X-OPA-Telemetry-Exclude": "1",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "energy_futures_curve",
+        arguments: { instrument: "natural-gas" },
+      },
+    }),
   });
   if (
-    !boundary.isError ||
-    boundary.structuredContent?.outcome !== "entitlement"
+    boundary.status !== 401 ||
+    !boundary.headers
+      .get("www-authenticate")
+      ?.includes("/.well-known/oauth-protected-resource/mcp")
   )
-    throw new Error("Missing premium boundary");
+    throw new Error("Missing premium sign-in challenge");
   const metadata = await (
     await fetch(new URL("/.well-known/oauth-protected-resource/mcp", url))
   ).json();
   if (!metadata.resource.endsWith("/mcp"))
     throw new Error("Missing OAuth metadata");
   console.log(
-    "Container health, initialization, seven-tool list, OAuth metadata and premium boundary passed.",
+    "Container health, initialization, seven-tool list, OAuth metadata and premium sign-in challenge passed.",
   );
 } finally {
   await client.close();

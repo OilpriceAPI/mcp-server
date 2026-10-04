@@ -9,6 +9,7 @@ import { pathToFileURL } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { PluginOAuth, createOAuthApp } from "./pluginOAuth.js";
 import {
+  ACCOUNT_TOOLS,
   createEnergyServer,
   DemoCache,
   PLUGIN_VERSION,
@@ -237,6 +238,36 @@ export function createRemoteServer(options: RemoteOptions) {
         }
         if (Array.isArray(body))
           return json(res, 400, { error: "Batch requests are unsupported" });
+        // Lazy auth: a tool handler can only answer with an HTTP-success tool result,
+        // which never starts sign-in. Claude (and other MCP clients) start
+        // OAuth only on a transport-level 401 with WWW-Authenticate.
+        // https://claude.com/docs/connectors/building/lazy-authentication
+        const call = body as { method?: unknown; params?: { name?: unknown } };
+        if (
+          !key &&
+          options.oauth &&
+          call?.method === "tools/call" &&
+          typeof call.params?.name === "string" &&
+          ACCOUNT_TOOLS.has(call.params.name)
+        ) {
+          options.writeEvent?.({
+            event: "plugin_auth_challenge",
+            tool: call.params.name,
+            population:
+              req.headers["x-opa-telemetry-exclude"] === "1"
+                ? "internal_test"
+                : "unclassified",
+          });
+          res.setHeader(
+            "WWW-Authenticate",
+            `Bearer error="invalid_token", error_description="Connect an OilPriceAPI account for this dataset", resource_metadata="${publicUrl.origin}/.well-known/oauth-protected-resource/mcp", scope="energy:read"`,
+          );
+          return json(res, 401, {
+            error: "invalid_token",
+            error_description:
+              "Connect an OilPriceAPI account for this dataset",
+          });
+        }
         const transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: undefined,
           enableJsonResponse: true,

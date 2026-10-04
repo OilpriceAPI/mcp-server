@@ -1,7 +1,7 @@
 import { randomBytes, createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 
-const endpoint = "https://oilpriceapi-openai-mcp-dafbh.ondigitalocean.app/mcp";
+const endpoint = "https://mcp.oilpriceapi.com/mcp";
 const origin = new URL(endpoint).origin;
 const key = process.env.OILPRICEAPI_TEST_KEY;
 const verifier = randomBytes(32).toString("base64url");
