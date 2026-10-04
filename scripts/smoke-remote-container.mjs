@@ -22,7 +22,7 @@ await client.connect(
 );
 try {
   const tools = await client.listTools();
-  if (tools.tools.length !== 7) throw new Error("Wrong tool inventory");
+  if (tools.tools.length !== 9) throw new Error("Wrong tool inventory");
   // Anonymous account-tool calls get a 401 sign-in challenge (lazy auth).
   const boundary = await fetch(url, {
     method: "POST",
@@ -54,7 +54,7 @@ try {
   if (!metadata.resource.endsWith("/mcp"))
     throw new Error("Missing OAuth metadata");
   console.log(
-    "Container health, initialization, seven-tool list, OAuth metadata and premium sign-in challenge passed.",
+    "Container health, initialization, nine-tool list, OAuth metadata and premium sign-in challenge passed.",
   );
 } finally {
   await client.close();

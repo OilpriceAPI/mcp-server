@@ -195,8 +195,10 @@ describe("public energy facade", () => {
       outcome: "entitlement",
       website_url: "https://www.oilpriceapi.com/",
     });
-    expect(result).not.toHaveProperty('_meta.mcp/www_authenticate');
-    expect(body(result).handoff_url).toMatch(/^https:\/\/plugin\.example\/handoff\//);
+    expect(result).not.toHaveProperty("_meta.mcp/www_authenticate");
+    expect(body(result).handoff_url).toMatch(
+      /^https:\/\/plugin\.example\/handoff\//,
+    );
     expect(fetchImpl).not.toHaveBeenCalled();
   });
   it.each([401, 402, 403, 404, 500])(
@@ -516,4 +518,166 @@ describe("public energy facade", () => {
       availability: "available",
     });
   });
+});
+
+describe("catalog lookup", () => {
+  const catalog = {
+    status: "success",
+    data: {
+      commodities: [
+        {
+          code: "NATURAL_GAS_USD",
+          name: "Henry Hub Natural Gas",
+          category: "natural_gas",
+          unit: "MMBtu",
+          currency: "USD",
+          update_frequency: "daily",
+          has_data: true,
+          api_key: "should-not-leak",
+        },
+        {
+          code: "NATURAL_GAS_WAHA",
+          name: "Waha Natural Gas",
+          category: "natural_gas",
+          unit: "MMBtu",
+          currency: "USD",
+          update_frequency: "daily",
+          has_data: true,
+        },
+        {
+          code: "US_RIG_COUNT",
+          name: "US Rig Count",
+          category: "drilling_intelligence",
+          description: "Weekly active drilling rig count",
+          unit: "rigs",
+          currency: "COUNT",
+        },
+      ],
+    },
+  };
+  it("finds Waha by name and returns only listed fields", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(response(catalog));
+    const data = body(
+      await executeEnergyTool(
+        "energy_search_catalog",
+        { query: "waha" },
+        { key: "catalog-key-1", fetchImpl },
+      ),
+    );
+    expect(data.matches).toEqual([
+      {
+        code: "NATURAL_GAS_WAHA",
+        name: "Waha Natural Gas",
+        category: "natural_gas",
+        unit: "MMBtu",
+        currency: "USD",
+        update_frequency: "daily",
+        has_data: true,
+      },
+    ]);
+    expect(data.catalog_size).toBe(3);
+    expect(JSON.stringify(data)).not.toContain("should-not-leak");
+    expect(String(fetchImpl.mock.calls[0][0])).toContain("/v1/commodities");
+  });
+  it("ranks an exact code first and requires every token", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(response(catalog));
+    const exact = body(
+      await executeEnergyTool(
+        "energy_search_catalog",
+        { query: "natural gas usd" },
+        { key: "catalog-key-2", fetchImpl },
+      ),
+    );
+    expect(exact.matches[0].code).toBe("NATURAL_GAS_USD");
+    const none = body(
+      await executeEnergyTool(
+        "energy_search_catalog",
+        { query: "waha rigs" },
+        { key: "catalog-key-2", fetchImpl },
+      ),
+    );
+    expect(none.matches).toEqual([]);
+    // Second search for the same credential is served from cache.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+  it("rejects injection-shaped queries and codes before any request", async () => {
+    const fetchImpl = vi.fn();
+    for (const [tool, args] of [
+      ["energy_search_catalog", { query: "a" }],
+      ["energy_search_catalog", { query: "<script>" }],
+      ["energy_get_latest", { code: "WTI_USD&by_code=X" }],
+      ["energy_get_latest", { code: "wti_usd" }],
+    ] as const) {
+      const data = body(
+        await executeEnergyTool(tool, args, {
+          key: "k-123456789012345",
+          fetchImpl,
+        }),
+      );
+      expect(data.outcome).toBe("invalid_argument");
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+  it("reads the latest price for an exact code and refuses a wrong-code reply", async () => {
+    const waha = {
+      code: "NATURAL_GAS_WAHA",
+      name: "Waha Natural Gas",
+      price: 1.67,
+      currency: "USD",
+      unit: "MMBtu",
+      created_at: "2026-10-02T20:30:31Z",
+    };
+    const ok = body(
+      await executeEnergyTool(
+        "energy_get_latest",
+        { code: "NATURAL_GAS_WAHA" },
+        {
+          key: "latest-key-1",
+          fetchImpl: vi
+            .fn()
+            .mockResolvedValue(response({ status: "success", data: waha })),
+        },
+      ),
+    );
+    expect(ok.observations[0]).toMatchObject({
+      code: "NATURAL_GAS_WAHA",
+      availability: "available",
+      price: 1.67,
+      unit: "MMBtu",
+    });
+    const wrong = await executeEnergyTool(
+      "energy_get_latest",
+      { code: "NATURAL_GAS_WAHA" },
+      {
+        key: "latest-key-1",
+        fetchImpl: vi
+          .fn()
+          .mockResolvedValue(
+            response({ status: "success", data: { ...waha, code: "WTI_USD" } }),
+          ),
+      },
+    );
+    expect(wrong.isError).toBe(true);
+    expect(body(wrong).observations[0]).toMatchObject({
+      availability: "unavailable",
+      price: null,
+    });
+  });
+  it.each(["energy_search_catalog", "energy_get_latest"] as const)(
+    "gates anonymous %s without calling upstream",
+    async (tool) => {
+      const fetchImpl = vi.fn();
+      const data = body(
+        await executeEnergyTool(
+          tool,
+          tool === "energy_search_catalog"
+            ? { query: "waha" }
+            : { code: "NATURAL_GAS_WAHA" },
+          { fetchImpl },
+        ),
+      );
+      expect(data.outcome).toBe("entitlement");
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
 });

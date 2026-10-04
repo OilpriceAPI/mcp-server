@@ -8,6 +8,7 @@ import {
   requestApi,
 } from "./index.js";
 import { withRequestCredential } from "./requestCredential.js";
+import { createHash } from "node:crypto";
 
 export const PLUGIN_VERSION = "0.1.1";
 export const WEBSITE_URL = "https://www.oilpriceapi.com/";
@@ -78,6 +79,20 @@ const schemas = {
         .default("US"),
     })
     .strict(),
+  energy_search_catalog: z
+    .object({
+      query: z
+        .string()
+        .trim()
+        .min(2)
+        .max(60)
+        .regex(/^[\p{L}\p{N} ._\-/&()]+$/u),
+      limit: z.number().int().min(1).max(10).default(10),
+    })
+    .strict(),
+  energy_get_latest: z
+    .object({ code: z.string().regex(/^[A-Z0-9_]{2,64}$/) })
+    .strict(),
 };
 export type EnergyTool = keyof typeof schemas;
 // Tools that need a linked account. Anonymous calls to these get an HTTP 401
@@ -87,6 +102,8 @@ export const ACCOUNT_TOOLS: ReadonlySet<string> = new Set<EnergyTool>([
   "energy_futures_curve",
   "energy_marine_fuels",
   "energy_drilling",
+  "energy_search_catalog",
+  "energy_get_latest",
 ]);
 const descriptions: Record<EnergyTool, string> = {
   energy_get_price:
@@ -101,6 +118,10 @@ const descriptions: Record<EnergyTool, string> = {
     "Read an authenticated energy forward curve, at most 12 contracts. Preserve contract month, trading date and expiration semantics. Missing expiration or source dates remain unreported. Account entitlement is enforced by OilPriceAPI.",
   energy_marine_fuels:
     "Read authenticated bunker quotes for 1–2 supported ports and one exact grade: VLSFO, MGO_05S or HFO_380. Preserve port, grade and per-quote freshness. No substitution when a quote is unavailable. Account entitlement is enforced by OilPriceAPI.",
+  energy_search_catalog:
+    "Search the full OilPriceAPI commodity catalog (crude grades, regional natural gas hubs such as Waha, refined products, power, coal, metals, freight and more) by name or code. Returns at most 10 matching codes with name, category, unit and update frequency. Use it to find the code, then call energy_get_latest. Requires a connected OilPriceAPI account.",
+  energy_get_latest:
+    "Read the latest price for one exact commodity code from the catalog (find codes with energy_search_catalog). Preserve dataset name, currency, unit and all source/freshness fields; latest is not necessarily spot or settlement. Requires a connected account; access follows the account's plan.",
   energy_drilling:
     "Read authenticated drilling intelligence for a supported geography. Preserve report dates and geography. Permian basin counts and prior-report changes are unavailable unless explicitly supplied; do not substitute US totals. Account entitlement is enforced by OilPriceAPI.",
 };
@@ -282,10 +303,12 @@ export async function executeEnergyTool(
           ? "marine"
           : tool === "energy_drilling"
             ? "drilling"
-            : input.benchmark === "NATURAL_GAS_USD" ||
-                input.category === "natural_gas"
-              ? "natural_gas"
-              : "crude_refined";
+            : tool === "energy_search_catalog" || tool === "energy_get_latest"
+              ? "catalog"
+              : input.benchmark === "NATURAL_GAS_USD" ||
+                  input.category === "natural_gas"
+                ? "natural_gas"
+                : "crude_refined";
     const api = async (endpoint: string): Promise<any> =>
       withRequestCredential(options.key, async () => {
         if (deadline.signal.aborted) throw new PluginFailure("upstream_error");
@@ -501,6 +524,39 @@ export async function executeEnergyTool(
           (row: any) => row.availability === "available",
         ).length;
         body = { dataset: "marine_fuels", quotes };
+      } else if (tool === "energy_search_catalog") {
+        const catalog = await catalogCache.get(options.key, async () => {
+          const data = record(await api("/v1/commodities"));
+          const rows = record(data.data).commodities;
+          if (!Array.isArray(rows)) throw new PluginFailure("unavailable");
+          return rows;
+        });
+        const matches = searchCatalog(catalog, input.query, input.limit);
+        count = matches.length;
+        body = {
+          dataset: "commodity_catalog",
+          query: input.query,
+          matches,
+          catalog_size: catalog.length,
+          next_step:
+            "Call energy_get_latest with one returned code. Do not guess codes that were not returned.",
+        };
+      } else if (tool === "energy_get_latest") {
+        const data = await api(`/v1/prices/latest?by_code=${input.code}`);
+        const row = record(data.data);
+        // Wrong-code 200 must never be accepted as this commodity.
+        const observed = observation(
+          row.code === input.code ? row : {},
+          input.code,
+        );
+        count = observed.availability === "available" ? 1 : 0;
+        body = {
+          dataset: "latest_price",
+          code: input.code,
+          observations: [observed],
+          missing_values:
+            "Unavailable is not zero. Do not estimate or substitute.",
+        };
       } else {
         // Current REST snapshot has no basin-level contract. Do not substitute
         // national counts for the positive review's Permian question.
@@ -594,7 +650,7 @@ export function createEnergyServer(options: EnergyPluginOptions = {}) {
     { name: "OilPriceAPI", version: PLUGIN_VERSION },
     {
       instructions:
-        "Use OilPriceAPI for current energy data. Preserve source timestamps, units, currency, dataset distinctions and freshness limitations. Never estimate unavailable data or substitute a different dataset. Use the anonymous demo for supported latest prices and comparisons without requesting an API key. Henry Hub latest benchmark is demo eligible; its futures curve requires an entitled subscription. On anonymous premium requests explain the subscription boundary and offer the handoff link; do not ask for secrets in chat. Include one clickable source link to website_url in each data answer. Respect account entitlements. No investment guarantees.",
+        "Use OilPriceAPI for current energy data. Preserve source timestamps, units, currency, dataset distinctions and freshness limitations. Never estimate unavailable data or substitute a different dataset. Use the anonymous demo for supported latest prices and comparisons without requesting an API key. For any other commodity (for example Waha or other regional gas hubs, crude grades, coal, power), find its code with energy_search_catalog and read it with energy_get_latest instead of answering from web search. Henry Hub latest benchmark is demo eligible; its futures curve requires an entitled subscription. On anonymous premium requests explain the subscription boundary and offer the handoff link; do not ask for secrets in chat. Include one clickable source link to website_url in each data answer. Respect account entitlements. No investment guarantees.",
     },
   );
   // The SDK currently serializes only standard MCP fields. Keep canonical OpenAI
@@ -608,6 +664,8 @@ export function createEnergyServer(options: EnergyPluginOptions = {}) {
     energy_futures_curve: "Futures Curve",
     energy_marine_fuels: "Marine Fuel Prices",
     energy_drilling: "Drilling Activity",
+    energy_search_catalog: "Search Commodity Catalog",
+    energy_get_latest: "Get Latest Price by Code",
   };
   const tools = (Object.keys(schemas) as EnergyTool[]).map((name) => {
     const securitySchemes = [
@@ -641,4 +699,77 @@ export function createEnergyServer(options: EnergyPluginOptions = {}) {
   // Users may separately link an account to unlock entitled behavior.
   server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools }));
   return server;
+}
+
+type CatalogRow = Record<string, unknown>;
+// The catalog response is large (~800 KB, ~1,000 codes), so it is cached per
+// credential for ten minutes. Keyed by a hash, never by the key itself.
+class CatalogCache {
+  private entries = new Map<string, { rows: CatalogRow[]; expires: number }>();
+  async get(key: string | undefined, load: () => Promise<CatalogRow[]>) {
+    const id = createHash("sha256")
+      .update(key ?? "")
+      .digest("hex");
+    const now = Date.now();
+    const hit = this.entries.get(id);
+    if (hit && hit.expires > now) return hit.rows;
+    const rows = await load();
+    if (this.entries.size >= 100) {
+      for (const [k, v] of this.entries)
+        if (v.expires <= now) this.entries.delete(k);
+      const oldest = this.entries.keys().next().value;
+      if (this.entries.size >= 100 && oldest) this.entries.delete(oldest);
+    }
+    this.entries.set(id, { rows, expires: now + 600_000 });
+    return rows;
+  }
+}
+const catalogCache = new CatalogCache();
+
+const text = (value: unknown, max = 120) =>
+  typeof value === "string" && value.length <= 400 ? value.slice(0, max) : null;
+
+// Every query token must appear in the code, name, category or description.
+// Ranked: exact code, then code or name prefix, then name/code containing
+// every token, then description-only matches.
+export function searchCatalog(rows: CatalogRow[], query: string, limit = 10) {
+  const lower = query.trim().toLowerCase();
+  const tokens = lower.split(/[\s_/-]+/).filter(Boolean);
+  const asCode = lower.replace(/\s+/g, "_");
+  const scored: Array<{ score: number; row: CatalogRow }> = [];
+  for (const row of rows) {
+    const code = text(row.code, 64);
+    if (!code) continue;
+    const lc = code.toLowerCase();
+    const name = (text(row.name) ?? "").toLowerCase();
+    const haystack = [
+      lc,
+      name,
+      text(row.category) ?? "",
+      (text(row.description, 400) ?? "").toLowerCase(),
+    ].join(" ");
+    if (!tokens.every((t) => haystack.includes(t))) continue;
+    const score =
+      lc === asCode
+        ? 0
+        : lc.startsWith(asCode) || name.startsWith(lower)
+          ? 1
+          : tokens.every((t) => name.includes(t) || lc.includes(t))
+            ? 2
+            : 3;
+    scored.push({ score, row });
+  }
+  scored.sort(
+    (a, b) =>
+      a.score - b.score || String(a.row.code).localeCompare(String(b.row.code)),
+  );
+  return scored.slice(0, limit).map(({ row }) => ({
+    code: text(row.code, 64),
+    name: text(row.name),
+    category: text(row.category, 60),
+    unit: text(row.unit, 40),
+    currency: text(row.currency, 12),
+    update_frequency: text(row.update_frequency, 40),
+    has_data: typeof row.has_data === "boolean" ? row.has_data : null,
+  }));
 }
