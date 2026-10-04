@@ -238,7 +238,7 @@ export function createRemoteServer(options: RemoteOptions) {
         }
         if (Array.isArray(body))
           return json(res, 400, { error: "Batch requests are unsupported" });
-        // Lazy auth: a tool handler can only answer with a 200 tool result,
+        // Lazy auth: a tool handler can only answer with an HTTP-success tool result,
         // which never starts sign-in. Claude (and other MCP clients) start
         // OAuth only on a transport-level 401 with WWW-Authenticate.
         // https://claude.com/docs/connectors/building/lazy-authentication
