@@ -66,6 +66,82 @@ async function service(
 }
 const headers = { Host: "plugin.example" };
 describe("Streamable HTTP service", () => {
+  it("challenges anonymous account-tool calls with 401 so clients can start sign-in", async () => {
+    const events: any[] = [];
+    await service(
+      async (base) => {
+        const call = (name: string, args: object) =>
+          fetch(base + "/mcp", {
+            method: "POST",
+            headers: {
+              ...headers,
+              "Content-Type": "application/json",
+              Accept: "application/json, text/event-stream",
+            },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id: 1,
+              method: "tools/call",
+              params: { name, arguments: args },
+            }),
+          });
+        for (const [name, args] of [
+          ["energy_history", { benchmark: "BRENT_CRUDE_USD", days: 7 }],
+          ["energy_futures_curve", { instrument: "brent" }],
+          ["energy_marine_fuels", { ports: ["SGSIN"], grade: "VLSFO" }],
+          ["energy_drilling", { geography: "US" }],
+        ] as const) {
+          const challenged = await call(name, args);
+          expect(challenged.status).toBe(401);
+          const header = challenged.headers.get("www-authenticate")!;
+          expect(header).toMatch(/^Bearer /);
+          expect(header).toContain('resource_metadata="https://127.0.0.1:');
+          expect(header).toContain("/.well-known/oauth-protected-resource/mcp");
+          expect(header).toContain('scope="energy:read"');
+        }
+        const demo = await call("energy_get_price", {
+          benchmark: "WTI_USD",
+        });
+        expect(demo.status).toBe(200);
+        expect(demo.headers.get("www-authenticate")).toBeNull();
+      },
+      undefined,
+      true,
+      (event: unknown) => events.push(event),
+    );
+    expect(
+      events
+        .filter((e) => e.event === "plugin_auth_challenge")
+        .map((e) => e.tool),
+    ).toEqual([
+      "energy_history",
+      "energy_futures_curve",
+      "energy_marine_fuels",
+      "energy_drilling",
+    ]);
+  });
+  it("keeps the in-band entitlement result when OAuth is not configured", async () =>
+    service(async (base) => {
+      const response = await fetch(base + "/mcp", {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "energy_history",
+            arguments: { benchmark: "BRENT_CRUDE_USD", days: 7 },
+          },
+        }),
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("entitlement");
+    }));
   it("logs edge rejections so server-to-server failures are visible", async () => {
     const events: any[] = [];
     await service(
