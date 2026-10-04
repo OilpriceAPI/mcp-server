@@ -73,9 +73,11 @@ describe("plugin OAuth boundary", () => {
   it("rejects unregistered redirect destinations before rendering consent", async () => {
     const { provider, client } = setup();
     try {
-      await expect(authorize(provider, client, {
-        redirectUri: "https://attacker.invalid/callback",
-      })).rejects.toThrow("Redirect must match the registered client");
+      await expect(
+        authorize(provider, client, {
+          redirectUri: "https://attacker.invalid/callback",
+        }),
+      ).rejects.toThrow("Redirect must match the registered client");
     } finally {
       provider.close();
     }
@@ -199,9 +201,13 @@ describe("plugin OAuth boundary", () => {
     ).toThrow("Use the OpenAI or Claude callback");
   });
   it("links a Claude connection, names the return host and marks the platform", async () => {
-    const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ status: "success", data: { usage: {} } })),
-    );
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ status: "success", data: { usage: {} } }),
+        ),
+      );
     const provider = new PluginOAuth(origin, fetchImpl);
     try {
       const client = provider.clientsStore.registerClient({
@@ -387,5 +393,76 @@ describe("plugin OAuth boundary", () => {
     );
     vi.advanceTimersByTime(3_600_001);
     await expect(p.verifyAccessToken(token.access_token)).rejects.toThrow();
+  });
+});
+
+describe("client registration", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("accepts client_secret_post and keeps the SDK-issued secret", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const provider = new PluginOAuth(origin, vi.fn());
+    try {
+      const client = provider.clientsStore.registerClient({
+        redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
+        token_endpoint_auth_method: "client_secret_post",
+        client_secret: "sdk-issued-secret",
+      });
+      expect(client.token_endpoint_auth_method).toBe("client_secret_post");
+      expect(client.client_secret).toBe("sdk-issued-secret");
+      const event = JSON.parse(log.mock.calls.at(-1)![0]);
+      expect(event).toMatchObject({
+        event: "oauth_client_registered",
+        redirect_hosts: ["claude.ai"],
+        token_endpoint_auth_method: "client_secret_post",
+      });
+      expect(JSON.stringify(event)).not.toContain("sdk-issued-secret");
+    } finally {
+      provider.close();
+    }
+  });
+  it("strips any secret from public clients", () => {
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const provider = new PluginOAuth(origin, vi.fn());
+    try {
+      const client = provider.clientsStore.registerClient({
+        redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
+        token_endpoint_auth_method: "none",
+        client_secret: "should-not-survive",
+      });
+      expect(client.token_endpoint_auth_method).toBe("none");
+      expect(client.client_secret).toBeUndefined();
+    } finally {
+      provider.close();
+    }
+  });
+  it("logs why a registration was rejected, without the redirect path", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const provider = new PluginOAuth(origin, vi.fn());
+    try {
+      expect(() =>
+        provider.clientsStore.registerClient({
+          redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
+          token_endpoint_auth_method: "client_secret_basic",
+        }),
+      ).toThrow("client_secret_post");
+      expect(() =>
+        provider.clientsStore.registerClient({
+          redirect_uris: ["https://evil.example/secret-path?token=x"],
+          token_endpoint_auth_method: "none",
+        }),
+      ).toThrow("Claude callback");
+      const events = log.mock.calls.map((c) => JSON.parse(c[0]));
+      expect(events[0]).toMatchObject({
+        event: "oauth_registration_rejected",
+        token_endpoint_auth_method: "client_secret_basic",
+      });
+      expect(events[1]).toMatchObject({
+        event: "oauth_registration_rejected",
+        redirect_hosts: ["evil.example"],
+      });
+      expect(JSON.stringify(events)).not.toContain("secret-path");
+    } finally {
+      provider.close();
+    }
   });
 });

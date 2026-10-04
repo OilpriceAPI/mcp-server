@@ -90,17 +90,29 @@ export class PluginOAuth implements OAuthServerProvider {
         >,
       ) => {
         this.capacity(this.clients);
+        const reject = (reason: string): never => {
+          logRegistration("oauth_registration_rejected", input, reason);
+          throw new InvalidClientMetadataError(reason);
+        };
+        // client_secret_post is accepted because the SDK issues the secret and
+        // verifies it at /token; PKCE is still required at /authorize.
+        const confidential =
+          input.token_endpoint_auth_method === "client_secret_post";
         if (
           input.token_endpoint_auth_method &&
-          input.token_endpoint_auth_method !== "none"
+          input.token_endpoint_auth_method !== "none" &&
+          !confidential
         )
-          throw new InvalidClientMetadataError(
-            "Use public-client PKCE authentication",
-          );
+          reject("Use public-client PKCE or client_secret_post authentication");
         if (!input.redirect_uris.length || input.redirect_uris.length > 5)
-          throw new InvalidClientMetadataError("Invalid redirect count");
+          reject("Invalid redirect count");
         for (const redirect of input.redirect_uris) {
-          const url = new URL(redirect);
+          let url: URL;
+          try {
+            url = new URL(redirect);
+          } catch {
+            return reject("Invalid redirect URI");
+          }
           const openai =
             url.protocol === "https:" &&
             url.hostname === "chatgpt.com" &&
@@ -122,7 +134,7 @@ export class PluginOAuth implements OAuthServerProvider {
             url.hash ||
             !(openai || claude || loopback)
           )
-            throw new InvalidClientMetadataError(
+            reject(
               "Use the OpenAI or Claude callback, or a native loopback callback",
             );
         }
@@ -130,13 +142,19 @@ export class PluginOAuth implements OAuthServerProvider {
           ...input,
           client_id: opaque(),
           client_id_issued_at: Math.floor(Date.now() / 1000),
-          token_endpoint_auth_method: "none",
+          token_endpoint_auth_method: confidential
+            ? "client_secret_post"
+            : "none",
           grant_types: ["authorization_code", "refresh_token"],
           response_types: ["code"],
         };
         // Public clients never receive or require a client secret.
-        delete client.client_secret;
+        if (!confidential) {
+          delete client.client_secret;
+          delete client.client_secret_expires_at;
+        } else if (!client.client_secret) reject("Client secret unavailable");
         this.clients.set(client.client_id, client);
+        logRegistration("oauth_client_registered", input);
         return client;
       },
     };
@@ -147,7 +165,9 @@ export class PluginOAuth implements OAuthServerProvider {
     res: Response,
   ) {
     if (!client.redirect_uris.includes(params.redirectUri))
-      throw new InvalidRequestError("Redirect must match the registered client");
+      throw new InvalidRequestError(
+        "Redirect must match the registered client",
+      );
     if (params.resource?.href !== this.resource)
       throw new InvalidRequestError("Resource must match this MCP endpoint");
     if (params.scopes?.some((scope) => scope !== "energy:read"))
@@ -436,5 +456,43 @@ function escapeHtml(value: string) {
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
         c
       ]!,
+  );
+}
+
+// Registration happens server-to-server, so a rejection is invisible unless we
+// log it. Metadata only: no client secret, no redirect path or query.
+function logRegistration(
+  event: string,
+  input: {
+    redirect_uris?: unknown;
+    token_endpoint_auth_method?: unknown;
+    grant_types?: unknown;
+    scope?: unknown;
+    client_name?: unknown;
+  },
+  reason?: string,
+) {
+  const hosts = Array.isArray(input.redirect_uris)
+    ? input.redirect_uris.map((uri) => {
+        try {
+          return new URL(String(uri)).host;
+        } catch {
+          return "invalid";
+        }
+      })
+    : [];
+  console.log(
+    JSON.stringify({
+      event,
+      reason,
+      redirect_hosts: hosts,
+      token_endpoint_auth_method: input.token_endpoint_auth_method ?? null,
+      grant_types: input.grant_types ?? null,
+      scope: typeof input.scope === "string" ? input.scope.slice(0, 100) : null,
+      client_name:
+        typeof input.client_name === "string"
+          ? input.client_name.slice(0, 60)
+          : null,
+    }),
   );
 }
