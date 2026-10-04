@@ -466,3 +466,42 @@ describe("client registration", () => {
     }
   });
 });
+
+describe("/link outcome logging", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("logs why a link failed without logging the key", async () => {
+    const express = (await import("express")).default;
+    const { createOAuthApp } = await import("../pluginOAuth.js");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const provider = new PluginOAuth(origin, vi.fn());
+    const app = createOAuthApp(provider);
+    const server = app.listen(0);
+    try {
+      const port = (server.address() as { port: number }).port;
+      const response = await fetch(`http://127.0.0.1:${port}/link`, {
+        method: "POST",
+        headers: {
+          Origin: origin,
+          "Content-Type": "application/x-www-form-urlencoded",
+          Cookie: "opa_oauth_flow=other-flow",
+        },
+        body: "flow=this-flow&key=caller-key-value-1234",
+      });
+      expect(response.status).toBe(400);
+      const event = log.mock.calls
+        .map((c) => JSON.parse(c[0]))
+        .find((e) => e.event === "oauth_link_failed");
+      expect(event).toMatchObject({
+        message: "Authorization session mismatch",
+        has_cookie: true,
+        key_length: "caller-key-value-1234".length,
+      });
+      expect(JSON.stringify(log.mock.calls)).not.toContain(
+        "caller-key-value-1234",
+      );
+    } finally {
+      server.close();
+      provider.close();
+    }
+  });
+});

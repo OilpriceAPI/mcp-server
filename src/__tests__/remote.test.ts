@@ -232,6 +232,11 @@ describe("Streamable HTTP service", () => {
         expect(tools.tools.every((t) => t.annotations?.readOnlyHint)).toBe(
           true,
         );
+        // Claude's directory requires annotations.title on every tool.
+        for (const tool of tools.tools) {
+          expect(tool.annotations?.title).toMatch(/^[A-Z][A-Za-z ]+$/);
+          expect(tool.title).toBe(tool.annotations?.title);
+        }
         const wireTools = await client.request(
           { method: "tools/list" },
           z.object({

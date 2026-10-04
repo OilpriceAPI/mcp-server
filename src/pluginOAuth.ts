@@ -415,8 +415,26 @@ export function createOAuthApp(provider: PluginOAuth) {
           sameSite: "lax",
         });
         res.setHeader("Cache-Control", "no-store");
+        console.log(
+          JSON.stringify({
+            event: "oauth_link_completed",
+            platform: new URL(redirect).hostname,
+          }),
+        );
         res.redirect(redirect);
-      } catch {
+      } catch (error) {
+        // Error messages here never contain the key.
+        console.log(
+          JSON.stringify({
+            event: "oauth_link_failed",
+            error: error instanceof Error ? error.constructor.name : "unknown",
+            message:
+              error instanceof Error ? error.message.slice(0, 160) : null,
+            has_cookie: Boolean(cookie),
+            key_length:
+              typeof req.body.key === "string" ? req.body.key.length : null,
+          }),
+        );
         res
           .status(400)
           .type("html")
