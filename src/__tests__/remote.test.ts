@@ -286,7 +286,7 @@ describe("Streamable HTTP service", () => {
     );
   });
 
-  it("initializes, lists exactly seven read tools and calls demo end to end", async () =>
+  it("initializes, lists exactly nine read tools and calls demo end to end", async () =>
     service(async (base) => {
       const client = new Client({ name: "test", version: "1" });
       await client.connect(
@@ -300,10 +300,12 @@ describe("Streamable HTTP service", () => {
           "energy_compare",
           "energy_drilling",
           "energy_futures_curve",
+          "energy_get_latest",
           "energy_get_price",
           "energy_history",
           "energy_marine_fuels",
           "energy_market_overview",
+          "energy_search_catalog",
         ]);
         expect(tools.tools.every((t) => t.annotations?.readOnlyHint)).toBe(
           true,

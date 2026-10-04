@@ -26,7 +26,7 @@ await client.connect(
 try {
   const tools = await client.listTools();
   if (
-    tools.tools.length !== 7 ||
+    tools.tools.length !== 9 ||
     tools.tools.some(
       (t) => !t.annotations?.readOnlyHint || !t.name.startsWith("energy_"),
     )
