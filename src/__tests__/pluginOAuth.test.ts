@@ -505,3 +505,81 @@ describe("/link outcome logging", () => {
     }
   });
 });
+
+describe("double-submitted link form", () => {
+  it("returns the same redirect for a resubmit with the same key, after the cookie is cleared", async () => {
+    const { provider, client } = setup();
+    try {
+      const flow = await authorize(provider, client);
+      const first = await provider.completeLink(
+        flow,
+        flow,
+        "caller-key-value-1234",
+      );
+      // The success response cleared the cookie; the second POST has none.
+      const second = await provider.completeLink(
+        flow,
+        undefined,
+        "caller-key-value-1234",
+      );
+      expect(second).toBe(first);
+      await expect(
+        provider.completeLink(flow, undefined, "another-key-value-5678"),
+      ).rejects.toThrow("Authorization session mismatch");
+      await expect(
+        provider.completeLink(
+          "unknown-flow",
+          undefined,
+          "caller-key-value-1234",
+        ),
+      ).rejects.toThrow("Authorization session mismatch");
+    } finally {
+      provider.close();
+    }
+  });
+  it("stops replaying the redirect after 60 seconds", async () => {
+    vi.useFakeTimers();
+    const { provider, client } = setup();
+    try {
+      const flow = await authorize(provider, client);
+      await provider.completeLink(flow, flow, "caller-key-value-1234");
+      vi.advanceTimersByTime(61_000);
+      await expect(
+        provider.completeLink(flow, undefined, "caller-key-value-1234"),
+      ).rejects.toThrow("Authorization session mismatch");
+    } finally {
+      provider.close();
+      vi.useRealTimers();
+    }
+  });
+  it("opens help links in a new tab", async () => {
+    const { provider, client } = setup();
+    let html = "";
+    const res = {
+      cookie: vi.fn(),
+      setHeader: vi.fn(),
+      type: () => res,
+      send: (s: string) => {
+        html = s;
+      },
+    };
+    try {
+      await provider.authorize(
+        client,
+        {
+          resource: new URL(origin + "/mcp"),
+          codeChallenge: challenge,
+          redirectUri: client.redirect_uris[0],
+          scopes: ["energy:read"],
+          state: "s",
+        },
+        res as any,
+      );
+      expect(html).toContain(
+        '<a href="https://www.oilpriceapi.com/dashboard" target="_blank" rel="noopener noreferrer">Find your API key</a>',
+      );
+    } finally {
+      provider.close();
+    }
+  });
+});
