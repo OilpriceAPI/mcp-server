@@ -550,10 +550,7 @@ export async function executeEnergyTool(
       },
       true,
     );
-    if (
-      outcome === "authentication" &&
-      options.resourceUrl
-    ) {
+    if (outcome === "authentication" && options.resourceUrl) {
       return {
         ...failure,
         _meta: {
@@ -594,6 +591,16 @@ export function createEnergyServer(options: EnergyPluginOptions = {}) {
   );
   // The SDK currently serializes only standard MCP fields. Keep canonical OpenAI
   // auth metadata and the compatibility mirror together in the wire descriptor.
+  // Human-readable names for directory listings (annotations.title).
+  const titles: Record<EnergyTool, string> = {
+    energy_get_price: "Get Energy Price",
+    energy_market_overview: "Energy Market Overview",
+    energy_compare: "Compare Energy Benchmarks",
+    energy_history: "Energy Price History",
+    energy_futures_curve: "Futures Curve",
+    energy_marine_fuels: "Marine Fuel Prices",
+    energy_drilling: "Drilling Activity",
+  };
   const tools = (Object.keys(schemas) as EnergyTool[]).map((name) => {
     const securitySchemes = [
       { type: "noauth" },
@@ -601,12 +608,13 @@ export function createEnergyServer(options: EnergyPluginOptions = {}) {
     ];
     return {
       name,
-      title: name.replaceAll("_", " "),
+      title: titles[name],
       description: descriptions[name],
       inputSchema: z.toJSONSchema(schemas[name], { target: "draft-7" }),
       securitySchemes,
       _meta: { securitySchemes },
       annotations: {
+        title: titles[name],
         readOnlyHint: true,
         destructiveHint: false,
         idempotentHint: true,
