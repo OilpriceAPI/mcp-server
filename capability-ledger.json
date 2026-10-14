@@ -1,7 +1,7 @@
 {
   "$comment": "API-to-MCP capability ledger (#77). One row per operation in the published OpenAPI contract. Checked by `npm run check:capability-ledger` against the live contract, build/capabilities.json and src/index.ts. Bump ledgerVersion and append to changes for every decision change, and link the change from the release notes.",
   "schemaVersion": "1.0.0",
-  "ledgerVersion": 2,
+  "ledgerVersion": 3,
   "source": {
     "openapi": {
       "url": "https://api.oilpriceapi.com/openapi.json",
@@ -15,8 +15,8 @@
       "$comment": "families[].pathPrefixes and their audiences are a snapshot of this file. It is not published, so the check fails once the snapshot is older than maxAgeDays.",
       "repository": "OilpriceAPI/oilpriceapi-api",
       "path": "config/openapi_route_policy.yml",
-      "sourceCommit": "531e29899d80261c43c24b8677cbb20c06f974c5",
-      "sourceCommitDate": "2026-09-13T18:43:15Z",
+      "sourceCommit": "66f46ed0d67954416c960fcd1bd3f3c59fa37113",
+      "sourceCommitDate": "2026-10-14T18:38:03Z",
       "maxAgeDays": 30
     }
   },
@@ -286,12 +286,12 @@
     {
       "id": "market-brief",
       "title": "Multi-commodity market brief",
-      "status": "exposed",
+      "status": "partial",
       "owner": "mcp-server",
       "tools": [
         "opa_get_market_brief"
       ],
-      "reason": "Canonical operation exposed; the underscore alias is recorded as an alias."
+      "reason": "Canonical brief exposed; the underscore alias is recorded as an alias; the preview news feed is deferred."
     },
     {
       "id": "subscription-lifecycle",
@@ -542,6 +542,14 @@
       "reason": "Next candidate after the three selections; would let an agent ask what this account can access for one code."
     },
     {
+      "operation": "GET /v1/context/market/news",
+      "family": "market-brief",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Preview RSS article feed whose collection is rollout-gated and may be uninitialized; tags are mentions, not measured disruptions. Revisit once the API promotes it out of preview and an LLM tool can state collection health alongside the articles."
+    },
+    {
       "operation": "GET /v1/demo/prices",
       "family": "demo",
       "status": "exposed",
@@ -771,6 +779,22 @@
       "disposition": "deferred",
       "owner": "mcp-server",
       "reason": "Calendar spreads are derivable from opa_get_futures_curve; revisit alongside selection 2 (#124)."
+    },
+    {
+      "operation": "GET /v1/futures/oman",
+      "family": "futures-expanded",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Beta Oman daily bulletin (OQD, ZGD, ODO are distinct products; close is unavailable and settlement must not stand in for it). Outside the current opa_get_futures instrument enum; revisit after the beta has two archived publication dates and a stable schema."
+    },
+    {
+      "operation": "GET /v1/futures/rbob",
+      "family": "futures-expanded",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "New delayed RBOB curve contract is outside the current instrument enums. Revisit after validating delayed quotes versus prior-session settlement semantics and exact-decimal companion fields; do not substitute the latest gasoline benchmark."
     },
     {
       "operation": "GET /v1/futures/wti",
@@ -1415,14 +1439,6 @@
       "disposition": "unsupported",
       "owner": "mcp-server",
       "reason": "Changes delivery to customer infrastructure; not an action to take from an LLM tool call."
-    },
-    {
-      "operation": "GET /v1/futures/rbob",
-      "family": "futures-expanded",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "New delayed RBOB curve contract is outside the current instrument enums. Revisit after validating delayed quotes versus prior-session settlement semantics and exact-decimal companion fields; do not substitute the latest gasoline benchmark."
     }
   ],
   "changes": [
@@ -1437,6 +1453,12 @@
       "date": "2026-10-03",
       "issue": "https://github.com/OilpriceAPI/mcp-server/pull/143",
       "summary": "Reconcile newly published premium RBOB curve as explicitly deferred; no runtime exposure or entitlement change."
+    },
+    {
+      "ledgerVersion": 3,
+      "date": "2026-10-14",
+      "issue": "https://github.com/OilpriceAPI/mcp-server/issues/159",
+      "summary": "Record two newly published preview operations as explicitly deferred (GET /v1/context/market/news, GET /v1/futures/oman); re-verify family path prefixes against config/openapi_route_policy.yml at oilpriceapi-api 66f46ed0d (only change since 531e29899 is the retired congressional-trades exclusion reason, which no family uses). No runtime exposure or entitlement change."
     }
   ]
 }
