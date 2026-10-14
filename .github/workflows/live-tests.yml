@@ -34,6 +34,7 @@ jobs:
       - run: npm run verify:release-metadata
       - run: npm test
       - run: npm run build
+      - run: npm run check:readme-tools
       - run: npm run generate:live-contracts
       - run: npm run smoke:live-contract-matrix
       # Identity invariant against the LIVE catalog (#8437). Exits 2 when it
