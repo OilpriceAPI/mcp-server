@@ -166,6 +166,25 @@ describe("capability ledger", () => {
     expect(errors).toContain("selection 2: requirements must include input-schema");
   });
 
+  it("records every v3 decision in the v3 changes entry (#167 review)", () => {
+    // The ledger contract: append to changes for every decision change.
+    // Release notes link this summary, so an operation decided under v3 but
+    // missing here is an incomplete audit trail.
+    const v3 = ledger.changes.find(
+      (change: { ledgerVersion: number }) => change.ledgerVersion === 3,
+    );
+    expect(v3).toBeDefined();
+    for (const operation of [
+      "GET /v1/context/market/news",
+      "GET /v1/futures/oman",
+      "GET /v1/meta/methodology",
+      "PATCH /v1/api-keys/{id}",
+    ]) {
+      expect(ledgerOperations).toContain(operation);
+      expect(v3.summary).toContain(operation);
+    }
+  });
+
   it("reports the route-policy snapshot as stale past its age threshold", () => {
     const { maxAgeDays, sourceCommitDate } = ledger.source.routePolicy;
     const late = new Date(Date.parse(sourceCommitDate) + (maxAgeDays + 1) * 86_400_000);
