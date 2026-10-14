@@ -954,6 +954,14 @@
       "reason": "opa_get_plans reads /v1/pricing today; machine-readable limits could replace it."
     },
     {
+      "operation": "GET /v1/meta/methodology",
+      "family": "commodities",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Keyless per-code sources and methodology table, first published 2026-10-14; no measured MCP demand yet, and opa_list_commodities covers catalogue discovery."
+    },
+    {
       "operation": "GET /v1/prices",
       "family": "prices",
       "status": "not_exposed",
