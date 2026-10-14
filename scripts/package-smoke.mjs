@@ -278,7 +278,8 @@ try {
       response.end(JSON.stringify({ status: "ok" }));
       return;
     }
-    if (request.url === "/v1/demo/prices") {
+    // The demo check must carry client=mcp (oilpriceapi-api#9388).
+    if (request.url === "/v1/demo/prices?client=mcp") {
       response.end(
         JSON.stringify({
           status: "success",
