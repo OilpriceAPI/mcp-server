@@ -505,7 +505,7 @@ export async function executeEnergyTool(
             "analysis_date is not necessarily a source observation timestamp. Settlement fields do not imply exchange-grade or real-time data.",
         };
       } else if (tool === "energy_marine_fuels") {
-        const data = await api("/v1/marine-fuels/latest");
+        const data = await api("/v1/prices/marine-fuels/latest");
         const rows = record(data.data).prices;
         if (!Array.isArray(rows)) throw new PluginFailure("unavailable");
         const quotes = input.ports.map((port: string) => {

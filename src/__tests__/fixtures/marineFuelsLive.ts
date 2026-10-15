@@ -1,5 +1,9 @@
 // Live payloads for opa_get_marine_fuels (#120). Do not hand-edit: re-capture.
 
+// Captured from the deprecated /v1/marine-fuels/latest alias. Both it and the
+// canonical /v1/prices/marine-fuels/latest route to prices#marine_fuels_latest
+// and returned byte-identical bodies for {}, ?port=SGSIN and ?fuel_type=VLSFO
+// on 2026-10-15 (#146), so these fixtures stand for the canonical path.
 /** Verbatim live response, api.oilpriceapi.com/v1/marine-fuels/latest, captured 2026-09-13 (enterprise smoke key). */
 export const LIVE_MARINE_FUELS_LATEST = {
   "status": "success",

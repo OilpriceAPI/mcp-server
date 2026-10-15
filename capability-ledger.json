@@ -201,13 +201,7 @@
       "tools": [
         "opa_get_marine_fuels"
       ],
-      "reason": "Latest prices are exposed through the compatibility alias /v1/marine-fuels/latest; ports, all-port prices and history are selection 3, which also moves the tool to the canonical path.",
-      "pathPrefixes": [
-        {
-          "prefix": "/v1/marine-fuels",
-          "audience": "compatibility"
-        }
-      ]
+      "reason": "Latest prices are exposed through the canonical GET /v1/prices/marine-fuels/latest; ports, all-port prices and history are selection 3."
     },
     {
       "id": "fuel-surcharge",
@@ -1032,7 +1026,6 @@
       "tools": [
         "opa_get_marine_fuels"
       ],
-      "via": "/v1/marine-fuels/latest",
       "owner": "mcp-server"
     },
     {
