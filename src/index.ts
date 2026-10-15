@@ -2042,6 +2042,8 @@ export async function requestApi<T>(
   }
 }
 
+const ISSUES_URL = "https://github.com/OilpriceAPI/mcp-server/issues";
+
 /**
  * Turn a failed {@link requestApi} outcome into a sentence naming the ACTUAL
  * cause. Never mentions entitlement: 402/403 throw ApiGateError before they
@@ -2055,7 +2057,15 @@ export function describeRequestFailure(
 ): string {
   const detail = outcome.detail ? `: ${outcome.detail}` : "";
   if (outcome.status === 404) {
-    return `${label} is not currently available from the API (HTTP 404${detail}). The endpoint is routed but the dataset is not populated, so this is a data-availability limit on the API side — not an account or plan restriction.`;
+    // The API answers a route miss and an empty dataset with the same
+    // NOT_FOUND code; only the message tells them apart (#146).
+    if (/^no route matches/i.test(outcome.detail)) {
+      return `${label} could not be read: the API has no route for the request this server made (HTTP 404${detail}). This is a defect in the MCP server's request path, not a data or plan limit — report it at ${ISSUES_URL}.`;
+    }
+    if (!outcome.detail) {
+      return `${label} could not be read: the API returned HTTP 404 with no explanation. This is not an account or plan restriction.`;
+    }
+    return `${label} is not currently available from the API (HTTP 404${detail}). This is a data-availability limit on the API side — not an account or plan restriction.`;
   }
   if (outcome.status === 401) {
     return `${label} could not be read because authentication failed (HTTP 401${detail}). Check that OILPRICEAPI_KEY is set to a valid key; get one at ${SIGNUP_URL}.`;

@@ -293,6 +293,10 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_get_well_activity`   | Recent permit counts/top operators/trends with explicit state-health warnings                    |
 | `opa_get_well_production` | US well production — beta coverage (summary/states/state/well/top_producers/cycle_time/cohorts) |
 | `opa_get_spread`          | Refining/trading spreads (crack, basis, margin)                                                 |
+| `opa_get_natural_gas_hubs` | US physical gas hub prices as basis to Henry Hub (Waha, SoCal, Chicago and more)              |
+| `opa_get_data_quality`    | OilPriceAPI's own data-quality grades per series (completeness, freshness and more)            |
+| `opa_get_account_status`  | Plan tier, request usage, remaining quota and reset date for the configured key                |
+| `opa_get_plans`           | Current subscription plans: price, request limits and included features                        |
 
 ### Price Alert Tools (authenticated)
 

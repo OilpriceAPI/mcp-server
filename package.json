@@ -19,6 +19,7 @@
     "test": "vitest run",
     "test:live": "node scripts/live-smoke.mjs",
     "check:capability-ledger": "node scripts/check-capability-ledger.mjs",
+    "check:readme-tools": "node scripts/check-readme-tools.mjs",
     "generate:live-contracts": "node scripts/generate-live-contract-matrix.mjs",
     "smoke:live-contract-matrix": "node scripts/live-contract-matrix-smoke.mjs",
     "smoke:product-facts:live": "node scripts/live-product-facts-smoke.mjs",
