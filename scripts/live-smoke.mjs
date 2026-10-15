@@ -133,6 +133,17 @@ function validateShape(shape, body) {
     }
     return;
   }
+  if (shape === "futures-history") {
+    // #124: the catalog asks for a closed past window on one contract month,
+    // so an empty answer ({error, available_dates}) is a failure, not a pass.
+    assert(typeof body.error !== "string", `futures history answered empty: ${body.error}`);
+    assert(Array.isArray(body.contracts) && body.contracts.length > 0, "futures history has no contracts");
+    assert(
+      body.contracts.every((contract) => Array.isArray(contract.daily_data) && contract.daily_data.length > 0),
+      "a futures history contract has no daily_data rows",
+    );
+    return;
+  }
   if (shape === "subscriptions") {
     const subscriptions = body.subscriptions ?? body.data?.subscriptions;
     assert(Array.isArray(subscriptions), "subscription response has no subscriptions array");
@@ -235,7 +246,10 @@ async function checkRead(contract) {
   }
   assert(response.status === 200, `expected HTTP 200, received ${response.status}`);
   validateShape(contract.shape, response.body);
-  if (contract.shape !== "success-envelope") {
+  // A contract that declares handler args is field-checked whatever its
+  // envelope shape (#124: futures history is a bare object, not a success
+  // envelope, and its formatter still reads named fields).
+  if (contract.shape !== "success-envelope" && !contract.args) {
     record(contract.name, "passed", `HTTP 200 ${contract.shape}`, {
       method: contract.method,
       path: contract.path,
