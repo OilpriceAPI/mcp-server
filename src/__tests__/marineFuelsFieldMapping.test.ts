@@ -197,7 +197,7 @@ describe("#120 filters match what the response carries, not what the API filter 
       );
       // The API's own port filter matches codes only and its fuel_type filter
       // matches nothing, so the tool never forwards either.
-      expect(requestedPath(fetchSpy)).toBe("/v1/marine-fuels/latest");
+      expect(requestedPath(fetchSpy)).toBe("/v1/prices/marine-fuels/latest?limit=100");
     },
   );
 
@@ -218,7 +218,7 @@ describe("#120 filters match what the response carries, not what the API filter 
     expect(result.isError).not.toBe(true);
     expect(rows).toHaveLength(8);
     expect(rows.every((row) => row.includes(` | ${reported} | `))).toBe(true);
-    expect(requestedPath(fetchSpy)).toBe("/v1/marine-fuels/latest");
+    expect(requestedPath(fetchSpy)).toBe("/v1/prices/marine-fuels/latest?limit=100");
   });
 
   it("port and fuel_type together narrow to one price", async () => {
@@ -276,7 +276,7 @@ describe("#120 field-level live contract (#118) passes on the live payload", () 
         tool: "opa_get_marine_fuels",
         handler: marine.handler,
         args,
-        contractPath: "/v1/marine-fuels/latest",
+        contractPath: "/v1/prices/marine-fuels/latest?limit=100",
         contractResponse: {
           status: 200,
           text: JSON.stringify(LIVE_MARINE_FUELS_LATEST),

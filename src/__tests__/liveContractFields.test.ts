@@ -165,7 +165,7 @@ describe("#118 live contract asserts the fields the formatter reads", () => {
     const outcome = await run(
       "opa_get_marine_fuels",
       {},
-      "/v1/marine-fuels/latest",
+      "/v1/prices/marine-fuels/latest?limit=100",
       { status: "success", data: { prices: [{ port_code: "AEFUJ" }] } },
     );
 

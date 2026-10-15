@@ -58,10 +58,22 @@ export const LIVE_CONTRACT_CATALOG = {
     { args: {} },
   ),
   opa_get_marine_fuels: read(
-    "/v1/marine-fuels/latest",
+    "/v1/prices/marine-fuels/latest?limit=100",
     "success-envelope",
     "conditional",
     { args: {} },
+  ),
+  opa_get_marine_ports: read(
+    "/v1/marine-ports/SGSIN",
+    "success-envelope",
+    "conditional",
+    { args: { port: "SGSIN" } },
+  ),
+  opa_get_marine_fuel_history: read(
+    "/v1/prices/marine-fuels/historical?port_code=SGSIN&fuel_type=VLSFO_SGSIN_USD&days=7",
+    "success-envelope",
+    "conditional",
+    { args: { port_code: "SGSIN", fuel_type: "VLSFO", days: 7 } },
   ),
   opa_get_rig_counts: read(
     "/v1/rig-counts/latest",
