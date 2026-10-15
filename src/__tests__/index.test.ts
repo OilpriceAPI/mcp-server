@@ -1524,8 +1524,8 @@ describe("tool registration metadata", () => {
   const DELETE_TOOLS = ["opa_delete_price_alert", "opa_delete_subscription"];
   const WRITE_TOOLS = new Set([...CREATE_TOOLS, ...DELETE_TOOLS]);
 
-  it("registers exactly 36 tools", () => {
-    expect(Object.keys(tools)).toHaveLength(36);
+  it("registers exactly 37 tools", () => {
+    expect(Object.keys(tools)).toHaveLength(37);
     expect(tools.opa_get_product_facts).toBeDefined();
     expect(tools.opa_get_natural_gas_hubs).toBeDefined();
     expect(tools.opa_get_account_status).toBeDefined();
@@ -1537,6 +1537,7 @@ describe("tool registration metadata", () => {
   // how to retrieve current entitlement details without freezing mutable prices.
   const GATED_TOOL_LABELS: Record<string, RegExp> = {
     opa_get_history: /eligible account entitlement.*opa_get_plans/,
+    opa_get_history_range: /eligible account entitlement.*opa_get_plans/,
     opa_get_futures: /eligible account entitlement.*opa_get_plans/,
     opa_get_futures_curve: /eligible account entitlement.*opa_get_plans/,
     opa_get_marine_fuels: /eligible account entitlement.*opa_get_plans/,

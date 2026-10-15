@@ -49,6 +49,23 @@ export const LIVE_CONTRACT_CATALOG = {
     "conditional",
     { args: { commodity: "BRENT_CRUDE_USD", period: "week" } },
   ),
+  // #123: a fixed, closed window so the contract is deterministic. The path
+  // is byte-for-byte the request the handler builds from these args.
+  opa_get_history_range: read(
+    "/v1/prices/historical?by_code=BRENT_CRUDE_USD,HEATING_OIL_USD&start_date=2026-09-01&end_date=2026-09-10&interval=daily&page=1&per_page=250",
+    "success-envelope",
+    "conditional",
+    {
+      args: {
+        commodities: ["BRENT_CRUDE_USD", "HEATING_OIL_USD"],
+        start_date: "2026-09-01",
+        end_date: "2026-09-10",
+        interval: "daily",
+        page: 1,
+        per_page: 250,
+      },
+    },
+  ),
   opa_get_futures: read("/v1/futures/brent", "futures-latest"),
   opa_get_futures_curve: read("/v1/futures/brent/curve", "futures-curve"),
   opa_get_natural_gas_hubs: read(

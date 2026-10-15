@@ -68,6 +68,7 @@ import {
   type ToolConfiguration,
 } from "./toolRegistry.js";
 import {
+  describeUnit,
   formatQuote,
   formatQuoteAmount,
   formatQuoteDelta,
@@ -1404,6 +1405,15 @@ async function extractErrorDetail(response: Response): Promise<string> {
         if (typeof nested.message === "string") return nested.message;
         if (typeof nested.code === "string") return nested.code;
       }
+      // JSend "fail" envelope: {"status":"fail","data":{"error":...,
+      // "message":...}}. /v1/prices/historical answers every 400 this way
+      // (verified live 2026-10-15), and without this the refusal reached the
+      // caller as a bare "HTTP 400" (#123).
+      if (obj.data && typeof obj.data === "object") {
+        const data = obj.data as Record<string, unknown>;
+        if (typeof data.message === "string") return data.message;
+        if (typeof data.error === "string") return data.error;
+      }
       if (obj.errors) return JSON.stringify(obj.errors);
       return "";
     } catch {
@@ -1850,6 +1860,12 @@ export interface ApiRequestOutcome<T> {
   data: T | null;
   status: number;
   detail: string;
+  /**
+   * Response headers of a successful request. Pagination totals on some
+   * endpoints (X-Total, X-Total-Pages on /v1/prices/historical) travel only
+   * in headers, and a page that hides them is a silent partial answer (#113).
+   */
+  headers?: { get(name: string): string | null };
 }
 
 export async function makeApiRequest<T>(
@@ -1917,6 +1933,7 @@ export async function requestApi<T>(
             data: (await response.json()) as T,
             status: response.status,
             detail: "",
+            headers: response.headers,
           };
         }
 
@@ -2673,6 +2690,11 @@ const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
       example:
         "Brent Crude Oil — Past Month: Latest $XX.XX · High $XX.XX · Low $XX.XX · Average $XX.XX · Change +X.X% (NN data points)",
     },
+    opa_get_history_range: {
+      does: "Returns dated price rows (hourly, daily, weekly or monthly) for 1-5 commodities between a start and end date, paged up to 500 rows per page, newest rows on page 1.",
+      example:
+        "Page 1 of 3 (1,160 rows; newest first) · BRENT_CRUDE_USD — USD per barrel · | YYYY-MM-DD | XX.XX | · | YYYY-MM-DD | XX.XX |",
+    },
     opa_get_futures: {
       does: "Returns the latest front-month futures contract price for crude, gasoil, natural gas, TTF, LNG JKM, and carbon contracts.",
       example:
@@ -3341,6 +3363,403 @@ server.registerTool(
     ];
 
     return textResult(sections.join("\n"));
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Date-range price history (#123)
+//
+// GET /v1/prices/historical, verified against oilpriceapi-api origin/main
+// (V1::PricesController#historical) and live on 2026-10-15:
+//   - by_code takes up to HISTORICAL_MAX_CODES = 5 comma-separated codes; a
+//     sixth is refused with 422 TOO_MANY_COMMODITIES.
+//   - interval is normalised by IntervalNormalizer (raw, hourly, daily,
+//     weekly, monthly). Aggregated intervals page up to 500 rows per page;
+//     totals travel only in the X-Total / X-Total-Pages headers.
+//   - start_date/end_date are ISO dates; a future start_date or start after
+//     end is a 400 JSend "fail". There is no maximum range on this endpoint.
+//   - The window is clamped to the account's plan history depth
+//     (User#historical_depth_limit_days); metadata.start_at reports the
+//     effective start, so a clamp is visible only by comparing the two.
+//   - Not behind require_paid_tier_for_historical (that gate covers only the
+//     past_* windows), so a 402/403 here is whatever the API decides; it is
+//     surfaced through requestApi's gate error with the API's own text.
+// ---------------------------------------------------------------------------
+
+export const HISTORY_RANGE_MAX_CODES = 5;
+export const HISTORY_RANGE_MAX_PER_PAGE = 500;
+export const HISTORY_RANGE_DEFAULT_PER_PAGE = 250;
+export const HISTORY_RANGE_INTERVALS = [
+  "hourly",
+  "daily",
+  "weekly",
+  "monthly",
+] as const;
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A YYYY-MM-DD string that names a real calendar day, as a UTC Date. */
+export function parseIsoDate(value: string): Date | null {
+  if (!ISO_DATE.test(value)) return null;
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10) === value ? date : null;
+}
+
+function utcToday(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+interface HistoryRangeRow {
+  price?: number;
+  code?: string;
+  currency?: string;
+  unit?: string;
+  created_at?: string;
+}
+
+interface HistoryRangeMissing {
+  code?: string;
+  reason?: string;
+  message?: string;
+}
+
+interface HistoryRangeDisclosure {
+  instrument?: string;
+  display_name?: string;
+  contract_reference?: string;
+  spot_counterpart?: string;
+}
+
+interface HistoryRangeData {
+  prices?: HistoryRangeRow[];
+  missing?: HistoryRangeMissing[];
+  metadata?: {
+    interval?: string;
+    start_at?: string;
+    end_at?: string;
+    availability?: { missing?: HistoryRangeMissing[] };
+    instrument_disclosures?: HistoryRangeDisclosure[];
+  };
+}
+
+function headerInt(
+  headers: ApiRequestOutcome<unknown>["headers"],
+  name: string,
+): number | null {
+  const raw = headers?.get(name);
+  if (raw === null || raw === undefined || raw.trim() === "") return null;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+function historyRowLabel(createdAt: string, interval: string): string {
+  return interval === "hourly"
+    ? `${createdAt.slice(0, 10)} ${createdAt.slice(11, 16)}`
+    : createdAt.slice(0, 10);
+}
+
+export function formatHistoryRange(options: {
+  codes: string[];
+  startDate: string;
+  endDate: string | undefined;
+  interval: string;
+  page: number;
+  perPage: number;
+  data: HistoryRangeData;
+  headers?: ApiRequestOutcome<unknown>["headers"];
+}): string {
+  const { codes, startDate, endDate, interval, page, perPage, data } = options;
+  const rows = (data.prices ?? []).filter(
+    (row): row is HistoryRangeRow & { price: number; created_at: string } =>
+      typeof row.price === "number" &&
+      Number.isFinite(row.price) &&
+      typeof row.created_at === "string" &&
+      row.created_at.length >= 10,
+  );
+  const metadata = data.metadata ?? {};
+  const missing = metadata.availability?.missing ?? data.missing ?? [];
+  const total = headerInt(options.headers, "X-Total");
+  const totalPages = headerInt(options.headers, "X-Total-Pages");
+
+  const effectiveStart =
+    typeof metadata.start_at === "string" ? metadata.start_at.slice(0, 10) : null;
+  const effectiveEnd =
+    typeof metadata.end_at === "string" ? metadata.end_at.slice(0, 10) : null;
+
+  const lines = [
+    `# Price history — ${codes.join(", ")}`,
+    "",
+    `- **Window requested**: ${startDate} to ${endDate ?? "today"} (${interval}, UTC buckets)`,
+  ];
+  if (effectiveStart || effectiveEnd) {
+    lines.push(
+      `- **Window applied by the API**: ${effectiveStart ?? startDate} to ${effectiveEnd ?? endDate ?? "today"}`,
+    );
+  }
+  if (effectiveStart && effectiveStart > startDate) {
+    lines.push(
+      `- **Note**: the API started this window at ${effectiveStart}, later than the requested ${startDate}. That is the account's plan history depth; rows before ${effectiveStart} were not returned. Check access with opa_get_plans.`,
+    );
+  }
+  const pageLine =
+    totalPages !== null
+      ? `- **Page**: ${page} of ${totalPages}${total !== null ? ` (${total} rows in the window)` : ""}, ${rows.length} rows on this page`
+      : `- **Page**: ${page}, ${rows.length} rows on this page (page size ${perPage})`;
+  lines.push(pageLine);
+  lines.push(
+    "- _Pages run newest first: page 1 holds the most recent rows and higher pages go back in time. Within a page each table is oldest to newest._",
+  );
+
+  const byCode = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const code = row.code ?? codes[0];
+    const list = byCode.get(code) ?? [];
+    list.push(row);
+    byCode.set(code, list);
+  }
+
+  const disclosures = metadata.instrument_disclosures ?? [];
+  for (const code of [...byCode.keys()]) {
+    const list = byCode
+      .get(code)!
+      .slice()
+      .sort((a, b) => a.created_at.localeCompare(b.created_at));
+    const currency = list.find((r) => r.currency)?.currency;
+    const unit = describeUnit(list.find((r) => r.unit)?.unit);
+    const basis = [currency, unit ? `per ${unit}` : ""].filter(Boolean).join(" ");
+    const name = COMMODITY_INFO[code]?.name;
+    lines.push(
+      "",
+      `## ${name ? `${name} (${code})` : code}${basis ? ` — ${basis}` : ""}`,
+      "",
+      `${list.length} rows, ${list[0].created_at.slice(0, 10)} to ${list[list.length - 1].created_at.slice(0, 10)}`,
+      "",
+      `| ${interval === "daily" ? "Date (UTC)" : interval === "hourly" ? "Hour (UTC)" : "Period start (UTC)"} | Price |`,
+      "| --- | --- |",
+      ...list.map(
+        (r) => `| ${historyRowLabel(r.created_at, interval)} | ${r.price} |`,
+      ),
+    );
+  }
+
+  const named = disclosures.filter(
+    (d) => typeof d.display_name === "string" && d.display_name.trim(),
+  );
+  if (named.length) {
+    lines.push("", "**Instrument notes from the API**");
+    for (const d of named) {
+      const parts = [d.display_name!.trim()];
+      if (d.contract_reference) parts.push(`(${d.contract_reference})`);
+      let line = `- ${parts.join(" ")}`;
+      if (d.instrument === "front_month_futures") {
+        line += ": an exchange front-month futures series, not a physical spot assessment";
+      }
+      if (d.spot_counterpart) line += `; spot series: ${d.spot_counterpart}`;
+      lines.push(`${line}.`);
+    }
+  }
+
+  // The API's missing-code probe can time out and report a code as having no
+  // rows on the same response that carries its rows (verified live
+  // 2026-10-15, OilpriceAPI/oilpriceapi-api#8496). Rows on the page win.
+  const missingLines = missing
+    .filter((m) => typeof m.code === "string" && !byCode.has(m.code))
+    .map(
+      (m) =>
+        `- ${m.code}: ${m.message?.trim() || m.reason || "no rows returned in this window"}`,
+    );
+  if (missingLines.length) {
+    lines.push("", "**The API reports no rows in this window for**", ...missingLines);
+  }
+
+  if (totalPages !== null) {
+    if (page < totalPages) {
+      lines.push(
+        "",
+        `⚠ Partial answer: this is page ${page} of ${totalPages}. Call opa_get_history_range again with the same arguments and page: ${page + 1} for the next rows.`,
+      );
+    } else if (rows.length) {
+      lines.push("", `_This page completes the window (page ${page} of ${totalPages})._`);
+    }
+  } else if (rows.length >= perPage) {
+    lines.push(
+      "",
+      `⚠ This answer may be partial: the page is full (${rows.length} of ${perPage}) and the API did not report a page count. Call again with page: ${page + 1} to check for more rows.`,
+    );
+  }
+
+  lines.push("", `_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
+  return lines.join("\n");
+}
+
+server.registerTool(
+  "opa_get_history_range",
+  {
+    title: "Get Price History for a Date Range",
+    description:
+      "Get dated price rows for up to 5 commodities between a start date and an optional end date (YYYY-MM-DD, UTC), aggregated hourly, daily, weekly or monthly. Use when the user needs the actual series (e.g. daily Brent and heating oil from 2025-01-01 to 2025-06-30) rather than summary statistics over a fixed window, which opa_get_history returns. Results are paged at up to 500 rows per page across all requested codes, newest rows first: page 1 holds the most recent dates and later pages go back in time; within a page each code's rows are listed oldest to newest. The answer states the page count and says when more pages exist. The API clamps the start date to the account's plan history depth and the answer reports the window the API actually applied. " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
+    inputSchema: {
+      commodities: z
+        .array(z.string().min(1).max(64))
+        .min(1)
+        .max(HISTORY_RANGE_MAX_CODES)
+        .describe(
+          "1-5 commodity names or codes (e.g. ['brent', 'HEATING_OIL_USD']). The API refuses more than 5 codes per request.",
+        ),
+      start_date: z
+        .string()
+        .regex(ISO_DATE)
+        .describe("Inclusive start date, YYYY-MM-DD (UTC). Must not be in the future."),
+      end_date: z
+        .string()
+        .regex(ISO_DATE)
+        .optional()
+        .describe(
+          "Inclusive end date, YYYY-MM-DD (UTC). Defaults to today; a future end date is capped to now by the API.",
+        ),
+      interval: z
+        .enum(HISTORY_RANGE_INTERVALS)
+        .default("daily")
+        .describe("Aggregation bucket: hourly, daily, weekly or monthly (default: daily)."),
+      page: z
+        .number()
+        .int()
+        .min(1)
+        .max(10_000)
+        .default(1)
+        .describe("1-based page number (default: 1)."),
+      per_page: z
+        .number()
+        .int()
+        .min(1)
+        .max(HISTORY_RANGE_MAX_PER_PAGE)
+        .default(HISTORY_RANGE_DEFAULT_PER_PAGE)
+        .describe(
+          `Rows per page across all requested codes, 1-${HISTORY_RANGE_MAX_PER_PAGE} (default: ${HISTORY_RANGE_DEFAULT_PER_PAGE}).`,
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({
+    commodities,
+    start_date,
+    end_date,
+    interval: requestedInterval,
+    page: requestedPage,
+    per_page: requestedPerPage,
+  }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_history_range");
+    // Defaults are re-applied here: the live-contract run and unit tests call
+    // the handler directly, without the schema's defaults.
+    const interval = requestedInterval ?? "daily";
+    const page = requestedPage ?? 1;
+    const per_page = requestedPerPage ?? HISTORY_RANGE_DEFAULT_PER_PAGE;
+
+    const start = parseIsoDate(start_date);
+    if (!start) {
+      return errorResult(
+        `start_date '${start_date}' is not a valid calendar date. Use YYYY-MM-DD.`,
+      );
+    }
+    if (start_date > utcToday()) {
+      return errorResult(
+        `start_date ${start_date} is in the future (today is ${utcToday()} UTC). History starts no later than today.`,
+      );
+    }
+    if (end_date !== undefined) {
+      if (!parseIsoDate(end_date)) {
+        return errorResult(
+          `end_date '${end_date}' is not a valid calendar date. Use YYYY-MM-DD.`,
+        );
+      }
+      if (start_date > end_date) {
+        return errorResult(
+          `start_date ${start_date} is after end_date ${end_date}; start_date must be on or before end_date.`,
+        );
+      }
+    }
+
+    const codes: string[] = [];
+    for (const commodity of commodities) {
+      const resolved = resolveOrError(commodity);
+      if ("error" in resolved) return resolved.error;
+      if (!codes.includes(resolved.code)) codes.push(resolved.code);
+    }
+
+    const query = new URLSearchParams({
+      by_code: codes.join(","),
+      start_date,
+      ...(end_date ? { end_date } : {}),
+      interval,
+      page: String(page),
+      per_page: String(per_page),
+    });
+    const outcome = await requestApi<ApiResponse<HistoryRangeData>>(
+      `/v1/prices/historical?${query.toString().replace(/%2C/g, ",")}`,
+    );
+    const response = outcome.data;
+    const label = `Price history for ${codes.join(", ")} from ${start_date} to ${end_date ?? "today"}`;
+
+    if (!response || response.status !== "success" || !response.data) {
+      return errorResult(
+        describeUnavailable(
+          label,
+          outcome,
+          `${label} could not be read: the API answered without a success envelope.`,
+        ),
+      );
+    }
+
+    const rows = response.data.prices ?? [];
+    if (!Array.isArray(rows) || rows.length === 0) {
+      // Review D1: the plan's history-depth clamp can move the start past the
+      // requested end. The API then answers 0 rows with metadata.start_at
+      // after the requested start (V1::PricesController#historical,
+      // oilpriceapi-api f933a69f6). The data exists; the plan excludes it.
+      const appliedStart =
+        typeof response.data.metadata?.start_at === "string"
+          ? response.data.metadata.start_at.slice(0, 10)
+          : null;
+      if (appliedStart && appliedStart > start_date) {
+        return errorResult(
+          `The account's plan history depth starts at ${appliedStart}, so the API applied the window from ${appliedStart} instead of ${start_date}. None of the requested range ${start_date} to ${end_date ?? "today"} falls inside it, so no rows were returned for ${codes.join(", ")}. This is a plan limit, not missing data. Check access and longer-history plans with opa_get_plans.`,
+        );
+      }
+      // Review D2: a page past the end is a paging error, not missing data.
+      const totalPages = headerInt(outcome.headers, "X-Total-Pages");
+      if (totalPages !== null && totalPages > 0 && page > totalPages) {
+        const total = headerInt(outcome.headers, "X-Total");
+        return errorResult(
+          `Page ${page} is past the last page (${totalPages}) for ${codes.join(", ")} between ${start_date} and ${end_date ?? "today"}${total !== null ? ` (${total} rows at ${per_page} per page)` : ""}. Request page ${totalPages} or lower.`,
+        );
+      }
+      const missing =
+        response.data.metadata?.availability?.missing ??
+        response.data.missing ??
+        [];
+      const reasons = missing
+        .filter((m) => typeof m.code === "string")
+        .map((m) => `${m.code}: ${m.message?.trim() || m.reason || "no rows"}`);
+      return errorResult(
+        `No price rows for ${codes.join(", ")} between ${start_date} and ${end_date ?? "today"} (${interval}, page ${page}). The API answered; this is a data-availability fact about the window.` +
+          (reasons.length ? ` ${reasons.join(" ")}` : ""),
+      );
+    }
+
+    return textResult(
+      formatHistoryRange({
+        codes,
+        startDate: start_date,
+        endDate: end_date,
+        interval,
+        page,
+        perPage: per_page,
+        data: response.data,
+        headers: outcome.headers,
+      }),
+    );
   },
 );
 
