@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { createSandboxServer } from "../index.js";
+import { classifyToolMiss } from "../telemetry.js";
 
 // #169 — opa_get_spread exposed only `type`, and the handler called
 // /v1/spreads/${type} with no query string. The backend
@@ -166,14 +167,14 @@ describe("opa_get_spread passes backend parameters (#169)", () => {
     });
     expect(urls).toEqual([]);
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toMatch(/pair/);
+    expect(result.content[0].text).toMatch(/pair must be set/);
   });
 
   it("a parameter that does not apply to the type is refused, not dropped", async () => {
     const { result, urls } = await call({ type: "crack", pair: "BRENT_WTI" });
     expect(urls).toEqual([]);
     expect(result.isError).toBe(true);
-    expect(result.content[0].text).toMatch(/pair.*basis/);
+    expect(result.content[0].text).toMatch(/Invalid argument: pair.*basis/);
   });
 
   it("a malformed or reversed date range is refused before any request", async () => {
@@ -200,6 +201,22 @@ describe("opa_get_spread passes backend parameters (#169)", () => {
       "/basis/all",
     ]) {
       expect(d, token).toContain(token);
+    }
+  });
+
+  it("every local refusal is classified as invalid_argument, not unknown", async () => {
+    for (const args of [
+      { type: "basis", start_date: "2026-10-01" },
+      { type: "crack", pair: "BRENT_WTI" },
+      { type: "margin", start_date: "2026-02-30" },
+      { type: "margin", start_date: "2026-10-10", end_date: "2026-10-01" },
+    ]) {
+      const { result, urls } = await call(args);
+      expect(urls, JSON.stringify(args)).toEqual([]);
+      expect(result.isError, JSON.stringify(args)).toBe(true);
+      expect(classifyToolMiss(result), JSON.stringify(args)).toBe(
+        "invalid_argument",
+      );
     }
   });
 });

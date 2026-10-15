@@ -2771,7 +2771,7 @@ const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
         "TX (YYYY-MM): NNN,NNN,NNN bbl oil · N,NNN,NNN,NNN mcf gas · NNN,NNN,NNN boe",
     },
     opa_get_spread: {
-      does: "Returns refining and trading spreads: crack spreads, basis differentials, and blending/transport margins.",
+      does: "Returns refining and trading spreads: crack spreads, basis differentials, and composite refinery margins (latest or daily history).",
       example: "3-2-1 crack spread: $XX.XX/bbl (as of YYYY-MM-DD)",
     },
     opa_get_fuel_surcharge: {
@@ -5536,12 +5536,15 @@ export function spreadEndpoint(
   for (const [param, applies] of Object.entries(owner)) {
     if (options[param as keyof SpreadRequestOptions] && applies !== type) {
       return {
-        error: `${param} only applies to type=${applies}; it was passed with type=${type}.`,
+        error: `Invalid argument: ${param} only applies to type=${applies}; it was passed with type=${type}.`,
       };
     }
   }
   if (!validIsoDate(options.start_date) || !validIsoDate(options.end_date)) {
-    return { error: "start_date and end_date must use YYYY-MM-DD." };
+    return {
+      error:
+        "start_date and end_date must be valid dates in YYYY-MM-DD format.",
+    };
   }
   if (
     options.start_date &&
@@ -5557,7 +5560,7 @@ export function spreadEndpoint(
     if (!options.pair) {
       if (historical) {
         return {
-          error: `Basis history needs a pair. Valid pairs: ${SPREAD_BASIS_PAIRS.join(", ")}.`,
+          error: `pair must be set for basis history. Valid pairs: ${SPREAD_BASIS_PAIRS.join(", ")}.`,
         };
       }
       return { endpoint: "/v1/spreads/basis/all" };
