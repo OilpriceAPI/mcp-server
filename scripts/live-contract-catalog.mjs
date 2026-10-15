@@ -51,6 +51,22 @@ export const LIVE_CONTRACT_CATALOG = {
   ),
   opa_get_futures: read("/v1/futures/brent", "futures-latest"),
   opa_get_futures_curve: read("/v1/futures/brent/curve", "futures-curve"),
+  // #124: a closed past window on one contract month, so the contract is
+  // deterministic. The path is byte-for-byte the request the handler builds.
+  opa_get_futures_history: read(
+    "/v1/futures/brent/historical?from=2026-09-01&to=2026-09-05&contract_month=2026-12&interval=daily",
+    "futures-history",
+    "conditional",
+    {
+      args: {
+        contract: "brent",
+        from: "2026-09-01",
+        to: "2026-09-05",
+        contract_month: "2026-12",
+        interval: "daily",
+      },
+    },
+  ),
   opa_get_natural_gas_hubs: read(
     "/v1/natural-gas/hubs",
     "success-envelope",
