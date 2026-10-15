@@ -1,7 +1,7 @@
 {
   "$comment": "API-to-MCP capability ledger (#77). One row per operation in the published OpenAPI contract. Checked by `npm run check:capability-ledger` against the live contract, build/capabilities.json and src/index.ts. Bump ledgerVersion and append to changes for every decision change, and link the change from the release notes.",
   "schemaVersion": "1.0.0",
-  "ledgerVersion": 3,
+  "ledgerVersion": 4,
   "source": {
     "openapi": {
       "url": "https://api.oilpriceapi.com/openapi.json",
@@ -199,9 +199,11 @@
       "status": "partial",
       "owner": "mcp-server",
       "tools": [
-        "opa_get_marine_fuels"
+        "opa_get_marine_fuels",
+        "opa_get_marine_ports",
+        "opa_get_marine_fuel_history"
       ],
-      "reason": "Latest prices are exposed through the compatibility alias /v1/marine-fuels/latest; ports, all-port prices and history are selection 3, which also moves the tool to the canonical path.",
+      "reason": "Latest prices (canonical /v1/prices/marine-fuels/latest), the port directory and single-port detail, and per-port fuel history are exposed (#125). GET /v1/prices/marine-fuels, the paginated feed of recent collections, is still selection 3 and not exposed.",
       "pathPrefixes": [
         {
           "prefix": "/v1/marine-fuels",
@@ -913,20 +915,22 @@
     {
       "operation": "GET /v1/marine-ports",
       "family": "marine",
-      "status": "not_exposed",
-      "disposition": "selected",
+      "status": "exposed",
+      "tools": [
+        "opa_get_marine_ports"
+      ],
       "selection": 3,
-      "owner": "mcp-server",
-      "reason": "Port directory, so an agent can resolve a port before pricing it. Selection 3."
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/marine-ports/{port_code}",
       "family": "marine",
-      "status": "not_exposed",
-      "disposition": "selected",
+      "status": "exposed",
+      "tools": [
+        "opa_get_marine_ports"
+      ],
       "selection": 3,
-      "owner": "mcp-server",
-      "reason": "Single-port detail with prices. Selection 3."
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/market-brief",
@@ -1014,16 +1018,17 @@
       "disposition": "selected",
       "selection": 3,
       "owner": "mcp-server",
-      "reason": "All-port marine fuel prices; opa_get_marine_fuels returns latest only. Selection 3."
+      "reason": "Paginated feed of recent marine collections (live 2026-10-15: 62 rows across 8 ports, several per fuel), overlapping opa_get_marine_fuels (latest per series) and opa_get_marine_fuel_history (per-port series). Selection 3; not shipped in the first #125 slice."
     },
     {
       "operation": "GET /v1/prices/marine-fuels/historical",
       "family": "marine",
-      "status": "not_exposed",
-      "disposition": "selected",
+      "status": "exposed",
+      "tools": [
+        "opa_get_marine_fuel_history"
+      ],
       "selection": 3,
-      "owner": "mcp-server",
-      "reason": "Marine fuel history; opa_get_marine_fuels returns latest only. Selection 3."
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/prices/marine-fuels/latest",
@@ -1032,7 +1037,6 @@
       "tools": [
         "opa_get_marine_fuels"
       ],
-      "via": "/v1/marine-fuels/latest",
       "owner": "mcp-server"
     },
     {
@@ -1475,6 +1479,12 @@
       "date": "2026-10-14",
       "issue": "https://github.com/OilpriceAPI/mcp-server/issues/159",
       "summary": "Record three newly published operations as explicitly deferred (preview GET /v1/context/market/news, beta GET /v1/futures/oman, keyless GET /v1/meta/methodology) and the new key-rename operation PATCH /v1/api-keys/{id} as unsupported, like the other api-keys operations; re-verify family path prefixes against config/openapi_route_policy.yml at oilpriceapi-api 66f46ed0d (only change since 531e29899 is the retired congressional-trades exclusion reason, which no family uses). No runtime exposure or entitlement change."
+    },
+    {
+      "ledgerVersion": 4,
+      "date": "2026-10-15",
+      "issue": "https://github.com/OilpriceAPI/mcp-server/issues/125",
+      "summary": "Selection 3, first slice: expose GET /v1/marine-ports and GET /v1/marine-ports/{port_code} through opa_get_marine_ports and GET /v1/prices/marine-fuels/historical through opa_get_marine_fuel_history; move opa_get_marine_fuels from the deprecated /v1/marine-fuels/latest alias to canonical GET /v1/prices/marine-fuels/latest. GET /v1/prices/marine-fuels stays selected and not exposed. History requires a paid subscription or an active trial (API 403 otherwise); the tool reports the API's refusal text."
     }
   ]
 }
