@@ -357,7 +357,7 @@
       "tools": [
         "opa_get_spread"
       ],
-      "reason": "Current crack, basis and margin are exposed; history, all-series, curve-structure and physical-premium views are deferred on low demand."
+      "reason": "Crack, basis and margin are exposed with their parameters (#169): latest, daily history, and the all-pairs basis view. Crack/margin all-series, curve-structure and physical-premium views are deferred on low demand."
     },
     {
       "id": "indicators",
@@ -1101,18 +1101,20 @@
     {
       "operation": "GET /v1/spreads/basis/all",
       "family": "spreads",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "All-series view; opa_get_spread returns one current value. Low measured demand."
+      "status": "exposed",
+      "tools": [
+        "opa_get_spread"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/spreads/basis/historical",
       "family": "spreads",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "History view; opa_get_spread returns the current value only. Low measured demand."
+      "status": "exposed",
+      "tools": [
+        "opa_get_spread"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/spreads/crack",
@@ -1134,10 +1136,11 @@
     {
       "operation": "GET /v1/spreads/crack/historical",
       "family": "spreads",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "History view; opa_get_spread returns the current value only. Low measured demand."
+      "status": "exposed",
+      "tools": [
+        "opa_get_spread"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/spreads/curve-structure",
@@ -1183,10 +1186,11 @@
     {
       "operation": "GET /v1/spreads/margin/historical",
       "family": "spreads",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "History view; opa_get_spread returns the current value only. Low measured demand."
+      "status": "exposed",
+      "tools": [
+        "opa_get_spread"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/spreads/physical-premium",
