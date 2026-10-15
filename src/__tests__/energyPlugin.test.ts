@@ -409,6 +409,10 @@ describe("public energy facade", () => {
         { key: "credential", fetchImpl },
       ),
     );
+    // #146: the canonical path, not the deprecated /v1/marine-fuels alias.
+    expect(new URL(String(fetchImpl.mock.calls[0][0])).pathname).toBe(
+      "/v1/prices/marine-fuels/latest",
+    );
     expect(data.quotes[0]).toMatchObject({
       port: "NLRTM",
       grade: "VLSFO",

@@ -20,6 +20,22 @@ describe("directory-facing source metadata", () => {
     ".github/workflows/registry-backfill.yml",
   );
 
+  // #146: the hosted endpoint at mcp.oilpriceapi.com/mcp is a different
+  // server (9 energy_* tools, serverInfo v0.1.1, OAuth scope energy:read;
+  // verified live 2026-10-15), not these opa_* tools. A registry `remotes`
+  // entry on this record would advertise that endpoint as this server, so
+  // the record stays stdio-only and the README says so.
+  it("registers stdio only and documents that the hosted endpoint is a different server", () => {
+    expect(server).not.toHaveProperty("remotes");
+    expect(server.packages.map((p: { transport: { type: string } }) => p.transport.type)).toEqual([
+      "stdio",
+    ]);
+    const transport = readme.match(/## Transport\n([\s\S]*?)\n## /)?.[1] ?? "";
+    expect(transport).toMatch(/stdio only/i);
+    expect(transport).toContain("https://mcp.oilpriceapi.com/mcp");
+    expect(transport).toMatch(/not this server/i);
+  });
+
   it("links the canonical product contract and official MCP Registry record", () => {
     expect(readme).toContain("https://api.oilpriceapi.com/product-facts.json");
     expect(readme).toContain(

@@ -194,6 +194,16 @@ The runtime image uses the unprivileged `node` user. Omit `OILPRICEAPI_KEY` for
 the limited keyless demo, or inject it with your container platform's secret
 manager. Do not bake credentials into the image.
 
+## Transport
+
+This server runs locally over stdio only. Its MCP Registry record lists the npm
+package and no remote endpoint.
+
+The hosted connector at `https://mcp.oilpriceapi.com/mcp` is not this server.
+It is a separate, smaller set of `energy_*` tools with OAuth account linking,
+used by hosted clients that cannot launch a local process. Use this package for
+the full `opa_*` tool set.
+
 ## Environment Variables
 
 | Variable                     | Required | Description                                                                                                                                                                                                                                                                                            |

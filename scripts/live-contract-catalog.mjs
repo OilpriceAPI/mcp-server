@@ -58,7 +58,7 @@ export const LIVE_CONTRACT_CATALOG = {
     { args: {} },
   ),
   opa_get_marine_fuels: read(
-    "/v1/marine-fuels/latest",
+    "/v1/prices/marine-fuels/latest",
     "success-envelope",
     "conditional",
     { args: {} },

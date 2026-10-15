@@ -587,7 +587,7 @@ export function describeQuoteBasis(
   return unit ? `Quoted in ${code} per ${unit}` : `Quoted in ${code}`;
 }
 
-// Shape of GET /v1/marine-fuels/latest as served by the current API (verified
+// Shape of GET /v1/prices/marine-fuels/latest as served by the current API (verified
 // live 2026-09-13). `prices[]` is a list of PORTS, each nesting its fuels. The
 // pre-#120 formatter read a flat `{port, fuel_type, price, currency, unit}`
 // record the endpoint has never sent, and threw on `price.toFixed`. Every field
@@ -3614,7 +3614,7 @@ server.registerTool(
     // (OilpriceAPI/oilpriceapi-api#7774). Forwarding either turned every
     // filtered call into a confident "no data".
     const outcome = await requestApi<ApiResponse<MarineFuelsData>>(
-      "/v1/marine-fuels/latest",
+      "/v1/prices/marine-fuels/latest",
     );
     const response = outcome.data;
     const ports =
