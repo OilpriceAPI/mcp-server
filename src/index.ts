@@ -2691,9 +2691,9 @@ const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
         "Brent Crude Oil — Past Month: Latest $XX.XX · High $XX.XX · Low $XX.XX · Average $XX.XX · Change +X.X% (NN data points)",
     },
     opa_get_history_range: {
-      does: "Returns dated price rows (hourly, daily, weekly or monthly) for 1-5 commodities between a start and end date, paged up to 500 rows per page.",
+      does: "Returns dated price rows (hourly, daily, weekly or monthly) for 1-5 commodities between a start and end date, paged up to 500 rows per page, newest rows on page 1.",
       example:
-        "BRENT_CRUDE_USD — USD per barrel · | 2025-01-02 | 75.93 | · | 2025-01-03 | 76.51 | · Page 1 of 3 (1,160 rows)",
+        "Page 1 of 3 (1,160 rows; newest first) · BRENT_CRUDE_USD — USD per barrel · | YYYY-MM-DD | XX.XX | · | YYYY-MM-DD | XX.XX |",
     },
     opa_get_futures: {
       does: "Returns the latest front-month futures contract price for crude, gasoil, natural gas, TTF, LNG JKM, and carbon contracts.",
@@ -3507,6 +3507,9 @@ export function formatHistoryRange(options: {
       ? `- **Page**: ${page} of ${totalPages}${total !== null ? ` (${total} rows in the window)` : ""}, ${rows.length} rows on this page`
       : `- **Page**: ${page}, ${rows.length} rows on this page (page size ${perPage})`;
   lines.push(pageLine);
+  lines.push(
+    "- _Pages run newest first: page 1 holds the most recent rows and higher pages go back in time. Within a page each table is oldest to newest._",
+  );
 
   const byCode = new Map<string, typeof rows>();
   for (const row of rows) {
@@ -3595,7 +3598,7 @@ server.registerTool(
   {
     title: "Get Price History for a Date Range",
     description:
-      "Get dated price rows for up to 5 commodities between a start date and an optional end date (YYYY-MM-DD, UTC), aggregated hourly, daily, weekly or monthly. Use when the user needs the actual series (e.g. daily Brent and heating oil from 2025-01-01 to 2025-06-30) rather than summary statistics over a fixed window, which opa_get_history returns. Results are paged at up to 500 rows per page across all requested codes; the answer states the page count and says when more pages exist. The API clamps the start date to the account's plan history depth and the answer reports the window the API actually applied. " +
+      "Get dated price rows for up to 5 commodities between a start date and an optional end date (YYYY-MM-DD, UTC), aggregated hourly, daily, weekly or monthly. Use when the user needs the actual series (e.g. daily Brent and heating oil from 2025-01-01 to 2025-06-30) rather than summary statistics over a fixed window, which opa_get_history returns. Results are paged at up to 500 rows per page across all requested codes, newest rows first: page 1 holds the most recent dates and later pages go back in time; within a page each code's rows are listed oldest to newest. The answer states the page count and says when more pages exist. The API clamps the start date to the account's plan history depth and the answer reports the window the API actually applied. " +
       ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       commodities: z
@@ -3711,6 +3714,27 @@ server.registerTool(
 
     const rows = response.data.prices ?? [];
     if (!Array.isArray(rows) || rows.length === 0) {
+      // Review D1: the plan's history-depth clamp can move the start past the
+      // requested end. The API then answers 0 rows with metadata.start_at
+      // after the requested start (V1::PricesController#historical,
+      // oilpriceapi-api f933a69f6). The data exists; the plan excludes it.
+      const appliedStart =
+        typeof response.data.metadata?.start_at === "string"
+          ? response.data.metadata.start_at.slice(0, 10)
+          : null;
+      if (appliedStart && appliedStart > start_date) {
+        return errorResult(
+          `The account's plan history depth starts at ${appliedStart}, so the API applied the window from ${appliedStart} instead of ${start_date}. None of the requested range ${start_date} to ${end_date ?? "today"} falls inside it, so no rows were returned for ${codes.join(", ")}. This is a plan limit, not missing data. Check access and longer-history plans with opa_get_plans.`,
+        );
+      }
+      // Review D2: a page past the end is a paging error, not missing data.
+      const totalPages = headerInt(outcome.headers, "X-Total-Pages");
+      if (totalPages !== null && totalPages > 0 && page > totalPages) {
+        const total = headerInt(outcome.headers, "X-Total");
+        return errorResult(
+          `Page ${page} is past the last page (${totalPages}) for ${codes.join(", ")} between ${start_date} and ${end_date ?? "today"}${total !== null ? ` (${total} rows at ${per_page} per page)` : ""}. Request page ${totalPages} or lower.`,
+        );
+      }
       const missing =
         response.data.metadata?.availability?.missing ??
         response.data.missing ??

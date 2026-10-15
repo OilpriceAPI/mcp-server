@@ -967,7 +967,7 @@
       "status": "not_exposed",
       "disposition": "alias",
       "owner": "mcp-server",
-      "reason": "Same price rows as GET /v1/prices/historical (by_code, interval, page/per_page), addressed by by_period Unix timestamps or past= instead of dates; opa_get_history_range reaches the same series through /historical with ISO dates."
+      "reason": "Overlapping price-history endpoint for the same codes, but not identical rows: /v1/prices applies a default source for single-code requests, the default spot_price type scope and organization (BYOS/Data Connector) scoping, and takes by_period Unix timestamps or past= instead of dates, while /v1/prices/historical skips those scopes. The date-range workflow selected in #123 is served by opa_get_history_range through /historical; a separate tool for the scoped /v1/prices view has no measured demand."
     },
     {
       "operation": "GET /v1/prices/all",

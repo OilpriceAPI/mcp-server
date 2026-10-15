@@ -306,6 +306,9 @@ describe("opa_get_history_range (#123)", () => {
       "fetch",
       okFetch(
         historyBody([], {
+          // Live 2026-10-15: the applied window echoes the requested dates.
+          start_at: "1950-01-01T00:00:00Z",
+          end_at: "1950-02-01T23:59:59Z",
           availability: {
             complete: false,
             requested_count: 1,
@@ -338,6 +341,117 @@ describe("opa_get_history_range (#123)", () => {
 
     expect(body).toContain("no rows matched the requested window");
     expect(body).not.toMatch(/upgrade|plan/i);
+  });
+
+  it("when the plan's history depth removes the whole window, says so instead of calling it missing data (review D1)", async () => {
+    // V1::PricesController#historical (oilpriceapi-api f933a69f6): a one_year
+    // account asking for 2020-01 gets its start moved to depth_floor
+    // (~1 year ago), so metadata.start_at is AFTER metadata.end_at, zero
+    // rows come back, and X-Total / X-Total-Pages are 0.
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    vi.stubGlobal(
+      "fetch",
+      okFetch(
+        historyBody([], {
+          start_at: "2025-10-15T17:40:12Z",
+          end_at: "2020-01-31T23:59:59Z",
+          availability: {
+            complete: false,
+            requested_count: 1,
+            returned_count: 0,
+            missing_count: 1,
+            missing_codes: ["BRENT_CRUDE_USD"],
+            missing: [
+              {
+                code: "BRENT_CRUDE_USD",
+                reason: "empty_window",
+                message:
+                  "BRENT_CRUDE_USD has price history, but no rows matched the requested window.",
+              },
+            ],
+          },
+        }),
+        { "X-Total": "0", "X-Total-Pages": "0" },
+      ),
+    );
+
+    const result = await tools[TOOL].handler(
+      {
+        commodities: ["brent"],
+        start_date: "2020-01-01",
+        end_date: "2020-01-31",
+      },
+      {},
+    );
+    const body = text(result);
+
+    expect(body).toContain("2025-10-15");
+    expect(body).toMatch(/history depth/i);
+    expect(body).toMatch(/opa_get_plans/);
+    expect(body).not.toMatch(/data-availability/i);
+    expect(body).not.toContain("no rows matched");
+  });
+
+  it("a page past the last page says so instead of calling it missing data (review D2)", async () => {
+    // Live 2026-10-15: BRENT_CRUDE_USD Sep 2026, page 99, X-Total-Pages 1.
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    vi.stubGlobal(
+      "fetch",
+      okFetch(historyBody([]), {
+        "X-Total": "22",
+        "X-Total-Pages": "1",
+        "X-Page": "99",
+      }),
+    );
+
+    const result = await tools[TOOL].handler(
+      {
+        commodities: ["brent"],
+        start_date: "2026-09-01",
+        end_date: "2026-09-30",
+        page: 99,
+      },
+      {},
+    );
+    const body = text(result);
+
+    expect(body).toMatch(/page 99 is past the last page \(1\)/i);
+    expect(body).toMatch(/22 rows/);
+    expect(body).not.toMatch(/data-availability/i);
+  });
+
+  it("states that pages run newest-first (review D3)", async () => {
+    const description = tools[TOOL].description ?? "";
+    expect(description).toMatch(/newest/i);
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    vi.stubGlobal(
+      "fetch",
+      okFetch(historyBody(TWO_CODE_ROWS.slice(0, 2)), {
+        "X-Total": "116",
+        "X-Total-Pages": "3",
+      }),
+    );
+    const body = text(
+      await tools[TOOL].handler(
+        { commodities: ["brent"], start_date: "2025-01-01", per_page: 2 },
+        {},
+      ),
+    );
+    expect(body).toMatch(/page 1 holds the most recent rows|newest first/i);
+  });
+
+  it("the keyless teaser does not imply page 1 starts at the oldest date (review D3)", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "");
+    vi.stubEnv("OIL_PRICE_API_KEY", "");
+    vi.stubGlobal("fetch", okFetch({}));
+    const body = text(
+      await tools[TOOL].handler(
+        { commodities: ["brent"], start_date: "2025-01-01" },
+        {},
+      ),
+    );
+    expect(body).toMatch(/newest/i);
+    expect(body).not.toContain("2025-01-02");
   });
 
   it("names a code the API reports missing while still rendering the others", async () => {
