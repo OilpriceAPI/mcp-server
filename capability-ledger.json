@@ -1,7 +1,7 @@
 {
   "$comment": "API-to-MCP capability ledger (#77). One row per operation in the published OpenAPI contract. Checked by `npm run check:capability-ledger` against the live contract, build/capabilities.json and src/index.ts. Bump ledgerVersion and append to changes for every decision change, and link the change from the release notes.",
   "schemaVersion": "1.0.0",
-  "ledgerVersion": 4,
+  "ledgerVersion": 5,
   "source": {
     "openapi": {
       "url": "https://api.oilpriceapi.com/openapi.json",
@@ -357,7 +357,7 @@
       "tools": [
         "opa_get_spread"
       ],
-      "reason": "Current crack, basis and margin are exposed; history, all-series, curve-structure and physical-premium views are deferred on low demand."
+      "reason": "Crack, basis and margin are exposed with their parameters (#169): latest, daily history, and the all-pairs basis view. Crack/margin all-series, curve-structure and physical-premium views are deferred on low demand."
     },
     {
       "id": "indicators",
@@ -1101,18 +1101,20 @@
     {
       "operation": "GET /v1/spreads/basis/all",
       "family": "spreads",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "All-series view; opa_get_spread returns one current value. Low measured demand."
+      "status": "exposed",
+      "tools": [
+        "opa_get_spread"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/spreads/basis/historical",
       "family": "spreads",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "History view; opa_get_spread returns the current value only. Low measured demand."
+      "status": "exposed",
+      "tools": [
+        "opa_get_spread"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/spreads/crack",
@@ -1134,10 +1136,11 @@
     {
       "operation": "GET /v1/spreads/crack/historical",
       "family": "spreads",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "History view; opa_get_spread returns the current value only. Low measured demand."
+      "status": "exposed",
+      "tools": [
+        "opa_get_spread"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/spreads/curve-structure",
@@ -1183,10 +1186,11 @@
     {
       "operation": "GET /v1/spreads/margin/historical",
       "family": "spreads",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "History view; opa_get_spread returns the current value only. Low measured demand."
+      "status": "exposed",
+      "tools": [
+        "opa_get_spread"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/spreads/physical-premium",
@@ -1474,6 +1478,12 @@
       "date": "2026-10-15",
       "issue": "https://github.com/OilpriceAPI/mcp-server/issues/123",
       "summary": "Selection 1 shipped: GET /v1/prices/historical is exposed by the new opa_get_history_range tool (1-5 codes, start/end date, hourly/daily/weekly/monthly, page/per_page up to 500, explicit partial-page notice). GET /v1/prices moves from selected to alias of GET /v1/prices/historical and leaves selection 1, because it serves the same rows through a timestamp/past= interface; no separate tool is needed."
+    },
+    {
+      "ledgerVersion": 5,
+      "date": "2026-10-15",
+      "issue": "https://github.com/OilpriceAPI/mcp-server/issues/169",
+      "summary": "opa_get_spread now passes pair, crack type/crude, margin index and start/end date. GET /v1/spreads/basis/all (basis without a pair) and GET /v1/spreads/{basis,crack,margin}/historical move from deferred to exposed by opa_get_spread. No entitlement change: the same analytics gate covers every /v1/spreads route."
     }
   ]
 }

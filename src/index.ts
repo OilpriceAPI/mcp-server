@@ -653,7 +653,9 @@ function marineFuelMatches(fuel: MarineFuelQuote, wanted: string): boolean {
   const type = marineKey(fuel.fuel_type);
   // Exact type or code, or a family prefix: "MGO" is the API's MGO_05S.
   return (
-    type === key || marineKey(fuel.code) === key || (type !== "" && type.startsWith(key))
+    type === key ||
+    marineKey(fuel.code) === key ||
+    (type !== "" && type.startsWith(key))
   );
 }
 
@@ -2711,7 +2713,8 @@ const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
     },
     opa_get_rig_counts: {
       does: "Returns the latest Baker Hughes US total rig count with its region and observation date. No oil/gas split and no prior-week delta — that is opa_get_drilling.",
-      example: "United States · Rig Count: NNN rigs · As Of: YYYY-MM-DDTHH:MM:SSZ",
+      example:
+        "United States · Rig Count: NNN rigs · As Of: YYYY-MM-DDTHH:MM:SSZ",
     },
     opa_get_drilling: {
       does: "Returns a drilling activity snapshot: US/Canada/international rig counts, frac spread count, well permits (last 30 days, by state), and DUC well totals.",
@@ -2768,7 +2771,7 @@ const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
         "TX (YYYY-MM): NNN,NNN,NNN bbl oil · N,NNN,NNN,NNN mcf gas · NNN,NNN,NNN boe",
     },
     opa_get_spread: {
-      does: "Returns refining and trading spreads: crack spreads, basis differentials, and blending/transport margins.",
+      does: "Returns refining and trading spreads: crack spreads, basis differentials, and composite refinery margins (latest or daily history).",
       example: "3-2-1 crack spread: $XX.XX/bbl (as of YYYY-MM-DD)",
     },
     opa_get_fuel_surcharge: {
@@ -5479,27 +5482,171 @@ server.registerTool(
   },
 );
 
+// #169 — the backend contract for /v1/spreads/{crack,basis,margin}, read from
+// oilpriceapi-api app/controllers/v1/spreads_controller.rb and the
+// CrackSpreadCalculator / BasisSpreadCalculator / RefineryMarginCalculator
+// constants on origin/main (2026-10-15), and confirmed live the same day.
+export const SPREAD_BASIS_PAIRS = [
+  "WAHA_HH",
+  "BRENT_WTI",
+  "BRENT_DUBAI",
+  "JKM_HH",
+  "TTF_HH",
+  "BRENT_OMAN",
+] as const;
+export const SPREAD_CRACK_TYPES = [
+  "3-2-1",
+  "jet",
+  "diesel",
+  "gasoline",
+] as const;
+export const SPREAD_CRACK_CRUDES = [
+  "BRENT_CRUDE_USD",
+  "WTI_USD",
+  "BRENT_SPOT_USD",
+  "WTI_SPOT_USD",
+] as const;
+export const SPREAD_MARGIN_INDICES = ["usgc", "singapore", "nwe"] as const;
+
+export interface SpreadRequestOptions {
+  type: "crack" | "basis" | "margin";
+  pair?: string;
+  crack_type?: string;
+  crude?: string;
+  index?: string;
+  start_date?: string;
+  end_date?: string;
+}
+
+/**
+ * Build the /v1/spreads request for opa_get_spread. A parameter that does not
+ * apply to the chosen type is refused rather than silently dropped, so the
+ * model learns the contract instead of getting a default it did not ask for.
+ */
+export function spreadEndpoint(
+  options: SpreadRequestOptions,
+): { endpoint: string } | { error: string } {
+  const { type } = options;
+  const owner: Record<string, SpreadRequestOptions["type"]> = {
+    pair: "basis",
+    crack_type: "crack",
+    crude: "crack",
+    index: "margin",
+  };
+  for (const [param, applies] of Object.entries(owner)) {
+    if (options[param as keyof SpreadRequestOptions] && applies !== type) {
+      return {
+        error: `Invalid argument: ${param} only applies to type=${applies}; it was passed with type=${type}.`,
+      };
+    }
+  }
+  if (!validIsoDate(options.start_date) || !validIsoDate(options.end_date)) {
+    return {
+      error:
+        "start_date and end_date must be valid dates in YYYY-MM-DD format.",
+    };
+  }
+  if (
+    options.start_date &&
+    options.end_date &&
+    options.start_date > options.end_date
+  ) {
+    return { error: "start_date must be on or before end_date." };
+  }
+
+  const historical = Boolean(options.start_date || options.end_date);
+  const query = new URLSearchParams();
+  if (type === "basis") {
+    if (!options.pair) {
+      if (historical) {
+        return {
+          error: `pair must be set for basis history. Valid pairs: ${SPREAD_BASIS_PAIRS.join(", ")}.`,
+        };
+      }
+      return { endpoint: "/v1/spreads/basis/all" };
+    }
+    query.set("pair", options.pair);
+  } else if (type === "crack") {
+    if (options.crack_type) query.set("type", options.crack_type);
+    if (options.crude) query.set("crude", options.crude);
+  } else if (options.index) {
+    query.set("index", options.index);
+  }
+  if (options.start_date) query.set("start_date", options.start_date);
+  if (options.end_date) query.set("end_date", options.end_date);
+
+  const path = historical
+    ? `/v1/spreads/${type}/historical`
+    : `/v1/spreads/${type}`;
+  const qs = query.toString();
+  return { endpoint: qs ? `${path}?${qs}` : path };
+}
+
 server.registerTool(
   "opa_get_spread",
   {
     title: "Get Refining & Trading Spreads",
     description:
-      "Get refining and trading spreads: crack spreads (refining margin proxy), basis spreads (regional price differentials), and blending/transport margins. Use when the user asks about crack spreads, 3-2-1 crack, refining margins, basis differentials, or blend/transport margins. " +
+      "Get refining and trading spreads: crack spreads (refining margin proxy), basis spreads (regional price differentials), and refinery margins, latest or as a daily history. Use when the user asks about crack spreads, 3-2-1 crack, refining margins, Brent-WTI, Waha or JKM/TTF vs Henry Hub basis. " +
+      `crack: crack_type ${SPREAD_CRACK_TYPES.join("|")} (default 3-2-1) against crude ${SPREAD_CRACK_CRUDES.join("|")} (default BRENT_CRUDE_USD). ` +
+      `basis: pair ${SPREAD_BASIS_PAIRS.join("|")}; omit pair to list every pair (/basis/all). ` +
+      `margin: index ${SPREAD_MARGIN_INDICES.join("|")} (default usgc). ` +
+      "Pass start_date and/or end_date (YYYY-MM-DD) for daily history (backend default: last 30 days, capped at 2 years); basis history needs a pair. " +
       ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       type: z
         .enum(["crack", "basis", "margin"])
         .describe(
-          "Spread type: crack (refining crack spread, e.g. 3-2-1), basis (regional/grade price differential), or margin (blending/transport margin).",
+          "Spread type: crack (refining crack spread, e.g. 3-2-1), basis (regional/grade price differential), or margin (composite refinery margin).",
+        ),
+      pair: z
+        .enum(SPREAD_BASIS_PAIRS)
+        .optional()
+        .describe(
+          "type=basis only. Hub/grade pair, e.g. BRENT_WTI, WAHA_HH, JKM_HH. Omit to list all pairs.",
+        ),
+      crack_type: z
+        .enum(SPREAD_CRACK_TYPES)
+        .optional()
+        .describe(
+          "type=crack only. 3-2-1 composite (default), or single-product jet, diesel (heating oil), gasoline (RBOB).",
+        ),
+      crude: z
+        .enum(SPREAD_CRACK_CRUDES)
+        .optional()
+        .describe(
+          "type=crack only. Crude leg; default BRENT_CRUDE_USD (futures). *_SPOT_USD are spot.",
+        ),
+      index: z
+        .enum(SPREAD_MARGIN_INDICES)
+        .optional()
+        .describe(
+          "type=margin only. usgc (US Gulf Coast, default), singapore, or nwe (NW Europe).",
+        ),
+      start_date: z
+        .string()
+        .optional()
+        .describe(
+          "Optional history start (YYYY-MM-DD). Switches to the daily historical series.",
+        ),
+      end_date: z
+        .string()
+        .optional()
+        .describe(
+          "Optional history end (YYYY-MM-DD). Switches to the daily historical series.",
         ),
     },
     annotations: READ_TOOL_ANNOTATIONS,
   },
-  async ({ type }) => {
+  async (args) => {
     if (!getApiKey()) return keylessTeaserResult("opa_get_spread");
 
+    const { type } = args;
+    const built = spreadEndpoint(args);
+    if ("error" in built) return errorResult(built.error);
+
     const outcome = await requestApi<ApiResponse<Record<string, unknown>>>(
-      `/v1/spreads/${type}`,
+      built.endpoint,
     );
     const response = outcome.data;
 
