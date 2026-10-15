@@ -14,6 +14,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { generateLiveContractMatrix } from "./generate-live-contract-matrix.mjs";
 import { checkToolFields } from "./live-contract-fields.mjs";
+import { cleanupSynthetic, sweepStaleSynthetic } from "./synthetic-cleanup.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const resultsPath = resolve(root, "artifacts/live-contract-results.json");
@@ -254,30 +255,39 @@ async function checkRead(contract) {
   });
 }
 
-async function deleteAndVerify({ tool, collectionPath, id }) {
-  const deleted = await request(`${collectionPath}/${encodeURIComponent(id)}`, { method: "DELETE" });
-  assert([200, 204].includes(deleted.status), `cleanup DELETE returned HTTP ${deleted.status}`);
-  const listed = await request(collectionPath);
-  assert(listed.status === 200, `cleanup verification returned HTTP ${listed.status}`);
-  const records = Array.isArray(listed.body)
-    ? listed.body
-    : listed.body?.subscriptions ?? listed.body?.data?.subscriptions ?? [];
-  assert(!records.some((recordItem) => String(recordItem.id) === String(id)), "synthetic record leaked after cleanup");
-  record(tool, "passed", "DELETE cleanup verified record absent", {
-    method: "DELETE",
-    path: `${collectionPath}/:id`,
-  });
+// A smoke record older than this was left by an earlier run (#126).
+const STALE_SYNTHETIC_MS = 60 * 60 * 1000;
+
+async function sweepLeaks(collectionPath) {
+  const swept = await sweepStaleSynthetic({ request, collectionPath, maxAgeMs: STALE_SYNTHETIC_MS });
+  if (swept.length) process.stdout.write(`SWEPT: ${collectionPath} stale synthetic records ${swept.join(", ")}\n`);
+}
+
+// Runs whenever the create was sent, whether or not its id could be read:
+// gating cleanup on the id leaked watch b84b24a0 on 2026-09-04 (#126).
+async function cleanupAndRecord({ tool, collectionPath, id, name }) {
+  const deleted = await cleanupSynthetic({ request, collectionPath, id, name });
+  if (deleted.length) {
+    record(tool, "passed", "DELETE cleanup verified record absent", {
+      method: "DELETE",
+      path: `${collectionPath}/:id`,
+    });
+  }
 }
 
 async function priceAlertLifecycle() {
   let id;
+  let sent = false;
+  const name = `mcp-live-contract-${Date.now()}`;
   try {
+    await sweepLeaks("/v1/alerts");
+    sent = true;
     const created = await request("/v1/alerts", {
       method: "POST",
       headers: { "X-OPA-Tool": "opa_create_price_alert" },
       body: {
         price_alert: {
-          name: `mcp-live-contract-${Date.now()}`,
+          name,
           commodity_code: "BRENT_CRUDE_USD",
           condition_operator: "greater_than",
           condition_value: 1000000,
@@ -297,17 +307,21 @@ async function priceAlertLifecycle() {
       record(tool, "passed", "synthetic alert visible in account-scoped list", { method: "GET", path: "/v1/alerts" });
     }
   } finally {
-    if (id) await deleteAndVerify({ tool: "opa_delete_price_alert", collectionPath: "/v1/alerts", id });
+    if (sent) await cleanupAndRecord({ tool: "opa_delete_price_alert", collectionPath: "/v1/alerts", id, name });
   }
 }
 
 async function subscriptionLifecycle() {
   let id;
+  let sent = false;
+  const name = `mcp-live-contract-${Date.now()}`;
   try {
+    await sweepLeaks("/v1/subscriptions");
+    sent = true;
     const created = await request("/v1/subscriptions", {
       method: "POST",
       headers: { "X-OPA-Tool": "opa_create_price_subscription" },
-      body: { codes: ["BRENT_CRUDE_USD"], interval_seconds: 3600, name: `mcp-live-contract-${Date.now()}` },
+      body: { codes: ["BRENT_CRUDE_USD"], interval_seconds: 3600, name },
     });
     assert([200, 201].includes(created.status), `create subscription returned HTTP ${created.status}`);
     id = created.body?.subscription?.id ?? created.body?.data?.subscription?.id;
@@ -325,7 +339,7 @@ async function subscriptionLifecycle() {
     validateShape("events", events.body);
     record("opa_get_subscription_events", "passed", "event envelope validated", { method: "GET", path: "/v1/subscriptions/events?since=0" });
   } finally {
-    if (id) await deleteAndVerify({ tool: "opa_delete_subscription", collectionPath: "/v1/subscriptions", id });
+    if (sent) await cleanupAndRecord({ tool: "opa_delete_subscription", collectionPath: "/v1/subscriptions", id, name });
   }
 }
 
@@ -353,7 +367,9 @@ async function main() {
   );
   // Field checks reuse each contract response; the handlers' secondary calls
   // (a comparison leg, a state-health gate) are budgeted at one per read.
-  const expectedRequests = reads.length * 2 + (writesRequired ? 12 : 1) + 2;
+  // Writes: 11 lifecycle requests including the two leak sweeps, plus room
+  // for a few swept deletes (#126).
+  const expectedRequests = reads.length * 2 + (writesRequired ? 14 : 1) + 2;
   try {
     await quotaPreflight(expectedRequests);
   } catch (error) {
