@@ -144,17 +144,38 @@ describe("capability ledger", () => {
 
   it("fails when an exposed row is not reached by any MCP source call", () => {
     const broken = clone(ledger);
+    // #123 exposed /v1/prices/historical for real, so the fixture uses a row
+    // no tool reaches yet.
     const row = broken.operations.find(
-      (entry: { operation: string }) => entry.operation === "GET /v1/prices/historical",
+      (entry: { operation: string }) =>
+        entry.operation === "GET /v1/prices/marine-fuels/historical",
     );
-    Object.assign(row, { status: "exposed", tools: ["opa_get_history"] });
+    Object.assign(row, { status: "exposed", tools: ["opa_get_marine_fuels"] });
     delete row.disposition;
     delete row.reason;
     delete row.selection;
     const result = evaluate({ ledger: broken });
     expect(result.errors.join("\n")).toContain(
-      "GET /v1/prices/historical is marked exposed but no MCP source call reaches it",
+      "GET /v1/prices/marine-fuels/historical is marked exposed but no MCP source call reaches it",
     );
+  });
+
+  it("records selection 1 as shipped in the v4 changes entry (#123)", () => {
+    const row = ledger.operations.find(
+      (entry: { operation: string }) => entry.operation === "GET /v1/prices/historical",
+    );
+    expect(row).toMatchObject({ status: "exposed", tools: ["opa_get_history_range"] });
+    const index = ledger.operations.find(
+      (entry: { operation: string }) => entry.operation === "GET /v1/prices",
+    );
+    expect(index).toMatchObject({ status: "not_exposed", disposition: "alias" });
+    expect(LIVE_CONTRACT_CATALOG).toHaveProperty("opa_get_history_range");
+    const v4 = ledger.changes.find(
+      (change: { ledgerVersion: number }) => change.ledgerVersion === 4,
+    );
+    expect(v4?.issue).toBe("https://github.com/OilpriceAPI/mcp-server/issues/123");
+    expect(v4?.summary).toContain("GET /v1/prices/historical");
+    expect(v4?.summary).toContain("GET /v1/prices ");
   });
 
   it("requires every selection to carry an issue and the #77 requirements", () => {

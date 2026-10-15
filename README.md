@@ -276,6 +276,7 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_compare_prices`      | Side-by-side comparison of 2-5 commodities with spread                                          |
 | `opa_list_commodities`    | Account-visible commodity catalog returned by the live API                                      |
 | `opa_get_history`         | Historical prices with high/low/avg/change (day/week/month/year)                                |
+| `opa_get_history_range`   | Dated price rows for 1-5 commodities over a start/end date range, hourly to monthly, paged      |
 | `opa_get_futures`         | Front-month futures (Brent, WTI, gasoil, TTF, JKM, EU carbon)                                   |
 | `opa_get_futures_curve`   | Full forward curve with contango/backwardation analysis                                         |
 | `opa_get_marine_fuels`    | Bunker fuel prices by port and fuel type (VLSFO/MGO/IFO380)                                     |

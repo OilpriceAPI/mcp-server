@@ -31,6 +31,7 @@ const TOOL_CATEGORY_BY_NAME: Record<string, ToolCategory> = {
   opa_compare_prices: "core",
   opa_list_commodities: "core",
   opa_get_history: "core",
+  opa_get_history_range: "core",
   opa_get_account_status: "core",
   opa_get_plans: "core",
   opa_get_futures: "market",

@@ -166,6 +166,12 @@ const SITES: Array<{
     tool: "opa_get_history",
     args: { commodity: "brent", period: "month" },
   },
+  // #123: the date-range sibling inherits the same contract.
+  {
+    label: "opa_get_history_range",
+    tool: "opa_get_history_range",
+    args: { commodities: ["brent"], start_date: "2026-09-01" },
+  },
 ];
 
 describe("#103 — a failed request never blames the account's entitlement", () => {

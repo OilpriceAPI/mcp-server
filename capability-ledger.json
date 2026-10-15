@@ -1,7 +1,7 @@
 {
   "$comment": "API-to-MCP capability ledger (#77). One row per operation in the published OpenAPI contract. Checked by `npm run check:capability-ledger` against the live contract, build/capabilities.json and src/index.ts. Bump ledgerVersion and append to changes for every decision change, and link the change from the release notes.",
   "schemaVersion": "1.0.0",
-  "ledgerVersion": 3,
+  "ledgerVersion": 4,
   "source": {
     "openapi": {
       "url": "https://api.oilpriceapi.com/openapi.json",
@@ -59,8 +59,7 @@
       "family": "prices",
       "issue": "https://github.com/OilpriceAPI/mcp-server/issues/123",
       "operations": [
-        "GET /v1/prices/historical",
-        "GET /v1/prices"
+        "GET /v1/prices/historical"
       ],
       "requirements": [
         "input-schema",
@@ -116,9 +115,10 @@
         "opa_compare_prices",
         "opa_market_overview",
         "opa_get_history",
+        "opa_get_history_range",
         "opa_get_diesel_by_state"
       ],
-      "reason": "Latest, all-prices and fixed past_* windows are exposed; date-range and paginated history are selection 1."
+      "reason": "Latest, all-prices, fixed past_* windows and date-range history (opa_get_history_range, selection 1) are exposed; GET /v1/prices is an alias of the date-range history and the remaining rows have their own decisions."
     },
     {
       "id": "demo",
@@ -965,10 +965,9 @@
       "operation": "GET /v1/prices",
       "family": "prices",
       "status": "not_exposed",
-      "disposition": "selected",
-      "selection": 1,
+      "disposition": "alias",
       "owner": "mcp-server",
-      "reason": "Paginated history; opa_get_history reaches only the fixed past_* windows. Selection 1."
+      "reason": "Same price rows as GET /v1/prices/historical (by_code, interval, page/per_page), addressed by by_period Unix timestamps or past= instead of dates; opa_get_history_range reaches the same series through /historical with ISO dates."
     },
     {
       "operation": "GET /v1/prices/all",
@@ -990,11 +989,12 @@
     {
       "operation": "GET /v1/prices/historical",
       "family": "prices",
-      "status": "not_exposed",
-      "disposition": "selected",
+      "status": "exposed",
+      "tools": [
+        "opa_get_history_range"
+      ],
       "selection": 1,
-      "owner": "mcp-server",
-      "reason": "Arbitrary date-range history; opa_get_history reaches only the fixed past_* windows. Selection 1."
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/prices/latest",
@@ -1475,6 +1475,12 @@
       "date": "2026-10-14",
       "issue": "https://github.com/OilpriceAPI/mcp-server/issues/159",
       "summary": "Record three newly published operations as explicitly deferred (preview GET /v1/context/market/news, beta GET /v1/futures/oman, keyless GET /v1/meta/methodology) and the new key-rename operation PATCH /v1/api-keys/{id} as unsupported, like the other api-keys operations; re-verify family path prefixes against config/openapi_route_policy.yml at oilpriceapi-api 66f46ed0d (only change since 531e29899 is the retired congressional-trades exclusion reason, which no family uses). No runtime exposure or entitlement change."
+    },
+    {
+      "ledgerVersion": 4,
+      "date": "2026-10-15",
+      "issue": "https://github.com/OilpriceAPI/mcp-server/issues/123",
+      "summary": "Selection 1 shipped: GET /v1/prices/historical is exposed by the new opa_get_history_range tool (1-5 codes, start/end date, hourly/daily/weekly/monthly, page/per_page up to 500, explicit partial-page notice). GET /v1/prices moves from selected to alias of GET /v1/prices/historical and leaves selection 1, because it serves the same rows through a timestamp/past= interface; no separate tool is needed."
     }
   ]
 }
