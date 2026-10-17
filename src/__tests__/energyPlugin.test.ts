@@ -49,8 +49,12 @@ describe("public energy facade", () => {
       expect(data.outcome).toBe("upstream_error");
     } finally {
       clearTimeout(timer);
-      upstream.closeAllConnections();
-      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        // Stop accepting connections before terminating sockets; Undici may
+        // otherwise reconnect between closeAllConnections() and close().
+        upstream.close(() => resolve());
+        upstream.closeAllConnections();
+      });
     }
   });
   it("does not count malformed futures contracts as usable data", async () => {

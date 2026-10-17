@@ -11,7 +11,7 @@ import { withRequestCredential } from "./requestCredential.js";
 import { withDemoClient } from "./demoClient.js";
 import { createHash } from "node:crypto";
 
-export const PLUGIN_VERSION = "0.1.1";
+export const PLUGIN_VERSION = "0.1.2";
 export const WEBSITE_URL = "https://www.oilpriceapi.com/";
 export const ENERGY_CODES = [
   "BRENT_CRUDE_USD",

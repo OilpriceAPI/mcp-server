@@ -262,7 +262,7 @@ describe("Streamable HTTP service", () => {
           {
             event: "plugin_handoff_visit",
             dataset_category: "futures",
-            plugin_version: "0.1.1",
+            plugin_version: "0.1.2",
             population: "browser_navigation_proxy",
           },
         ]);
