@@ -1,5 +1,6 @@
 # Isolated App Platform app. APP_URL binds its stable HTTPS ingress.
-# Reviewed source 55e7da9856c78de0c4298080600534088e8ba92d, immutable DOCR image.
+# Reviewed source 6a59fbdffc88bdc4a347f81799fb56b006cbf462 (#150), immutable DOCR image.
+# Rollback: previous digest sha256:02b58d701a7f4cd74def1f8045c6529afb9f0cb616429e57ec78b5e3b000b1e2.
 # Do not apply this spec to either existing API/frontend app.
 name: oilpriceapi-openai-mcp
 region: nyc
@@ -9,7 +10,7 @@ services:
       registry_type: DOCR
       registry: opa-2025-registry
       repository: oilpriceapi-openai-mcp
-      digest: sha256:02b58d701a7f4cd74def1f8045c6529afb9f0cb616429e57ec78b5e3b000b1e2
+      digest: sha256:a2bc659c691845cead42f14ee7157786a8d69fcc872c8b8d8b4d8a5f1355dc0a
     http_port: 8080
     instance_count: 1
     instance_size_slug: apps-s-1vcpu-1gb
@@ -20,6 +21,10 @@ services:
       - key: NODE_ENV
         scope: RUN_TIME
         value: production
+      # Without this, any request with Origin: https://claude.ai gets 403 on /register and /mcp.
+      - key: MCP_ALLOWED_ORIGINS
+        scope: RUN_TIME
+        value: https://claude.ai,https://claude.com
     health_check:
       http_path: /health
       initial_delay_seconds: 10
@@ -32,3 +37,7 @@ services:
 alerts:
   - rule: DEPLOYMENT_FAILED
   - rule: DOMAIN_FAILED
+domains:
+  # Cloudflare CNAME, DNS-only (not proxied) so platform egress is not challenged.
+  - domain: mcp.oilpriceapi.com
+    type: PRIMARY
