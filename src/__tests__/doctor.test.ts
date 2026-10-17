@@ -149,6 +149,9 @@ describe("oilpriceapi-mcp doctor", () => {
 
     expect(report.ok).toBe(true);
     expect(report.checks.at(-1)).toMatchObject({ id: "demo", status: "pass" });
+    const demoUrl = new URL(String(fetchImpl.mock.calls[1][0]));
+    expect(demoUrl.pathname).toBe("/v1/demo/prices");
+    expect(demoUrl.searchParams.get("client")).toBe("mcp");
     expect(fetchImpl.mock.calls[1][1]?.headers).not.toHaveProperty(
       "Authorization",
     );
