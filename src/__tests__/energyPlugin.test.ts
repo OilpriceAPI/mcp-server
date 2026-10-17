@@ -495,6 +495,10 @@ describe("public energy facade", () => {
       ),
     );
     expect(data.availability).toBe("available");
+    // Keyless demo request is attributed to MCP (oilpriceapi-api#9388).
+    const demoUrl = new URL(String(fetchImpl.mock.calls[0][0]));
+    expect(demoUrl.pathname).toBe("/v1/demo/prices");
+    expect(demoUrl.searchParams.get("client")).toBe("mcp");
     expect(writeEvent.mock.calls[0][0]).toMatchObject({
       event: "plugin_tool_call",
       tool: "energy_get_price",
