@@ -675,6 +675,46 @@ function marineStaleCell(stale: unknown): string {
   return NOT_REPORTED;
 }
 
+// Canonical latest path (#125). /v1/marine-fuels/latest is a deprecated alias
+// in the API route policy. The API caps `limit` at 100 and defaults it to 50
+// series rows; asking for the cap keeps a growing port list from truncating.
+const MARINE_FUELS_LATEST_PATH = "/v1/prices/marine-fuels/latest?limit=100";
+
+// Shapes of GET /v1/marine-ports and /v1/marine-ports/{code} (verified live
+// 2026-10-15). Optional throughout: the renderer states an absence.
+interface MarinePortSummary {
+  code?: string;
+  name?: string;
+  country?: string;
+  region?: string;
+  major_port?: boolean;
+  fuel_services?: string[];
+  trading_hours?: string;
+  timezone?: string;
+  recent_prices?: MarineFuelQuote[];
+}
+
+/** Fuel series the API carries per port (Price::MARINE_FUEL_PREFIXES). */
+const MARINE_FUEL_TYPES = ["VLSFO", "MGO_05S", "HFO_380", "HFO_180"] as const;
+
+function yesNo(value: unknown): string {
+  if (value === true) return "yes";
+  if (value === false) return "no";
+  return NOT_REPORTED;
+}
+
+function listCell(values: unknown): string {
+  return Array.isArray(values) && values.length
+    ? values.map((v) => reportedValue(v)).join(", ")
+    : NOT_REPORTED;
+}
+
+/** The date part of an ISO timestamp, or NOT_REPORTED. */
+function isoDate(value: unknown): string {
+  const text = reportedValue(value);
+  return /^\d{4}-\d{2}-\d{2}/.test(text) ? text.slice(0, 10) : NOT_REPORTED;
+}
+
 // Shape of GET /v1/rig-counts/latest as served by the current API (verified
 // live 2026-09-13). The pre-#115 formatter read oil/gas/total/date — four
 // fields this envelope has never carried — so every line of the answer was
@@ -2720,6 +2760,14 @@ const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
       does: "Returns marine bunker fuel prices (VLSFO, MGO, IFO380) across major shipping ports like Singapore and Rotterdam.",
       example: "SINGAPORE | VLSFO | $XXX.XX | USD | metric ton",
     },
+    opa_get_marine_ports: {
+      does: "Lists the bunkering ports the API carries with UN/LOCODE, region and fuel services, or one port with its recent prices.",
+      example: "| SGSIN | Singapore | Singapore | Asia | yes | MGO_05S, VLSFO, HFO_380 | 24/7 |",
+    },
+    opa_get_marine_fuel_history: {
+      does: "Returns the daily price history of one marine fuel at one port, one row per assessment date.",
+      example: "| YYYY-MM-DD | XXX.XX | USD | metric_ton | collected YYYY-MM-DDTHH:MM:SSZ |",
+    },
     opa_get_rig_counts: {
       does: "Returns the latest Baker Hughes US total rig count with its region and observation date. No oil/gas split and no prior-week delta — that is opa_get_drilling.",
       example:
@@ -4334,7 +4382,7 @@ server.registerTool(
     // (OilpriceAPI/oilpriceapi-api#7774). Forwarding either turned every
     // filtered call into a confident "no data".
     const outcome = await requestApi<ApiResponse<MarineFuelsData>>(
-      "/v1/prices/marine-fuels/latest",
+      MARINE_FUELS_LATEST_PATH,
     );
     const response = outcome.data;
     const ports =
@@ -4418,6 +4466,194 @@ server.registerTool(
     const portCount = new Set(rows.map(({ port: p }) => p)).size;
     text += `\n_${rows.length} price${rows.length === 1 ? "" : "s"} across ${portCount} port${portCount === 1 ? "" : "s"} | Data from [OilPriceAPI](https://oilpriceapi.com)_`;
 
+    return textResult(text);
+  },
+);
+
+server.registerTool(
+  "opa_get_marine_ports",
+  {
+    title: "Get Marine Fuel Ports",
+    description:
+      "List the bunkering ports the API carries (UN/LOCODE, name, country, region, major-port flag, fuel services, trading hours), or read one port with its prices collected in the last 24 hours. Use it to resolve a port name to the UN/LOCODE that opa_get_marine_fuel_history needs, or to check which fuel services a port lists. Works with any valid API key; the API applies its own marine per-minute rate limit. " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
+    inputSchema: {
+      port: z
+        .string()
+        .regex(/^[A-Za-z][A-Za-z ]{1,39}$/, "Port must be a UN/LOCODE or a port name (letters and spaces)")
+        .optional()
+        .describe("One port by UN/LOCODE or name, e.g. 'SGSIN' or 'Singapore'. Omit to list ports."),
+      region: z
+        .string()
+        .regex(/^[A-Za-z][A-Za-z ]{1,39}$/)
+        .optional()
+        .describe("List filter: region as the API reports it, e.g. 'Asia', 'Europe', 'Americas', 'Middle East'"),
+      country: z
+        .string()
+        .regex(/^[A-Za-z][A-Za-z .'-]{1,59}$/)
+        .optional()
+        .describe("List filter: country as the API reports it, e.g. 'Singapore', 'United States'"),
+      major_only: z.boolean().optional().describe("List filter: only ports the API flags as major"),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ port, region, country, major_only }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_marine_ports");
+
+    if (port) {
+      const code = port.trim().toUpperCase();
+      const outcome = await requestApi<ApiResponse<{ port?: MarinePortSummary }>>(
+        `/v1/marine-ports/${encodeURIComponent(code)}`,
+      );
+      if (outcome.status === 404) {
+        return errorResult(
+          `The API has no marine port "${port}" (HTTP 404). Use opa_get_marine_ports without a port to list the UN/LOCODEs it carries.`,
+        );
+      }
+      const p = outcome.data?.status === "success" ? outcome.data.data?.port : undefined;
+      if (!p) {
+        return errorResult(
+          describeUnavailable(`Marine port "${port}"`, outcome, `The API answered but returned no record for marine port "${port}".`),
+        );
+      }
+      const label = marinePortLabel({ port_code: p.code, port_name: p.name });
+      let text = `# Marine Port: ${label}\n\n`;
+      text += `Country: ${reportedValue(p.country)} | Region: ${reportedValue(p.region)} | Major port: ${yesNo(p.major_port)}\n`;
+      text += `Fuel services: ${listCell(p.fuel_services)}\n`;
+      text += `Trading hours: ${reportedValue(p.trading_hours)} | Timezone: ${reportedValue(p.timezone)}\n\n`;
+      const prices = Array.isArray(p.recent_prices) ? p.recent_prices : [];
+      if (prices.length === 0) {
+        text += "_The API returned no prices observed in the last 7 days for this port. Use opa_get_marine_fuels for the latest assessment with its age._\n";
+      } else {
+        text += "Latest available prices (up to 7 days old):\n\n";
+        text += "| Fuel Type | Price | Currency | Unit | Collected | Observed | Age (days) | Stale |\n|-----------|-------|----------|------|-----------|----------|------------|-------|\n";
+        for (const f of prices) {
+          text += `| ${reportedValue(f.fuel_type)} | ${reportedValue(f.price)} | ${reportedValue(f.currency)} | ${reportedValue(f.unit)} | ${reportedValue(f.collected_at ?? f.timestamp)} | ${reportedValue(f.as_of)} | ${reportedValue(f.age_days)} | ${marineStaleCell(f.stale)} |\n`;
+        }
+      }
+      text += "\n_Data from [OilPriceAPI](https://oilpriceapi.com)_";
+      return textResult(text);
+    }
+
+    const query = new URLSearchParams();
+    if (region) query.set("region", region.trim());
+    if (country) query.set("country", country.trim());
+    if (major_only) query.set("major_ports", "true");
+    const qs = query.toString();
+    const outcome = await requestApi<ApiResponse<{ ports?: MarinePortSummary[] }>>(
+      `/v1/marine-ports${qs ? `?${qs}` : ""}`,
+    );
+    const ports =
+      outcome.data?.status === "success" && Array.isArray(outcome.data.data?.ports)
+        ? outcome.data.data.ports
+        : [];
+    if (ports.length === 0) {
+      const filters = [region && `region "${region}"`, country && `country "${country}"`, major_only && "major ports only"]
+        .filter(Boolean)
+        .join(", ");
+      return errorResult(
+        describeUnavailable(
+          "The marine port directory",
+          outcome,
+          `The API returned no marine ports${filters ? ` for ${filters}` : ""}.`,
+          filters ? "Retry without filters to see the regions and countries it carries." : undefined,
+        ),
+      );
+    }
+    let text = "# Marine Fuel Ports\n\n";
+    text += "| Code | Name | Country | Region | Major | Fuel services | Trading hours |\n";
+    text += "|------|------|---------|--------|-------|---------------|---------------|\n";
+    for (const p of ports) {
+      text += `| ${reportedValue(p.code)} | ${reportedValue(p.name)} | ${reportedValue(p.country)} | ${reportedValue(p.region)} | ${yesNo(p.major_port)} | ${listCell(p.fuel_services)} | ${reportedValue(p.trading_hours)} |\n`;
+    }
+    text += `\n_${ports.length} port${ports.length === 1 ? "" : "s"}. A listed fuel service does not guarantee a priced series; opa_get_marine_fuels shows what is priced. | Data from [OilPriceAPI](https://oilpriceapi.com)_`;
+    return textResult(text);
+  },
+);
+
+server.registerTool(
+  "opa_get_marine_fuel_history",
+  {
+    title: "Get Marine Fuel Price History",
+    description:
+      "Get the daily price history of one marine fuel at one port: one row per assessment date with price, currency, unit and collection time, plus high/low over the rows returned. Use when the user asks how bunker prices at a port moved over days or months. Needs the port's UN/LOCODE (resolve names with opa_get_marine_ports) and a fuel type: VLSFO, MGO_05S (MGO), HFO_380 (IFO380) or HFO_180. Requires a paid subscription or an active trial; other accounts get HTTP 403. The API rate-limits history more tightly than latest prices and caps the rows per request, so a long window can come back shorter than asked; the answer says when it does. " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
+    inputSchema: {
+      port_code: z
+        .string()
+        .regex(/^[A-Za-z]{5}$/, "port_code must be a 5-letter UN/LOCODE, e.g. SGSIN")
+        .describe("Port UN/LOCODE, e.g. 'SGSIN' (Singapore), 'NLRTM' (Rotterdam), 'USHOU' (Houston)"),
+      fuel_type: z.enum(MARINE_FUEL_TYPES).describe("Fuel series: VLSFO, MGO_05S (MGO), HFO_380 (IFO380) or HFO_180"),
+      days: z.number().int().min(1).max(365).default(30).describe("Days back from now, 1-365 (default 30)"),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ port_code, fuel_type, days = 30 }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_marine_fuel_history");
+
+    const port = port_code.toUpperCase();
+    // Send the full series code. A bare `fuel_type=VLSFO` answers an empty 200
+    // (live 2026-10-15; OilpriceAPI/oilpriceapi-api#7774), while the series
+    // code matches exactly and keeps matching once the API resolves bare types.
+    const series = `${fuel_type}_${port}_USD`;
+    const outcome = await requestApi<
+      ApiResponse<{ prices?: MarineFuelPort[]; metadata?: { period?: { end?: string } } }>
+    >(`/v1/prices/marine-fuels/historical?port_code=${port}&fuel_type=${series}&days=${days}`);
+    const groups =
+      outcome.data?.status === "success" && Array.isArray(outcome.data.data?.prices)
+        ? outcome.data.data.prices
+        : [];
+    const rows = groups.flatMap((g) => (Array.isArray(g.fuels) ? g.fuels : []));
+    if (rows.length === 0) {
+      return errorResult(
+        describeUnavailable(
+          `${fuel_type} history at ${port}`,
+          outcome,
+          `The API returned no ${fuel_type} history at ${port} over the last ${days} days.`,
+          "Check the port's fuel services and recent prices with opa_get_marine_ports; a listed service does not guarantee a priced series.",
+        ),
+      );
+    }
+
+    // The API returns every collection, newest first, and can collect one
+    // assessment date more than once. Keep the most recently collected value
+    // per as_of date; rows without an as_of stay as they are.
+    const collected = (f: MarineFuelQuote) => f.collected_at ?? f.timestamp ?? "";
+    const byDate = new Map<string, MarineFuelQuote>();
+    const undated: MarineFuelQuote[] = [];
+    for (const f of rows) {
+      const date = isoDate(f.as_of);
+      if (date === NOT_REPORTED) {
+        undated.push(f);
+        continue;
+      }
+      const held = byDate.get(date);
+      if (!held || collected(f) > collected(held)) byDate.set(date, f);
+    }
+    const dates = [...byDate.keys()].sort().reverse();
+    const series_rows = [...dates.map((d) => byDate.get(d)!), ...undated];
+
+    const first = groups[0];
+    let text = `# ${fuel_type} History: ${marinePortLabel(first)}\n\n`;
+    const units = new Set(series_rows.map((f) => `${reportedValue(f.currency)} ${reportedValue(f.unit)}`));
+    const prices = series_rows.map((f) => f.price).filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+    if (units.size === 1 && prices.length && !units.values().next().value!.includes(NOT_REPORTED)) {
+      text += `High ${Math.max(...prices)} · Low ${Math.min(...prices)} (${units.values().next().value}) over the rows shown.\n\n`;
+    }
+    const end = Date.parse(outcome.data?.data?.metadata?.period?.end ?? "") || Date.now();
+    const windowStart = new Date(end - days * 86_400_000).toISOString().slice(0, 10);
+    const earliest = dates.at(-1);
+    if (earliest && Date.parse(earliest) - Date.parse(windowStart) > 3 * 86_400_000) {
+      text += `_The earliest assessment returned is ${earliest}, later than the requested window start ${windowStart}. The API returned ${rows.length} rows; narrow \`days\` or treat earlier dates as not returned, not as absent from the market._\n\n`;
+    }
+    const synthetic = series_rows.filter((f) => f.synthetic === true).length;
+    if (synthetic) text += `_${synthetic} of ${series_rows.length} rows carry \`synthetic: true\` from the API._\n\n`;
+
+    text += "| Assessment date | Price | Currency | Unit | Collected |\n|-----------------|-------|----------|------|-----------|\n";
+    for (const f of series_rows) {
+      text += `| ${isoDate(f.as_of)} | ${reportedValue(f.price)} | ${reportedValue(f.currency)} | ${reportedValue(f.unit)} | ${reportedValue(collected(f))} |\n`;
+    }
+    text += `\n_${dates.length} assessment dates from ${rows.length} rows; where a date was collected more than once, the most recently collected value is shown. | Data from [OilPriceAPI](https://oilpriceapi.com)_`;
     return textResult(text);
   },
 );

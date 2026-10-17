@@ -121,6 +121,12 @@ const SITES: Array<{
     args: {},
   },
   { label: "opa_get_marine_fuels", tool: "opa_get_marine_fuels", args: {} },
+  { label: "opa_get_marine_ports (list)", tool: "opa_get_marine_ports", args: {} },
+  {
+    label: "opa_get_marine_fuel_history",
+    tool: "opa_get_marine_fuel_history",
+    args: { port_code: "SGSIN", fuel_type: "VLSFO", days: 30 },
+  },
   { label: "opa_get_rig_counts", tool: "opa_get_rig_counts", args: {} },
   { label: "opa_get_drilling", tool: "opa_get_drilling", args: {} },
   {
