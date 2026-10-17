@@ -1,34 +1,63 @@
-# Isolated App Platform app. APP_URL binds its stable HTTPS ingress.
-# Reviewed source 55e7da9856c78de0c4298080600534088e8ba92d, immutable DOCR image.
-# Do not apply this spec to either existing API/frontend app.
+# Isolated MCP app; do not apply to the API or frontend app.
+# Reviewed image source: d11cd0315987e9831381a7fe74f5b67d0cb943f8
+# Rollback image: sha256:2755490dc9798fc318819313c16fa20c429534102e081ddd6eeccc7073d505dd
+# Inject OILPRICEAPI_MCP_OAUTH_ENCRYPTION_KEY as a RUN_TIME SECRET
+# from the password manager before applying. Never commit its value.
+# See deployment/README.md for the complete rollout and rollback.
 name: oilpriceapi-openai-mcp
-region: nyc
 services:
-  - name: energy-mcp
-    image:
-      registry_type: DOCR
-      registry: opa-2025-registry
-      repository: oilpriceapi-openai-mcp
-      digest: sha256:02b58d701a7f4cd74def1f8045c6529afb9f0cb616429e57ec78b5e3b000b1e2
-    http_port: 8080
-    instance_count: 1
-    instance_size_slug: apps-s-1vcpu-1gb
-    envs:
-      - key: OILPRICEAPI_MCP_PUBLIC_URL
-        scope: RUN_TIME
-        value: ${APP_URL}
-      - key: NODE_ENV
-        scope: RUN_TIME
-        value: production
-    health_check:
-      http_path: /health
-      initial_delay_seconds: 10
-      period_seconds: 15
-      timeout_seconds: 5
-      success_threshold: 1
-      failure_threshold: 3
-    routes:
-      - path: /
+- name: energy-mcp
+  image:
+    registry_type: DOCR
+    registry: opa-2025-registry
+    repository: oilpriceapi-openai-mcp
+    digest: sha256:003efbb235c11502c037ab0e1034a045e4498c4403bd13f8cc2fb28c46d74137
+  envs:
+  - key: OILPRICEAPI_MCP_PUBLIC_URL
+    value: ${APP_URL}
+    scope: RUN_TIME
+  - key: NODE_ENV
+    value: production
+    scope: RUN_TIME
+  - key: MCP_ALLOWED_ORIGINS
+    value: https://claude.ai,https://claude.com
+    scope: RUN_TIME
+  - key: OILPRICEAPI_MCP_OAUTH_DATABASE_URL
+    scope: RUN_TIME
+    value: ${mcp-oauth-db.DATABASE_URL}
+  - key: OILPRICEAPI_MCP_OAUTH_DATABASE_CA_CERT
+    scope: RUN_TIME
+    value: ${mcp-oauth-db.CA_CERT}
+  instance_size_slug: apps-s-1vcpu-1gb
+  instance_count: 1
+  http_port: 8080
+  health_check:
+    initial_delay_seconds: 10
+    period_seconds: 15
+    timeout_seconds: 5
+    success_threshold: 1
+    failure_threshold: 3
+    http_path: /health
+domains:
+- domain: mcp.oilpriceapi.com
+  type: PRIMARY
+region: nyc
 alerts:
-  - rule: DEPLOYMENT_FAILED
-  - rule: DOMAIN_FAILED
+- rule: DEPLOYMENT_FAILED
+- rule: DOMAIN_FAILED
+ingress:
+  rules:
+  - match:
+      path:
+        prefix: /
+    component:
+      name: energy-mcp
+features:
+- buildpack-stack=ubuntu-22
+databases:
+- name: mcp-oauth-db
+  engine: PG
+  production: true
+  cluster_name: opa-2025-nyc-db
+  db_name: mcp_oauth
+  db_user: mcp_oauth
