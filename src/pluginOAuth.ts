@@ -18,91 +18,135 @@ import {
   InvalidRequestError,
   TemporarilyUnavailableError,
 } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import {
+  MemoryOAuthStore,
+  Sealer,
+  type OAuthPersistence,
+  type OAuthStore,
+  type RecordKind,
+  type StoredRecord,
+} from "./oauthStore.js";
 
 const opaque = () => randomBytes(32).toString("base64url");
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("base64url");
 const equal = (a: string, b: string) =>
   a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const CLIENT_TTL = 30 * 86400000;
+const ACCESS_TTL = 3_600_000;
+const REFRESH_TTL = 7 * 86400000;
+interface StoredParams {
+  state?: string;
+  scopes?: string[];
+  codeChallenge: string;
+  redirectUri: string;
+  resource?: string;
+}
 interface Grant {
-  clientId: string;
-  params: AuthorizationParams;
-  expires: number;
+  params: StoredParams;
   key?: string;
 }
 interface Token {
-  clientId: string;
   key: string;
-  expires: number;
   resource: string;
 }
+const storeParams = (params: AuthorizationParams): StoredParams => ({
+  state: params.state,
+  scopes: params.scopes,
+  codeChallenge: params.codeChallenge,
+  redirectUri: params.redirectUri,
+  resource: params.resource?.href,
+});
+export interface PluginOAuthOptions {
+  /** Durable store plus the sealer that encrypts every row's payload. */
+  persistence?: OAuthPersistence;
+  /** Maximum live rows per kind before new authorizations are refused. */
+  capacity?: number;
+}
 export class PluginOAuth implements OAuthServerProvider {
-  private clients = new Map<string, OAuthClientInformationFull>();
-  private forms = new Map<string, Grant>();
-  private codes = new Map<string, Grant>();
-  // Completed links, kept briefly so a double-submitted form (Enter + click)
-  // gets the same redirect instead of a "session mismatch" error page that
-  // replaces the successful one.
-  private linked = new Map<
-    string,
-    { redirect: string; keyHash: string; expires: number }
-  >();
-  private tokens = new Map<string, Token>();
-  private refreshTokens = new Map<string, Token>();
+  private store: OAuthStore;
+  private sealer: Sealer;
+  private capacityLimit: number;
   private cleanupTimer: ReturnType<typeof setInterval>;
   readonly resource: string;
   readonly origin: string;
   constructor(
     publicUrl: string,
     private fetchImpl: typeof fetch = fetch,
+    options: PluginOAuthOptions = {},
   ) {
     this.origin = new URL(publicUrl).origin;
     this.resource = this.origin + "/mcp";
-    this.cleanupTimer = setInterval(() => this.prune(), 30_000);
+    this.store = options.persistence?.store ?? new MemoryOAuthStore();
+    this.sealer = options.persistence?.sealer ?? Sealer.ephemeral();
+    this.capacityLimit = options.capacity ?? 1000;
+    this.cleanupTimer = setInterval(() => {
+      this.store.prune(Date.now()).catch((error) =>
+        console.log(
+          JSON.stringify({
+            event: "oauth_store_prune_failed",
+            error: error instanceof Error ? error.constructor.name : "unknown",
+          }),
+        ),
+      );
+    }, 30_000);
     this.cleanupTimer.unref();
   }
+  /** Stops background pruning. Closing the store is its owner's job. */
   close() {
     clearInterval(this.cleanupTimer);
-    for (const map of [
-      this.forms,
-      this.codes,
-      this.tokens,
-      this.refreshTokens,
-      this.clients,
-    ])
-      map.clear();
   }
-  private prune() {
-    const now = Date.now();
-    for (const [key, client] of this.clients)
-      if ((client.client_id_issued_at ?? 0) * 1000 + 30 * 86400000 <= now)
-        this.clients.delete(key);
-    for (const map of [
-      this.forms,
-      this.codes,
-      this.tokens,
-      this.refreshTokens,
-      this.linked,
-    ])
-      for (const [key, value] of map) if (value.expires <= now) map.delete(key);
+  private async put(
+    kind: RecordKind,
+    id: string,
+    clientId: string,
+    payload: unknown,
+    expires: number,
+    subject?: string,
+  ) {
+    await this.store.put(kind, id, {
+      clientId,
+      subject,
+      expires,
+      data: this.sealer.seal(`${kind}:${id}`, payload),
+    });
   }
-  private capacity(map: Map<string, unknown>) {
-    this.prune();
-    if (map.size >= 1000)
+  private open<T>(kind: RecordKind, id: string, record?: StoredRecord) {
+    if (!record) return undefined;
+    try {
+      return {
+        ...record,
+        payload: this.sealer.open<T>(`${kind}:${id}`, record.data),
+      };
+    } catch {
+      // Wrong key or tampered row: treat as absent, never as valid.
+      return undefined;
+    }
+  }
+  private async load<T>(kind: RecordKind, id: string) {
+    return this.open<T>(kind, id, await this.store.get(kind, id, Date.now()));
+  }
+  private async take<T>(kind: RecordKind, id: string) {
+    return this.open<T>(kind, id, await this.store.take(kind, id, Date.now()));
+  }
+  private async capacity(kind: RecordKind) {
+    if ((await this.store.count(kind, Date.now())) >= this.capacityLimit)
       throw new TemporarilyUnavailableError(
         "Authorization capacity reached. Retry later.",
       );
   }
   get clientsStore() {
     return {
-      getClient: (id: string) => this.clients.get(id),
-      registerClient: (
+      getClient: async (id: string) =>
+        (await this.load<OAuthClientInformationFull>("client", hash(id)))
+          ?.payload,
+      registerClient: async (
         input: Omit<
           OAuthClientInformationFull,
           "client_id" | "client_id_issued_at"
         >,
       ) => {
-        this.capacity(this.clients);
+        await this.capacity("client");
         const reject = (reason: string): never => {
           logRegistration("oauth_registration_rejected", input, reason);
           throw new InvalidClientMetadataError(reason);
@@ -166,7 +210,15 @@ export class PluginOAuth implements OAuthServerProvider {
           delete client.client_secret;
           delete client.client_secret_expires_at;
         } else if (!client.client_secret) reject("Client secret unavailable");
-        this.clients.set(client.client_id, client);
+        // The SDK compares client_secret directly, so the record (secret
+        // included) is sealed rather than hashed.
+        await this.put(
+          "client",
+          hash(client.client_id),
+          client.client_id,
+          client,
+          Date.now() + CLIENT_TTL,
+        );
         logRegistration("oauth_client_registered", input);
         return client;
       },
@@ -187,13 +239,15 @@ export class PluginOAuth implements OAuthServerProvider {
       throw new InvalidScopeError("Only energy:read is supported");
     if (!/^[A-Za-z0-9_-]{43}$/.test(params.codeChallenge))
       throw new InvalidRequestError("S256 PKCE is required");
-    this.capacity(this.forms);
+    await this.capacity("form");
     const flow = opaque();
-    this.forms.set(hash(flow), {
-      clientId: client.client_id,
-      params,
-      expires: Date.now() + 300_000,
-    });
+    await this.put(
+      "form",
+      hash(flow),
+      client.client_id,
+      { params: storeParams(params) } satisfies Grant,
+      Date.now() + 300_000,
+    );
     res.cookie("opa_oauth_flow", flow, {
       httpOnly: true,
       secure: true,
@@ -212,7 +266,7 @@ export class PluginOAuth implements OAuthServerProvider {
     res
       .type("html")
       .send(
-        `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect OilPriceAPI</title><style>body{font:16px system-ui;max-width:34rem;margin:8vh auto;padding:24px;color:#15263b}input,button{font:inherit;padding:12px;width:100%;box-sizing:border-box;margin:8px 0}button{background:#153e63;color:white;border:0;border-radius:6px}a{color:#153e63}</style><h1>Connect OilPriceAPI</h1><p>Returning to <strong>${escapeHtml(new URL(params.redirectUri).host)}</strong> after you connect.</p><p>Allow this connection to read supported energy datasets using your account's existing entitlements. No write access is requested.</p><p>Paste your OilPriceAPI API key. It stays on the server and is never returned to the model. Connections expire and may require reconnecting after a service restart.</p><form method="post" action="/link"><input type="hidden" name="flow" value="${flow}"><label for="key">OilPriceAPI API key</label><input id="key" name="key" type="password" autocomplete="off" required maxlength="256"><button type="submit">Connect read access</button></form><p><a href="https://www.oilpriceapi.com/dashboard" target="_blank" rel="noopener noreferrer">Find your API key</a> · <a href="https://www.oilpriceapi.com/privacy" target="_blank" rel="noopener noreferrer">Privacy</a> · <a href="https://www.oilpriceapi.com/support" target="_blank" rel="noopener noreferrer">Support</a></p></html>`,
+        `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect OilPriceAPI</title><style>body{font:16px system-ui;max-width:34rem;margin:8vh auto;padding:24px;color:#15263b}input,button{font:inherit;padding:12px;width:100%;box-sizing:border-box;margin:8px 0}button{background:#153e63;color:white;border:0;border-radius:6px}a{color:#153e63}</style><h1>Connect OilPriceAPI</h1><p>Returning to <strong>${escapeHtml(new URL(params.redirectUri).host)}</strong> after you connect.</p><p>Allow this connection to read supported energy datasets using your account's existing entitlements. No write access is requested.</p><p>Paste your OilPriceAPI API key. It is stored encrypted on the server and is never returned to the model. Connections expire after 7 days without use and then need reconnecting.</p><form method="post" action="/link"><input type="hidden" name="flow" value="${flow}"><label for="key">OilPriceAPI API key</label><input id="key" name="key" type="password" autocomplete="off" required maxlength="256"><button type="submit">Connect read access</button></form><p><a href="https://www.oilpriceapi.com/dashboard" target="_blank" rel="noopener noreferrer">Find your API key</a> · <a href="https://www.oilpriceapi.com/privacy" target="_blank" rel="noopener noreferrer">Privacy</a> · <a href="https://www.oilpriceapi.com/support" target="_blank" rel="noopener noreferrer">Support</a></p></html>`,
       );
   }
   async completeLink(
@@ -220,15 +274,17 @@ export class PluginOAuth implements OAuthServerProvider {
     cookieFlow: string | undefined,
     key: string,
   ) {
-    this.prune();
-    const done = flow ? this.linked.get(hash(flow)) : undefined;
-    if (done && equal(done.keyHash, hash(key))) return done.redirect;
+    const done = flow
+      ? await this.load<{ redirect: string }>("linked", hash(flow))
+      : undefined;
+    if (done?.subject && equal(done.subject, this.sealer.subject(key)))
+      return done.payload.redirect;
     if (!cookieFlow || !equal(flow, cookieFlow))
       throw new InvalidRequestError("Authorization session mismatch");
-    const grant = this.forms.get(hash(flow));
-    if (!grant)
+    const form = await this.take<Grant>("form", hash(flow));
+    if (!form)
       throw new InvalidGrantError("Authorization session expired. Reconnect.");
-    this.forms.delete(hash(flow));
+    const grant = form.payload;
     if (!/^[A-Za-z0-9_.-]{16,256}$/.test(key))
       throw new InvalidGrantError(
         "Invalid OilPriceAPI key. Reconnect with a valid key.",
@@ -267,53 +323,82 @@ export class PluginOAuth implements OAuthServerProvider {
     } finally {
       clearTimeout(timer);
     }
-    this.capacity(this.codes);
+    await this.capacity("code");
+    const subject = this.sealer.subject(key);
     const code = opaque();
-    this.codes.set(hash(code), { ...grant, key, expires: Date.now() + 60_000 });
+    await this.put(
+      "code",
+      hash(code),
+      form.clientId,
+      { params: grant.params, key } satisfies Grant,
+      Date.now() + 60_000,
+      subject,
+    );
     const redirect = new URL(grant.params.redirectUri);
     redirect.searchParams.set("code", code);
     if (grant.params.state)
       redirect.searchParams.set("state", grant.params.state);
     redirect.searchParams.set("iss", this.origin + "/");
-    this.capacity(this.linked);
-    this.linked.set(hash(flow), {
-      redirect: redirect.href,
-      keyHash: hash(key),
-      expires: Date.now() + 60_000,
-    });
+    await this.capacity("linked");
+    // The redirect carries the live code, so it is sealed like everything else.
+    await this.put(
+      "linked",
+      hash(flow),
+      form.clientId,
+      { redirect: redirect.href },
+      Date.now() + 60_000,
+      subject,
+    );
     return redirect.href;
   }
   async challengeForAuthorizationCode(
     client: OAuthClientInformationFull,
     code: string,
   ) {
-    this.prune();
-    const grant = this.codes.get(hash(code));
+    const grant = await this.load<Grant>("code", hash(code));
     if (!grant || grant.clientId !== client.client_id)
       throw new InvalidGrantError("Invalid authorization code");
-    return grant.params.codeChallenge;
+    return grant.payload.params.codeChallenge;
   }
-  private issue(clientId: string, key: string): OAuthTokens {
-    this.capacity(this.tokens);
-    this.capacity(this.refreshTokens);
+  private async issue(
+    client: OAuthClientInformationFull,
+    key: string,
+  ): Promise<OAuthTokens> {
+    await this.capacity("access");
+    await this.capacity("refresh");
     const access = opaque();
     const refresh = opaque();
-    this.tokens.set(hash(access), {
-      clientId,
-      key,
-      resource: this.resource,
-      expires: Date.now() + 3_600_000,
-    });
-    this.refreshTokens.set(hash(refresh), {
-      clientId,
-      key,
-      resource: this.resource,
-      expires: Date.now() + 7 * 86400000,
-    });
+    const subject = this.sealer.subject(key);
+    const token: Token = { key, resource: this.resource };
+    await this.put(
+      "access",
+      hash(access),
+      client.client_id,
+      token,
+      Date.now() + ACCESS_TTL,
+      subject,
+    );
+    await this.put(
+      "refresh",
+      hash(refresh),
+      client.client_id,
+      token,
+      Date.now() + REFRESH_TTL,
+      subject,
+    );
+    // A client in active use outlives its refresh tokens, so a cached DCR
+    // client_id keeps working while the connection does.
+    await this.put(
+      "client",
+      hash(client.client_id),
+      client.client_id,
+      client,
+      Date.now() + Math.max(CLIENT_TTL, REFRESH_TTL),
+    );
     return {
       access_token: access,
       token_type: "Bearer",
-      expires_in: 3600,
+      expires_in: ACCESS_TTL / 1000,
       refresh_token: refresh,
       scope: "energy:read",
     };
@@ -325,20 +410,22 @@ export class PluginOAuth implements OAuthServerProvider {
     redirect?: string,
     resource?: URL,
   ) {
-    this.prune();
-    const grant = this.codes.get(hash(code));
+    const found = await this.load<Grant>("code", hash(code));
+    const grant = found?.payload;
     if (
-      !grant ||
-      !grant.key ||
-      grant.clientId !== client.client_id ||
+      !found ||
+      !grant?.key ||
+      found.clientId !== client.client_id ||
       resource?.href !== this.resource ||
       redirect !== grant.params.redirectUri ||
       (verifier !== undefined &&
         !equal(hash(verifier), grant.params.codeChallenge))
     )
       throw new InvalidGrantError("Invalid authorization grant");
-    this.codes.delete(hash(code));
-    return this.issue(client.client_id, grant.key);
+    // Atomic consume: of two concurrent exchanges only one gets the row.
+    if (!(await this.store.take("code", hash(code), Date.now())))
+      throw new InvalidGrantError("Invalid authorization grant");
+    return this.issue(client, grant.key);
   }
   async exchangeRefreshToken(
     client: OAuthClientInformationFull,
@@ -346,50 +433,52 @@ export class PluginOAuth implements OAuthServerProvider {
     scopes?: string[],
     resource?: URL,
   ) {
-    this.prune();
-    const token = this.refreshTokens.get(hash(refresh));
+    const found = await this.load<Token>("refresh", hash(refresh));
     if (
-      !token ||
-      token.clientId !== client.client_id ||
+      !found ||
+      found.clientId !== client.client_id ||
       resource?.href !== this.resource ||
       scopes?.some((scope) => scope !== "energy:read")
     )
       throw new InvalidGrantError("Invalid refresh grant. Reconnect.");
-    this.refreshTokens.delete(hash(refresh));
-    return this.issue(client.client_id, token.key);
+    if (!(await this.store.take("refresh", hash(refresh), Date.now())))
+      throw new InvalidGrantError("Invalid refresh grant. Reconnect.");
+    return this.issue(client, found.payload.key);
   }
-  async verifyAccessToken(access: string) {
-    this.prune();
-    const token = this.tokens.get(hash(access));
+  private async accessToken(access: string) {
+    const token = await this.load<Token>("access", hash(access));
     if (!token)
       throw new InvalidTokenError("Invalid or expired connection. Reconnect.");
+    return token;
+  }
+  async verifyAccessToken(access: string) {
+    const token = await this.accessToken(access);
     return {
       token: access,
       clientId: token.clientId,
       scopes: ["energy:read"],
       expiresAt: Math.floor(token.expires / 1000),
-      resource: new URL(token.resource),
+      resource: new URL(token.payload.resource),
     };
   }
   async credentialForAccessToken(access: string) {
-    await this.verifyAccessToken(access);
-    return this.tokens.get(hash(access))!.key;
+    return (await this.accessToken(access)).payload.key;
   }
   async revokeToken(
     client: OAuthClientInformationFull,
     request: OAuthTokenRevocationRequest,
   ) {
-    const key = hash(request.token);
+    const id = hash(request.token);
     // Disconnect removes the associated credential from all active grants.
-    const entry = this.tokens.get(key) ?? this.refreshTokens.get(key);
-    if (entry?.clientId !== client.client_id) return;
-    for (const [id, grant] of this.codes)
-      if (grant.clientId === entry.clientId && grant.key === entry.key)
-        this.codes.delete(id);
-    for (const map of [this.tokens, this.refreshTokens])
-      for (const [id, token] of map)
-        if (token.clientId === entry.clientId && token.key === entry.key)
-          map.delete(id);
+    const entry =
+      (await this.store.get("access", id, Date.now())) ??
+      (await this.store.get("refresh", id, Date.now()));
+    if (entry?.clientId !== client.client_id || !entry.subject) return;
+    await this.store.revokeSubject(entry.clientId, entry.subject, [
+      "code",
+      "access",
+      "refresh",
+    ]);
   }
 }
 export function createOAuthApp(provider: PluginOAuth) {

@@ -8,6 +8,7 @@ import { randomBytes, createHmac } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { PluginOAuth, createOAuthApp } from "./pluginOAuth.js";
+import { oauthPersistenceFromEnv } from "./oauthStore.js";
 import {
   ACCOUNT_TOOLS,
   createEnergyServer,
@@ -304,7 +305,7 @@ export function createRemoteServer(options: RemoteOptions) {
   httpServer.maxHeadersCount = 40;
   return httpServer;
 }
-export function startRemote() {
+export async function startRemote() {
   if (process.env.OILPRICEAPI_KEY || process.env.OIL_PRICE_API_KEY)
     throw new Error(
       "Remote service must not have a shared OilPriceAPI credential",
@@ -312,7 +313,19 @@ export function startRemote() {
   const publicUrl = process.env.OILPRICEAPI_MCP_PUBLIC_URL;
   if (!publicUrl || new URL(publicUrl).protocol !== "https:")
     throw new Error("OILPRICEAPI_MCP_PUBLIC_URL must be stable HTTPS");
-  const oauth = new PluginOAuth(publicUrl);
+  // Fails closed: production refuses to start without a durable store and an
+  // encryption key, so connections survive deploys (#155).
+  const persistence = await oauthPersistenceFromEnv();
+  console.log(
+    JSON.stringify({
+      event: "oauth_store_ready",
+      durable: persistence.store.durable,
+    }),
+  );
+  const oauth = new PluginOAuth(publicUrl, fetch, {
+    persistence,
+    capacity: persistence.store.durable ? 50_000 : 1000,
+  });
   const server = createRemoteServer({
     publicUrl,
     oauth,
@@ -323,9 +336,15 @@ export function startRemote() {
     writeEvent: (event) => console.log(JSON.stringify(event)),
   });
   server.listen(Number(process.env.PORT ?? 8080), "0.0.0.0");
-  const shutdown = () => server.close(() => process.exit(0));
+  const shutdown = () =>
+    server.close(() =>
+      persistence.store.close().finally(() => process.exit(0)),
+    );
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
-  startRemote();
+  startRemote().catch((error) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exit(1);
+  });
