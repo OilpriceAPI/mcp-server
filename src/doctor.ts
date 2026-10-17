@@ -1,4 +1,5 @@
 import { access } from "node:fs/promises";
+import { withDemoClient } from "./demoClient.js";
 
 export type DoctorStatus = "pass" | "warn" | "fail";
 
@@ -336,7 +337,7 @@ export async function runDoctor(
     try {
       const { response } = await boundedFetch(
         fetchImpl,
-        `${options.baseUrl.replace(/\/$/, "")}/v1/demo/prices`,
+        withDemoClient(`${options.baseUrl.replace(/\/$/, "")}/v1/demo/prices`),
         { headers: { Accept: "application/json" } },
         timeoutMs,
       );
