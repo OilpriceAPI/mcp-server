@@ -5,7 +5,7 @@ import { PluginOAuth } from "../pluginOAuth.js";
 const origin = "https://mcp.example";
 const verifier = "a".repeat(43);
 const challenge = createHash("sha256").update(verifier).digest("base64url");
-function setup(status = 200) {
+async function setup(status = 200) {
   const fetchImpl = vi.fn().mockResolvedValue(
     new Response(
       JSON.stringify({
@@ -16,7 +16,7 @@ function setup(status = 200) {
     ),
   );
   const provider = new PluginOAuth(origin, fetchImpl);
-  const client = provider.clientsStore.registerClient({
+  const client = await provider.clientsStore.registerClient({
     redirect_uris: ["https://chatgpt.com/connector_platform_oauth_redirect"],
     token_endpoint_auth_method: "none",
   });
@@ -24,7 +24,7 @@ function setup(status = 200) {
 }
 async function authorize(
   provider: PluginOAuth,
-  client: ReturnType<PluginOAuth["clientsStore"]["registerClient"]>,
+  client: Awaited<ReturnType<PluginOAuth["clientsStore"]["registerClient"]>>,
   override = {},
 ) {
   let cookie = "";
@@ -55,7 +55,7 @@ async function authorize(
   return cookie;
 }
 async function linked() {
-  const { provider, client, fetchImpl } = setup();
+  const { provider, client, fetchImpl } = await setup();
   const flow = await authorize(provider, client);
   const redirect = new URL(
     await provider.completeLink(flow, flow, "caller-key-value-1234"),
@@ -71,7 +71,7 @@ async function linked() {
 afterEach(() => vi.useRealTimers());
 describe("plugin OAuth boundary", () => {
   it("rejects unregistered redirect destinations before rendering consent", async () => {
-    const { provider, client } = setup();
+    const { provider, client } = await setup();
     try {
       await expect(
         authorize(provider, client, {
@@ -94,7 +94,7 @@ describe("plugin OAuth boundary", () => {
           ),
       );
       try {
-        const client = provider.clientsStore.registerClient({
+        const client = await provider.clientsStore.registerClient({
           redirect_uris: [
             "https://chatgpt.com/connector_platform_oauth_redirect",
           ],
@@ -121,7 +121,7 @@ describe("plugin OAuth boundary", () => {
     );
     const provider = new PluginOAuth(origin, fetchImpl as typeof fetch);
     try {
-      const client = provider.clientsStore.registerClient({
+      const client = await provider.clientsStore.registerClient({
         redirect_uris: [
           "https://chatgpt.com/connector_platform_oauth_redirect",
         ],
@@ -179,11 +179,11 @@ describe("plugin OAuth boundary", () => {
     "http://evil.example/callback",
     "https://user:password@evil.example/callback",
     "https://evil.example/callback#fragment",
-  ])("rejects unsafe callback %s", (redirect) => {
-    const { provider } = setup();
-    expect(() =>
+  ])("rejects unsafe callback %s", async (redirect) => {
+    const { provider } = await setup();
+    await expect(
       provider.clientsStore.registerClient({ redirect_uris: [redirect] }),
-    ).toThrow();
+    ).rejects.toThrow();
   });
   it.each([
     "https://claude.ai/api/mcp/auth_callback/extra",
@@ -191,14 +191,14 @@ describe("plugin OAuth boundary", () => {
     "https://claude.ai.evil.example/api/mcp/auth_callback",
     "http://claude.ai/api/mcp/auth_callback",
     "https://evil.example/api/mcp/auth_callback",
-  ])("rejects look-alike Claude callback %s", (redirect) => {
-    const { provider } = setup();
-    expect(() =>
+  ])("rejects look-alike Claude callback %s", async (redirect) => {
+    const { provider } = await setup();
+    await expect(
       provider.clientsStore.registerClient({
         redirect_uris: [redirect],
         token_endpoint_auth_method: "none",
       }),
-    ).toThrow("Use the OpenAI or Claude callback");
+    ).rejects.toThrow("Use the OpenAI or Claude callback");
   });
   it("links a Claude connection, names the return host and marks the platform", async () => {
     const fetchImpl = vi
@@ -210,7 +210,7 @@ describe("plugin OAuth boundary", () => {
       );
     const provider = new PluginOAuth(origin, fetchImpl);
     try {
-      const client = provider.clientsStore.registerClient({
+      const client = await provider.clientsStore.registerClient({
         redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
         token_endpoint_auth_method: "none",
       });
@@ -258,7 +258,7 @@ describe("plugin OAuth boundary", () => {
     }
   });
   it("keeps marking ChatGPT links as the OpenAI plugin", async () => {
-    const { provider, client, fetchImpl } = setup();
+    const { provider, client, fetchImpl } = await setup();
     try {
       const flow = await authorize(provider, client);
       await provider.completeLink(flow, flow, "caller-key-value-1234");
@@ -270,7 +270,7 @@ describe("plugin OAuth boundary", () => {
     }
   });
   it("requires the exact protected resource and read-only scope", async () => {
-    const { provider, client } = setup();
+    const { provider, client } = await setup();
     await expect(
       authorize(provider, client, {
         resource: new URL("https://other.example/mcp"),
@@ -281,7 +281,7 @@ describe("plugin OAuth boundary", () => {
     ).rejects.toThrow();
   });
   it("rejects cross-browser linking and consumes failed forms", async () => {
-    const { provider, client, fetchImpl } = setup(401);
+    const { provider, client, fetchImpl } = await setup(401);
     const flow = await authorize(provider, client);
     await expect(
       provider.completeLink(flow, "different", "caller-key-value-1234"),
@@ -298,7 +298,7 @@ describe("plugin OAuth boundary", () => {
   it.each([403, 429, 500])(
     "fails closed when account validation returns %s",
     async (status) => {
-      const { provider, client } = setup(status);
+      const { provider, client } = await setup(status);
       const flow = await authorize(provider, client);
       await expect(
         provider.completeLink(flow, flow, "caller-key-value-1234"),
@@ -377,7 +377,7 @@ describe("plugin OAuth boundary", () => {
   });
   it("expires forms and access tokens", async () => {
     vi.useFakeTimers();
-    const { provider, client } = setup();
+    const { provider, client } = await setup();
     const flow = await authorize(provider, client);
     vi.advanceTimersByTime(300_001);
     await expect(
@@ -398,11 +398,11 @@ describe("plugin OAuth boundary", () => {
 
 describe("client registration", () => {
   afterEach(() => vi.restoreAllMocks());
-  it("accepts client_secret_post and keeps the SDK-issued secret", () => {
+  it("accepts client_secret_post and keeps the SDK-issued secret", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const provider = new PluginOAuth(origin, vi.fn());
     try {
-      const client = provider.clientsStore.registerClient({
+      const client = await provider.clientsStore.registerClient({
         redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
         token_endpoint_auth_method: "client_secret_post",
         client_secret: "sdk-issued-secret",
@@ -420,11 +420,11 @@ describe("client registration", () => {
       provider.close();
     }
   });
-  it("strips any secret from public clients", () => {
+  it("strips any secret from public clients", async () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     const provider = new PluginOAuth(origin, vi.fn());
     try {
-      const client = provider.clientsStore.registerClient({
+      const client = await provider.clientsStore.registerClient({
         redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
         token_endpoint_auth_method: "none",
         client_secret: "should-not-survive",
@@ -435,22 +435,22 @@ describe("client registration", () => {
       provider.close();
     }
   });
-  it("logs why a registration was rejected, without the redirect path", () => {
+  it("logs why a registration was rejected, without the redirect path", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const provider = new PluginOAuth(origin, vi.fn());
     try {
-      expect(() =>
+      await expect(
         provider.clientsStore.registerClient({
           redirect_uris: ["https://claude.ai/api/mcp/auth_callback"],
           token_endpoint_auth_method: "client_secret_basic",
         }),
-      ).toThrow("client_secret_post");
-      expect(() =>
+      ).rejects.toThrow("client_secret_post");
+      await expect(
         provider.clientsStore.registerClient({
           redirect_uris: ["https://evil.example/secret-path?token=x"],
           token_endpoint_auth_method: "none",
         }),
-      ).toThrow("Claude callback");
+      ).rejects.toThrow("Claude callback");
       const events = log.mock.calls.map((c) => JSON.parse(c[0]));
       expect(events[0]).toMatchObject({
         event: "oauth_registration_rejected",
@@ -508,7 +508,7 @@ describe("/link outcome logging", () => {
 
 describe("double-submitted link form", () => {
   it("returns the same redirect for a resubmit with the same key, after the cookie is cleared", async () => {
-    const { provider, client } = setup();
+    const { provider, client } = await setup();
     try {
       const flow = await authorize(provider, client);
       const first = await provider.completeLink(
@@ -539,7 +539,7 @@ describe("double-submitted link form", () => {
   });
   it("stops replaying the redirect after 60 seconds", async () => {
     vi.useFakeTimers();
-    const { provider, client } = setup();
+    const { provider, client } = await setup();
     try {
       const flow = await authorize(provider, client);
       await provider.completeLink(flow, flow, "caller-key-value-1234");
@@ -553,7 +553,7 @@ describe("double-submitted link form", () => {
     }
   });
   it("opens help links in a new tab", async () => {
-    const { provider, client } = setup();
+    const { provider, client } = await setup();
     let html = "";
     const res = {
       cookie: vi.fn(),
