@@ -37,6 +37,8 @@ const TOOL_CATEGORY_BY_NAME: Record<string, ToolCategory> = {
   opa_get_futures: "market",
   opa_get_futures_curve: "market",
   opa_get_marine_fuels: "market",
+  opa_get_marine_ports: "market",
+  opa_get_marine_fuel_history: "market",
   opa_get_natural_gas_hubs: "market",
   opa_get_rig_counts: "market",
   opa_get_drilling: "market",
