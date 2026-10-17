@@ -201,7 +201,7 @@ try {
   );
   if (
     readTools.scope !== "read" ||
-    readTools.tools.length !== 35 ||
+    readTools.tools.length !== 36 ||
     readTools.tools.some((tool) => tool.access === "write")
   ) {
     throw new Error(
@@ -278,7 +278,8 @@ try {
       response.end(JSON.stringify({ status: "ok" }));
       return;
     }
-    if (request.url === "/v1/demo/prices") {
+    // The demo check must carry client=mcp (oilpriceapi-api#9388).
+    if (request.url === "/v1/demo/prices?client=mcp") {
       response.end(
         JSON.stringify({
           status: "success",
@@ -313,14 +314,14 @@ try {
     entryPoint,
     baseUrl,
     "read",
-    35,
+    36,
     capabilities.tools.length,
   );
   await assertProtocolScope(
     entryPoint,
     baseUrl,
     "write",
-    39,
+    40,
     capabilities.tools.length,
   );
 

@@ -8,6 +8,7 @@ import {
   requestApi,
 } from "./index.js";
 import { withRequestCredential } from "./requestCredential.js";
+import { withDemoClient } from "./demoClient.js";
 import { createHash } from "node:crypto";
 
 export const PLUGIN_VERSION = "0.1.1";
@@ -374,7 +375,7 @@ export async function executeEnergyTool(
       let fetchedAt: string | undefined;
       if (!options.key) {
         const load = async () => {
-          const data = await api("/v1/demo/prices");
+          const data = await api(withDemoClient("/v1/demo/prices"));
           if (!Array.isArray(record(data.data).prices))
             throw new PluginFailure("unavailable");
           return data;

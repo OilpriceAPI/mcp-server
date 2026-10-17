@@ -1181,6 +1181,8 @@ describe("demo mode (#16) - fetchDemoPrices", () => {
     expect(prices).toHaveLength(4);
     const [url, init] = mockFetch.mock.calls[0];
     expect(String(url)).toContain("/v1/demo/prices");
+    // Demo telemetry attributes by ?client= (oilpriceapi-api#9388).
+    expect(new URL(String(url)).searchParams.get("client")).toBe("mcp");
     expect(init.headers.Authorization).toBeUndefined();
     expect(init.headers["X-Api-Client"]).toBe(CLIENT_MARKER);
     expect(init.headers["X-Client-Version"]).toBe(MCP_VERSION);
@@ -1524,8 +1526,8 @@ describe("tool registration metadata", () => {
   const DELETE_TOOLS = ["opa_delete_price_alert", "opa_delete_subscription"];
   const WRITE_TOOLS = new Set([...CREATE_TOOLS, ...DELETE_TOOLS]);
 
-  it("registers exactly 39 tools", () => {
-    expect(Object.keys(tools)).toHaveLength(39);
+  it("registers exactly 40 tools", () => {
+    expect(Object.keys(tools)).toHaveLength(40);
     expect(tools.opa_get_product_facts).toBeDefined();
     expect(tools.opa_get_natural_gas_hubs).toBeDefined();
     expect(tools.opa_get_account_status).toBeDefined();
@@ -1540,6 +1542,7 @@ describe("tool registration metadata", () => {
     opa_get_history_range: /eligible account entitlement.*opa_get_plans/,
     opa_get_futures: /eligible account entitlement.*opa_get_plans/,
     opa_get_futures_curve: /eligible account entitlement.*opa_get_plans/,
+    opa_get_futures_history: /eligible account entitlement.*opa_get_plans/,
     opa_get_marine_fuels: /eligible account entitlement.*opa_get_plans/,
     opa_get_marine_fuel_history: /eligible account entitlement.*opa_get_plans/,
     opa_get_spread: /eligible account entitlement.*opa_get_plans/,
