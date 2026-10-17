@@ -161,8 +161,23 @@ describe("#125 opa_get_marine_ports", () => {
     body.data.port.recent_prices = [];
     stubResponse(body);
     const text = textOf(await ports().handler({ port: "SGSIN" }, {}));
-    expect(text).toMatch(/no prices collected in the last 24 hours/i);
+    expect(text).toMatch(/no prices observed in the last 7 days/i);
     expect(text).not.toContain("| Fuel Type |");
+  });
+
+  it("labels weekend observations with their actual age instead of claiming a 24-hour price", async () => {
+    vi.stubEnv("OILPRICEAPI_KEY", "test-key-123");
+    const body = copy(LIVE_MARINE_PORT_SGSIN);
+    body.data.port.recent_prices = [{
+      fuel_type: "VLSFO", price: 917, currency: "USD", unit: "metric_ton",
+      timestamp: "2026-10-12T03:00:00Z", collected_at: "2026-10-12T03:00:00Z",
+      as_of: "2026-10-09T17:00:00Z", age_days: 3, stale: true,
+    }];
+    stubResponse(body);
+    const text = textOf(await ports().handler({ port: "SGSIN" }, {}));
+    expect(text).toContain("2026-10-09T17:00:00Z | 3 | **yes**");
+    expect(text).toContain("up to 7 days old");
+    expect(text).not.toContain("last 24 hours");
   });
 
   it("never prints an absent field as data", async () => {

@@ -4225,12 +4225,12 @@ server.registerTool(
       text += `Trading hours: ${reportedValue(p.trading_hours)} | Timezone: ${reportedValue(p.timezone)}\n\n`;
       const prices = Array.isArray(p.recent_prices) ? p.recent_prices : [];
       if (prices.length === 0) {
-        text += "_The API returned no prices collected in the last 24 hours for this port. Use opa_get_marine_fuels for the latest assessment with its age._\n";
+        text += "_The API returned no prices observed in the last 7 days for this port. Use opa_get_marine_fuels for the latest assessment with its age._\n";
       } else {
-        text += "Prices collected in the last 24 hours:\n\n";
-        text += "| Fuel Type | Price | Currency | Unit | Collected |\n|-----------|-------|----------|------|-----------|\n";
+        text += "Latest available prices (up to 7 days old):\n\n";
+        text += "| Fuel Type | Price | Currency | Unit | Collected | Observed | Age (days) | Stale |\n|-----------|-------|----------|------|-----------|----------|------------|-------|\n";
         for (const f of prices) {
-          text += `| ${reportedValue(f.fuel_type)} | ${reportedValue(f.price)} | ${reportedValue(f.currency)} | ${reportedValue(f.unit)} | ${reportedValue(f.timestamp)} |\n`;
+          text += `| ${reportedValue(f.fuel_type)} | ${reportedValue(f.price)} | ${reportedValue(f.currency)} | ${reportedValue(f.unit)} | ${reportedValue(f.collected_at ?? f.timestamp)} | ${reportedValue(f.as_of)} | ${reportedValue(f.age_days)} | ${marineStaleCell(f.stale)} |\n`;
         }
       }
       text += "\n_Data from [OilPriceAPI](https://oilpriceapi.com)_";

@@ -144,11 +144,11 @@ describe("capability ledger", () => {
 
   it("fails when an exposed row is not reached by any MCP source call", () => {
     const broken = clone(ledger);
-    // #123 exposed /v1/prices/historical for real, so the fixture uses a row
+    // Marine history is exposed, so the fixture uses a row
     // no tool reaches yet.
     const row = broken.operations.find(
       (entry: { operation: string }) =>
-        entry.operation === "GET /v1/prices/marine-fuels/historical",
+        entry.operation === "GET /v1/electricity",
     );
     Object.assign(row, { status: "exposed", tools: ["opa_get_marine_fuels"] });
     delete row.disposition;
@@ -156,7 +156,7 @@ describe("capability ledger", () => {
     delete row.selection;
     const result = evaluate({ ledger: broken });
     expect(result.errors.join("\n")).toContain(
-      "GET /v1/prices/marine-fuels/historical is marked exposed but no MCP source call reaches it",
+      "GET /v1/electricity is marked exposed but no MCP source call reaches it",
     );
   });
 
