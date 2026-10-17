@@ -1181,6 +1181,8 @@ describe("demo mode (#16) - fetchDemoPrices", () => {
     expect(prices).toHaveLength(4);
     const [url, init] = mockFetch.mock.calls[0];
     expect(String(url)).toContain("/v1/demo/prices");
+    // Demo telemetry attributes by ?client= (oilpriceapi-api#9388).
+    expect(new URL(String(url)).searchParams.get("client")).toBe("mcp");
     expect(init.headers.Authorization).toBeUndefined();
     expect(init.headers["X-Api-Client"]).toBe(CLIENT_MARKER);
     expect(init.headers["X-Client-Version"]).toBe(MCP_VERSION);

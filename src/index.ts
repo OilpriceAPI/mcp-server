@@ -73,6 +73,7 @@ import {
   formatQuoteAmount,
   formatQuoteDelta,
 } from "./currency.js";
+import { withDemoClient } from "./demoClient.js";
 
 export {
   PINNED_PRODUCT_FACTS,
@@ -2433,14 +2434,17 @@ export async function fetchDemoPrices(
 ): Promise<DemoPrice[] | null> {
   const deadline = startRequestDeadline();
   try {
-    const response = await fetchFn(`${API_BASE}/v1/demo/prices`, {
-      headers: {
-        ...clientAttributionHeaders(),
-        ...currentToolAttributionHeaders(),
-        Accept: "application/json",
+    const response = await fetchFn(
+      withDemoClient(`${API_BASE}/v1/demo/prices`),
+      {
+        headers: {
+          ...clientAttributionHeaders(),
+          ...currentToolAttributionHeaders(),
+          Accept: "application/json",
+        },
+        signal: deadline.signal,
       },
-      signal: deadline.signal,
-    });
+    );
     if (!response.ok) return null;
     const payload = (await response.json()) as ApiResponse<{
       prices: DemoPrice[];
