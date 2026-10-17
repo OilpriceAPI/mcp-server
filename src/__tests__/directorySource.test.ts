@@ -21,7 +21,7 @@ describe("directory-facing source metadata", () => {
   );
 
   // #146: the hosted endpoint at mcp.oilpriceapi.com/mcp is a different
-  // server (9 energy_* tools, serverInfo v0.1.1, OAuth scope energy:read;
+  // server (9 energy_* tools, serverInfo v0.1.2, OAuth scope energy:read;
   // verified live 2026-10-15), not these opa_* tools. A registry `remotes`
   // entry on this record would advertise that endpoint as this server, so
   // the record stays stdio-only and the README says so.
