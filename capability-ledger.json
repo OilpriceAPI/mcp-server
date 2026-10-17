@@ -1,7 +1,7 @@
 {
   "$comment": "API-to-MCP capability ledger (#77). One row per operation in the published OpenAPI contract. Checked by `npm run check:capability-ledger` against the live contract, build/capabilities.json and src/index.ts. Bump ledgerVersion and append to changes for every decision change, and link the change from the release notes.",
   "schemaVersion": "1.0.0",
-  "ledgerVersion": 6,
+  "ledgerVersion": 7,
   "source": {
     "openapi": {
       "url": "https://api.oilpriceapi.com/openapi.json",
@@ -200,7 +200,9 @@
       "status": "partial",
       "owner": "mcp-server",
       "tools": [
-        "opa_get_marine_fuels"
+        "opa_get_marine_fuels",
+        "opa_get_marine_ports",
+        "opa_get_marine_fuel_history"
       ],
       "reason": "Latest prices are exposed through the canonical GET /v1/prices/marine-fuels/latest; ports, all-port prices and history are selection 3."
     },
@@ -911,20 +913,22 @@
     {
       "operation": "GET /v1/marine-ports",
       "family": "marine",
-      "status": "not_exposed",
-      "disposition": "selected",
+      "status": "exposed",
+      "tools": [
+        "opa_get_marine_ports"
+      ],
       "selection": 3,
-      "owner": "mcp-server",
-      "reason": "Port directory, so an agent can resolve a port before pricing it. Selection 3."
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/marine-ports/{port_code}",
       "family": "marine",
-      "status": "not_exposed",
-      "disposition": "selected",
+      "status": "exposed",
+      "tools": [
+        "opa_get_marine_ports"
+      ],
       "selection": 3,
-      "owner": "mcp-server",
-      "reason": "Single-port detail with prices. Selection 3."
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/market-brief",
@@ -1012,16 +1016,17 @@
       "disposition": "selected",
       "selection": 3,
       "owner": "mcp-server",
-      "reason": "All-port marine fuel prices; opa_get_marine_fuels returns latest only. Selection 3."
+      "reason": "Paginated feed of recent marine collections (live 2026-10-15: 62 rows across 8 ports, several per fuel), overlapping opa_get_marine_fuels (latest per series) and opa_get_marine_fuel_history (per-port series). Selection 3; not shipped in the first #125 slice."
     },
     {
       "operation": "GET /v1/prices/marine-fuels/historical",
       "family": "marine",
-      "status": "not_exposed",
-      "disposition": "selected",
+      "status": "exposed",
+      "tools": [
+        "opa_get_marine_fuel_history"
+      ],
       "selection": 3,
-      "owner": "mcp-server",
-      "reason": "Marine fuel history; opa_get_marine_fuels returns latest only. Selection 3."
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/prices/marine-fuels/latest",
@@ -1494,6 +1499,12 @@
       "date": "2026-10-17",
       "issue": "https://github.com/OilpriceAPI/mcp-server/issues/124",
       "summary": "Selection 2 shipped: GET /v1/futures/brent/historical, GET /v1/futures/wti/historical and GET /v1/futures/natural-gas/historical are exposed by the new opa_get_futures_history tool (from/to up to 730 days, optional contract_month, daily/weekly/monthly, explicit row cap notice). The three canonical spreads rows stay deferred with an updated reason; preview OHLC, intraday and gasoil/carbon history stay deferred under futures-expanded (route policy: product_preview)."
+    },
+    {
+      "ledgerVersion": 7,
+      "date": "2026-10-17",
+      "issue": "https://github.com/OilpriceAPI/mcp-server/issues/125",
+      "summary": "Selection 3, first slice: expose GET /v1/marine-ports and GET /v1/marine-ports/{port_code} through opa_get_marine_ports and GET /v1/prices/marine-fuels/historical through opa_get_marine_fuel_history; move opa_get_marine_fuels from the deprecated /v1/marine-fuels/latest alias to canonical GET /v1/prices/marine-fuels/latest. GET /v1/prices/marine-fuels stays selected and not exposed. History requires a paid subscription or an active trial (API 403 otherwise); the tool reports the API's refusal text."
     }
   ]
 }
