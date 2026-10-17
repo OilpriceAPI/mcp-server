@@ -172,6 +172,12 @@ const SITES: Array<{
     tool: "opa_get_history_range",
     args: { commodities: ["brent"], start_date: "2026-09-01" },
   },
+  // #124: futures settlement history inherits the same contract.
+  {
+    label: "opa_get_futures_history",
+    tool: "opa_get_futures_history",
+    args: { contract: "brent", from: "2026-09-01", to: "2026-09-03" },
+  },
 ];
 
 describe("#103 — a failed request never blames the account's entitlement", () => {

@@ -6,7 +6,7 @@ import { LIVE_CONTRACT_CATALOG } from "./live-contract-catalog.mjs";
 
 const capabilities = JSON.parse(readFileSync(DEFAULT_CAPABILITIES_PATH, "utf8"));
 const matrix = buildLiveContractMatrix(capabilities, LIVE_CONTRACT_CATALOG);
-if (matrix.totals.tools !== 37 || matrix.tools.length !== capabilities.tools.length) {
+if (matrix.totals.tools !== 38 || matrix.tools.length !== capabilities.tools.length) {
   throw new Error("matrix did not cover the complete registered tool inventory");
 }
 for (const mode of ["network-read", "network-write", "non-network"]) {

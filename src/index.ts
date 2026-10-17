@@ -2711,6 +2711,11 @@ const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
       example:
         "Month: MMM-YY → Settlement $XX.XX (× NN contracts) | Market Structure: contango/backwardation",
     },
+    opa_get_futures_history: {
+      does: "Returns daily, weekly or monthly OHLC history per contract month for Brent, WTI or NYMEX natural gas futures over a date range of up to 730 days, with exchange settlement where the API reports one.",
+      example:
+        "Brent futures 2026-12 — USD per bbl · | 2026-09-01 | 88.58 | 92.12 | 88.46 | 91.92 | · 4 trading days",
+    },
     opa_get_marine_fuels: {
       does: "Returns marine bunker fuel prices (VLSFO, MGO, IFO380) across major shipping ports like Singapore and Rotterdam.",
       example: "SINGAPORE | VLSFO | $XXX.XX | USD | metric ton",
@@ -3888,6 +3893,295 @@ server.registerTool(
     text += `\n\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`;
 
     return textResult(text);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Futures settlement history (#124)
+//
+// GET /v1/futures/{brent,wti,natural-gas}/historical, verified against
+// oilpriceapi-api origin/main (V1::FuturesController#process_historical and
+// Futures::HistoricalDataService) and live on 2026-10-15:
+//   - params: from, to (YYYY-MM-DD; defaults 30 days ago / today),
+//     contract_month (YYYY-MM or a full code; comma list allowed), interval
+//     (daily/weekly/monthly families only — no hourly bars);
+//   - from > to, a future date, or a range over 730 days is 400
+//     INVALID_PARAMETER;
+//   - an empty window is HTTP 200 {error, available_dates{earliest, latest}};
+//   - no pagination: without contract_month every listed contract month is
+//     returned, so the tool caps what it renders and says so (#113);
+//   - daily rows: string open/high/low/close, `close` is the last captured
+//     price (close_captured_at), `settlement` is null on most daily rows;
+//   - /v1/futures/* sits behind the futures_data feature gate (403 naming the
+//     add-on or plan) and the free-tier request cap (429).
+// ---------------------------------------------------------------------------
+
+export const FUTURES_HISTORY_INSTRUMENTS = [
+  "brent",
+  "wti",
+  "natural-gas",
+] as const;
+type FuturesHistoryInstrument = (typeof FUTURES_HISTORY_INSTRUMENTS)[number];
+
+// Literal paths, one per published operation: the instrument enum selects a
+// path, it is never interpolated into one.
+const FUTURES_HISTORY_PATHS: Record<FuturesHistoryInstrument, string> = {
+  brent: "/v1/futures/brent/historical",
+  wti: "/v1/futures/wti/historical",
+  "natural-gas": "/v1/futures/natural-gas/historical",
+};
+
+const FUTURES_HISTORY_NAMES: Record<FuturesHistoryInstrument, string> = {
+  brent: "ICE Brent crude futures",
+  wti: "WTI crude futures",
+  "natural-gas": "NYMEX Henry Hub natural gas futures",
+};
+
+export const FUTURES_HISTORY_MAX_RANGE_DAYS = 730;
+export const FUTURES_HISTORY_MAX_ROWS = 400;
+export const FUTURES_HISTORY_INTERVALS = ["daily", "weekly", "monthly"] as const;
+
+const FUTURES_HISTORY_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const FUTURES_CONTRACT_MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
+const DAY_MS = 86_400_000;
+
+function futuresHistoryDate(value: string): Date | null {
+  if (!FUTURES_HISTORY_DATE.test(value)) return null;
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 10) === value ? date : null;
+}
+
+interface FuturesHistoryRow {
+  trading_date?: string;
+  period_start?: string;
+  period_end?: string;
+  open?: string | number | null;
+  high?: string | number | null;
+  low?: string | number | null;
+  close?: string | number | null;
+  settlement?: string | number | null;
+  volume?: number | null;
+  trading_days?: number | null;
+}
+
+interface FuturesHistoryContract {
+  contract_month?: string;
+  contract_code?: string;
+  daily_data?: FuturesHistoryRow[];
+}
+
+interface FuturesHistoryData {
+  error?: string;
+  available_dates?: { earliest?: string; latest?: string };
+  date_range?: { from?: string; to?: string };
+  interval?: string;
+  total_records?: number;
+  contracts?: FuturesHistoryContract[];
+}
+
+function futuresCell(value: unknown): string {
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : NOT_REPORTED;
+  if (typeof value === "string" && value.trim()) return value.trim();
+  return NOT_REPORTED;
+}
+
+export function formatFuturesHistory(options: {
+  instrument: FuturesHistoryInstrument;
+  from: string;
+  to: string;
+  contractMonth?: string;
+  interval: string;
+  data: FuturesHistoryData;
+}): string {
+  const { instrument, interval, data } = options;
+  const basis = FUTURES_INSTRUMENT_QUOTE[instrument];
+  const contracts = (data.contracts ?? [])
+    .filter((c) => Array.isArray(c.daily_data) && c.daily_data.length > 0)
+    .slice()
+    .sort((a, b) =>
+      String(a.contract_code ?? a.contract_month ?? "").localeCompare(
+        String(b.contract_code ?? b.contract_month ?? ""),
+      ),
+    );
+  const totalRows = contracts.reduce((n, c) => n + c.daily_data!.length, 0);
+  const daily = interval === "daily";
+
+  const lines = [
+    `# ${FUTURES_HISTORY_NAMES[instrument]} — ${interval} history`,
+    "",
+    `- **Window**: ${data.date_range?.from ?? options.from} to ${data.date_range?.to ?? options.to} (trading days only)`,
+    `- **Contracts**: ${options.contractMonth ?? `every contract month the API returned (${contracts.length})`}`,
+    `- **Rows returned by the API**: ${totalRows}`,
+    `- _${describeQuoteBasis(undefined, basis)} (contract specification; the history response carries no currency field)._`,
+  ];
+  if (daily) {
+    lines.push(
+      "- _Close is the last captured price of the trading day. Settlement is the exchange settlement, shown only where the API reports it._",
+    );
+  }
+
+  let rendered = 0;
+  const omitted: string[] = [];
+  for (const contract of contracts) {
+    const label = FUTURES_CONTRACT_MONTH.test(contract.contract_month ?? "")
+      ? contract.contract_month!
+      : (contract.contract_code ?? contract.contract_month ?? "unlabelled contract");
+    const rows = contract.daily_data!;
+    if (rendered >= FUTURES_HISTORY_MAX_ROWS) {
+      omitted.push(`${label} (${rows.length})`);
+      continue;
+    }
+    const shown = rows.slice(0, FUTURES_HISTORY_MAX_ROWS - rendered);
+    rendered += shown.length;
+    const hasSettlement = rows.some(
+      (r) => r.settlement !== null && r.settlement !== undefined && r.settlement !== "",
+    );
+    const hasVolume = rows.some((r) => typeof r.volume === "number" && r.volume > 0);
+
+    const header = [daily ? "Date" : "Period", "Open", "High", "Low", "Close"];
+    if (hasSettlement) header.push("Settlement");
+    if (!daily) header.push("Trading days");
+    if (hasVolume) header.push("Volume");
+
+    lines.push(
+      "",
+      `## ${label}${contract.contract_code && contract.contract_code !== label ? ` (${contract.contract_code})` : ""}`,
+      "",
+      `| ${header.join(" | ")} |`,
+      `| ${header.map(() => "---").join(" | ")} |`,
+    );
+    for (const r of shown) {
+      const when = daily
+        ? futuresCell(r.trading_date)
+        : `${futuresCell(r.period_start)} to ${futuresCell(r.period_end)}`;
+      const cells = [when, futuresCell(r.open), futuresCell(r.high), futuresCell(r.low), futuresCell(r.close)];
+      if (hasSettlement) cells.push(futuresCell(r.settlement));
+      if (!daily) cells.push(futuresCell(r.trading_days));
+      if (hasVolume) cells.push(futuresCell(r.volume));
+      lines.push(`| ${cells.join(" | ")} |`);
+    }
+    if (shown.length < rows.length) {
+      omitted.push(`${label} (${rows.length - shown.length} more)`);
+    }
+  }
+
+  if (omitted.length) {
+    lines.push(
+      "",
+      `⚠ Partial answer: the API returned ${totalRows} rows and this answer shows the first ${rendered}. Not shown: ${omitted.join(", ")}. Narrow the request with contract_month (YYYY-MM) or a shorter from/to window.`,
+    );
+  }
+
+  lines.push("", `_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
+  return lines.join("\n");
+}
+
+server.registerTool(
+  "opa_get_futures_history",
+  {
+    title: "Get Futures Settlement History",
+    description:
+      "Get daily, weekly or monthly OHLC history per contract month for brent, wti or natural-gas (NYMEX Henry Hub) futures between two dates. Use when the user asks how a futures contract traded over time or for past settlements; opa_get_futures and opa_get_futures_curve return only the current front month and curve. The date range is at most 730 days and cannot include future dates. Pass contract_month (YYYY-MM) for one contract; without it every listed contract month is returned and the answer shows at most 400 rows, saying what it left out. Daily close is the last captured price; exchange settlement is shown where the API reports it. Futures data sits behind the API's futures entitlement. " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
+    inputSchema: {
+      contract: z
+        .enum(FUTURES_HISTORY_INSTRUMENTS)
+        .default("brent")
+        .describe("Instrument: brent, wti, or natural-gas (default: brent)."),
+      from: z
+        .string()
+        .regex(FUTURES_HISTORY_DATE)
+        .describe("Inclusive start date, YYYY-MM-DD (UTC)."),
+      to: z
+        .string()
+        .regex(FUTURES_HISTORY_DATE)
+        .optional()
+        .describe(
+          "Inclusive end date, YYYY-MM-DD (UTC). Defaults to today. At most 730 days after from.",
+        ),
+      contract_month: z
+        .string()
+        .regex(FUTURES_CONTRACT_MONTH)
+        .optional()
+        .describe("Optional contract month, YYYY-MM (e.g. '2026-12')."),
+      interval: z
+        .enum(FUTURES_HISTORY_INTERVALS)
+        .default("daily")
+        .describe("Bar size: daily, weekly or monthly (default: daily)."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ contract: requestedContract, from, to, contract_month, interval: requestedInterval }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_futures_history");
+    // Defaults re-applied: the live-contract run and unit tests call the
+    // handler directly, without the schema's defaults.
+    const instrument = requestedContract ?? "brent";
+    const interval = requestedInterval ?? "daily";
+    const today = new Date().toISOString().slice(0, 10);
+    const end = to ?? today;
+
+    const fromDate = futuresHistoryDate(from);
+    if (!fromDate) {
+      return errorResult(`from '${from}' is not a valid calendar date. Use YYYY-MM-DD.`);
+    }
+    const toDate = futuresHistoryDate(end);
+    if (!toDate) {
+      return errorResult(`to '${end}' is not a valid calendar date. Use YYYY-MM-DD.`);
+    }
+    if (from > end) {
+      return errorResult(`from ${from} is after to ${end}; from must be on or before to.`);
+    }
+    if (end > today) {
+      return errorResult(
+        `to ${end} is in the future (today is ${today} UTC). Futures history covers past trading days only.`,
+      );
+    }
+    const spanDays = Math.round((toDate.getTime() - fromDate.getTime()) / DAY_MS);
+    if (spanDays > FUTURES_HISTORY_MAX_RANGE_DAYS) {
+      return errorResult(
+        `The range ${from} to ${end} is ${spanDays} days; the API allows at most ${FUTURES_HISTORY_MAX_RANGE_DAYS} days per request. Split it into shorter windows.`,
+      );
+    }
+
+    const query = new URLSearchParams({ from, to: end });
+    if (contract_month) query.set("contract_month", contract_month);
+    query.set("interval", interval);
+    const path = FUTURES_HISTORY_PATHS[instrument];
+    const outcome = await requestApi<FuturesHistoryData>(`${path}?${query.toString()}`);
+    const response = outcome.data;
+    const label = `${FUTURES_HISTORY_NAMES[instrument]} history from ${from} to ${end}${contract_month ? ` for ${contract_month}` : ""}`;
+
+    if (!response) {
+      return errorResult(
+        describeUnavailable(label, outcome, `${label} returned no body.`),
+      );
+    }
+
+    const hasRows = (response.contracts ?? []).some(
+      (c) => Array.isArray(c.daily_data) && c.daily_data.length > 0,
+    );
+    if (!hasRows) {
+      const range = response.available_dates;
+      const available =
+        range?.earliest || range?.latest
+          ? ` The API reports futures history from ${reportedValue(range?.earliest)} to ${reportedValue(range?.latest)}.`
+          : "";
+      return errorResult(
+        `No ${interval} rows for ${label}. The API answered; this is a data-availability fact about the window${contract_month ? " and contract month" : ""}.${available}`,
+      );
+    }
+
+    return textResult(
+      formatFuturesHistory({
+        instrument,
+        from,
+        to: end,
+        contractMonth: contract_month,
+        interval,
+        data: response,
+      }),
+    );
   },
 );
 
