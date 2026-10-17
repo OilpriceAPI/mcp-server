@@ -22,6 +22,21 @@ jobs:
     name: Unit tests + build
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Durable OAuth store (#155): the Postgres store test and the remote
+    # container smoke run against this throwaway database.
+    services:
+      postgres:
+        image: postgres:16.4-alpine
+        env:
+          POSTGRES_PASSWORD: ci-only-not-a-secret
+          POSTGRES_DB: mcp_oauth_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -33,6 +48,8 @@ jobs:
       - run: npm audit --audit-level=low
       - run: npm run verify:release-metadata
       - run: npm test
+        env:
+          MCP_OAUTH_TEST_DATABASE_URL: postgres://postgres:ci-only-not-a-secret@127.0.0.1:5432/mcp_oauth_test
       - run: npm run build
       - run: npm run check:readme-tools
       - run: npm run generate:live-contracts
@@ -55,9 +72,17 @@ jobs:
       - name: Remote MCP container smoke (no account credential)
         run: |
           docker build -f Dockerfile.remote -t opa-openai-plugin:ci .
-          docker run --detach --name opa-remote-ci --publish 127.0.0.1:18080:8080 --env OILPRICEAPI_MCP_PUBLIC_URL=https://127.0.0.1:18080 opa-openai-plugin:ci
-          trap 'docker rm -f opa-remote-ci >/dev/null 2>&1' EXIT
+          # Production fails closed without a durable store and key (#155);
+          # host networking reaches the service Postgres on 127.0.0.1.
+          docker run --detach --name opa-remote-ci --network host \
+            --env PORT=18080 \
+            --env OILPRICEAPI_MCP_PUBLIC_URL=https://127.0.0.1:18080 \
+            --env OILPRICEAPI_MCP_OAUTH_DATABASE_URL=postgres://postgres:ci-only-not-a-secret@127.0.0.1:5432/mcp_oauth_test \
+            --env OILPRICEAPI_MCP_OAUTH_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
+            opa-openai-plugin:ci
+          trap 'docker logs opa-remote-ci 2>&1 | tail -20; docker rm -f opa-remote-ci >/dev/null 2>&1' EXIT
           node scripts/smoke-remote-container.mjs http://127.0.0.1:18080/mcp
+          docker logs opa-remote-ci 2>&1 | grep -q '"event":"oauth_store_ready","durable":true'
       - run: npm run smoke:registry-verifier
       - run: npm run smoke:npm-verifier
       - run: npm run smoke:release-provenance
