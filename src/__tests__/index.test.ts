@@ -1540,6 +1540,7 @@ describe("tool registration metadata", () => {
     opa_get_history_range: /eligible account entitlement.*opa_get_plans/,
     opa_get_futures: /eligible account entitlement.*opa_get_plans/,
     opa_get_futures_curve: /eligible account entitlement.*opa_get_plans/,
+    opa_get_futures_history: /eligible account entitlement.*opa_get_plans/,
     opa_get_marine_fuels: /eligible account entitlement.*opa_get_plans/,
     opa_get_spread: /eligible account entitlement.*opa_get_plans/,
     opa_get_storage: /eligible account entitlement.*opa_get_plans/,

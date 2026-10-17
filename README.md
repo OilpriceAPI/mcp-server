@@ -289,6 +289,7 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_get_history_range`   | Dated price rows for 1-5 commodities over a start/end date range, hourly to monthly, paged      |
 | `opa_get_futures`         | Front-month futures (Brent, WTI, gasoil, TTF, JKM, EU carbon)                                   |
 | `opa_get_futures_curve`   | Full forward curve with contango/backwardation analysis                                         |
+| `opa_get_futures_history` | Brent, WTI, NYMEX natural gas OHLC history per contract month, up to 730 days                     |
 | `opa_get_marine_fuels`    | Bunker fuel prices by port and fuel type (VLSFO/MGO/IFO380)                                     |
 | `opa_get_rig_counts`      | Baker Hughes US total rig count with region and observation date                                |
 | `opa_get_drilling`        | Drilling snapshot: rig counts, frac spreads, 30-day permits, DUCs                               |

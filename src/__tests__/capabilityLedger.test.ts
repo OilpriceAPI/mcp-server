@@ -206,6 +206,29 @@ describe("capability ledger", () => {
     }
   });
 
+  it("records selection 2 as shipped in the v4 changes entry (#124)", () => {
+    for (const operation of [
+      "GET /v1/futures/brent/historical",
+      "GET /v1/futures/wti/historical",
+      "GET /v1/futures/natural-gas/historical",
+    ]) {
+      const row = ledger.operations.find(
+        (entry: { operation: string }) => entry.operation === operation,
+      );
+      expect(row, operation).toMatchObject({
+        status: "exposed",
+        tools: ["opa_get_futures_history"],
+        selection: 2,
+      });
+    }
+    expect(LIVE_CONTRACT_CATALOG).toHaveProperty("opa_get_futures_history");
+    const v4 = ledger.changes.find(
+      (change: { ledgerVersion: number }) => change.ledgerVersion === 4,
+    );
+    expect(v4?.issue).toBe("https://github.com/OilpriceAPI/mcp-server/issues/124");
+    expect(v4?.summary).toContain("GET /v1/futures/natural-gas/historical");
+  });
+
   it("reports the route-policy snapshot as stale past its age threshold", () => {
     const { maxAgeDays, sourceCommitDate } = ledger.source.routePolicy;
     const late = new Date(Date.parse(sourceCommitDate) + (maxAgeDays + 1) * 86_400_000);
