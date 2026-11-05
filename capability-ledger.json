@@ -1,7 +1,7 @@
 {
   "$comment": "API-to-MCP capability ledger (#77). One row per operation in the published OpenAPI contract. Checked by `npm run check:capability-ledger` against the live contract, build/capabilities.json and src/index.ts. Bump ledgerVersion and append to changes for every decision change, and link the change from the release notes.",
   "schemaVersion": "1.0.0",
-  "ledgerVersion": 7,
+  "ledgerVersion": 8,
   "source": {
     "openapi": {
       "url": "https://api.oilpriceapi.com/openapi.json",
@@ -209,12 +209,12 @@
     {
       "id": "fuel-surcharge",
       "title": "LTL and parcel carrier fuel surcharges",
-      "status": "exposed",
+      "status": "partial",
       "owner": "mcp-server",
       "tools": [
         "opa_get_fuel_surcharge"
       ],
-      "reason": "All six canonical operations are reachable through opa_get_fuel_surcharge."
+      "reason": "Six carrier-surcharge operations are reachable through opa_get_fuel_surcharge; schedule calculation (GET /v1/fuel-surcharge/calculate) is deferred."
     },
     {
       "id": "drilling",
@@ -665,6 +665,14 @@
       "owner": "mcp-server"
     },
     {
+      "operation": "GET /v1/fuel-surcharge/calculate",
+      "family": "fuel-surcharge",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Applies a customer-supplied surcharge schedule to the EIA weekly diesel index; opa_get_fuel_surcharge already serves carrier-published surcharges. Revisit when measured MCP demand asks for schedule calculation."
+    },
+    {
       "operation": "GET /v1/fuel-surcharge/parcel",
       "family": "fuel-surcharge",
       "status": "exposed",
@@ -735,6 +743,22 @@
       "disposition": "deferred",
       "owner": "mcp-server",
       "reason": "Calendar spreads are derivable from opa_get_futures_curve; selection 2 (#124) shipped settlement history only, so spreads stay deferred until measured demand says otherwise."
+    },
+    {
+      "operation": "GET /v1/futures/continuous/brent/historical",
+      "family": "futures",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Continuous front-month daily bars from revisable public snapshots, not exchange settlements; opa_get_futures_history serves settlement history. Revisit after the continuous series has a stable schema and measured demand."
+    },
+    {
+      "operation": "GET /v1/futures/continuous/wti/historical",
+      "family": "futures",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Continuous front-month daily bars from revisable public snapshots, not exchange settlements; opa_get_futures_history serves settlement history. Revisit after the continuous series has a stable schema and measured demand."
     },
     {
       "operation": "GET /v1/futures/ice-brent",
@@ -1226,6 +1250,14 @@
       "reason": "Physical premiums; low measured demand."
     },
     {
+      "operation": "GET /v1/status",
+      "family": "data-quality",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Keyless operational status snapshot for humans and monitors, not a market-data answer; an agent gets freshness from each price response. Revisit if agents need service health."
+    },
+    {
       "operation": "GET /v1/storage/cushing",
       "family": "storage",
       "status": "exposed",
@@ -1505,6 +1537,12 @@
       "date": "2026-10-17",
       "issue": "https://github.com/OilpriceAPI/mcp-server/issues/125",
       "summary": "Selection 3, first slice: expose GET /v1/marine-ports and GET /v1/marine-ports/{port_code} through opa_get_marine_ports and GET /v1/prices/marine-fuels/historical through opa_get_marine_fuel_history; move opa_get_marine_fuels from the deprecated /v1/marine-fuels/latest alias to canonical GET /v1/prices/marine-fuels/latest. GET /v1/prices/marine-fuels stays selected and not exposed. History requires a paid subscription or an active trial (API 403 otherwise); the tool reports the API's refusal text."
+    },
+    {
+      "ledgerVersion": 8,
+      "date": "2026-11-05",
+      "issue": "https://github.com/OilpriceAPI/mcp-server/issues/159",
+      "summary": "Record four API operations published since ledger version 7 as not exposed and deferred: GET /v1/fuel-surcharge/calculate, GET /v1/futures/continuous/brent/historical, GET /v1/futures/continuous/wti/historical, GET /v1/status. fuel-surcharge family moves to partial. Clears main CI drift (run 42018322671)."
     }
   ]
 }
