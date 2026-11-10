@@ -296,7 +296,15 @@ describe("public energy facade", () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       response({
         status: "success",
-        data: { prices: Array(50).fill({ ...quote, as_of: "2026-09-20" }) },
+        data: {
+          prices: Array(50).fill({
+            ...quote,
+            // Inside the 30-day window regardless of the run date.
+            as_of: new Date(Date.now() - 10 * 86_400_000)
+              .toISOString()
+              .slice(0, 10),
+          }),
+        },
       }),
     );
     const data = body(
