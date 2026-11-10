@@ -5609,7 +5609,7 @@ server.registerTool(
   {
     title: "List Well Permits",
     description:
-      "List US drilling permits from state regulators across one or more states and an optional permit-date range, newest permit date first, paged up to 100 rows per page. Each row has the permit date, state, county, operator, well, permit type and status, API number and source regulator. Use when the user wants raw permit records across several states or a date window; opa_search_well_permits adds a per-state freshness gate and county/operator search, and opa_get_well_activity summarises counts. Requires a Well Permits subscription (an add-on or the Scale plan, per the API contract); the API answers HTTP 403 without it, and opa_preview_well_permits works on any key. " +
+      "List US drilling permits from state regulators across one or more states and an optional permit-date range, newest permit date first, paged up to 100 rows per page. Each row has the permit date, state, county, operator, well, permit type and status, API number and source regulator. Use when the user wants raw permit records across several states or a date window; opa_search_well_permits adds a per-state freshness gate and county/operator search, and opa_get_well_activity summarises counts. Requires a Well Permits subscription (an add-on, or included in some plans); the API answers HTTP 403 without it, and opa_preview_well_permits works on any key. " +
       ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       states: z
