@@ -1684,7 +1684,7 @@
       "ledgerVersion": 9,
       "date": "2026-11-10",
       "issue": "https://github.com/OilpriceAPI/mcp-server/issues/195",
-      "summary": "Market history (#195): expose five operations deferred in ledger 8. GET /v1/futures/continuous/brent/historical and /wti/historical: new opa_get_continuous_futures_history (daily/weekly/monthly bars, says they are revisable snapshots and not settlements, states any entitlement start-date cap). GET /v1/futures/ice-gasoil/historical: opa_get_futures_history gains contract gasoil (USD per tonne). GET /v1/natural-gas/storage: new opa_get_natural_gas_storage (Scale plan per the API contract; weeks bounded 1-52 by the tool). GET /v1/macro/releases: new opa_get_macro_releases (days 1-90, importance and source filters, calendar coverage caveat). Families futures, natural-gas-fundamentals and macro-calendar are partial. All five verified live 2026-11-10 with a Scale key."
+      "summary": "Market history (#195): expose five operations deferred in ledger 8. GET /v1/futures/continuous/brent/historical and /wti/historical: new opa_get_continuous_futures_history (daily/weekly/monthly bars, says they are revisable snapshots and not settlements, states any entitlement start-date cap). GET /v1/futures/ice-gasoil/historical: opa_get_futures_history gains contract gasoil (USD per tonne). GET /v1/natural-gas/storage: new opa_get_natural_gas_storage (plan-gated, HTTP 403 without the entitlement; weeks bounded 1-52 by the tool). GET /v1/macro/releases: new opa_get_macro_releases (days 1-90, importance and source filters, calendar coverage caveat). Families futures, natural-gas-fundamentals and macro-calendar are partial. All five verified live 2026-11-10 with a Scale key."
     }
   ]
 }

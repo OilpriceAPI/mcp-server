@@ -4718,7 +4718,7 @@ server.registerTool(
   {
     title: "Get Natural Gas Storage",
     description:
-      "Get the latest EIA Weekly Natural Gas Storage Report for Lower 48 working gas: the week's level and change, the year-ago level, the five-year average and the surplus or deficit against it, in Bcf. Set historical=true to add the last N weekly reports. Use when the user asks about US natural gas storage, injections or withdrawals. opa_get_storage covers crude oil at Cushing and the SPR, not gas. The API currently serves this dataset to the Scale plan, per the API contract, and answers HTTP 403 without that entitlement. " +
+      "Get the latest EIA Weekly Natural Gas Storage Report for Lower 48 working gas: the week's level and change, the year-ago level, the five-year average and the surplus or deficit against it, in Bcf. Set historical=true to add the last N weekly reports. Use when the user asks about US natural gas storage, injections or withdrawals. opa_get_storage covers crude oil at Cushing and the SPR, not gas. This dataset is plan-gated: the API answers HTTP 403 when the account's plan does not include it. " +
       ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       historical: z

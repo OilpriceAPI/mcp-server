@@ -417,7 +417,7 @@ describe("opa_get_natural_gas_storage (#195)", () => {
 
   it("states the plan gate and distinguishes gas storage from opa_get_storage", () => {
     const description = tools[TOOL]?.description ?? "";
-    expect(description).toMatch(/Scale plan/);
+    expect(description).toMatch(/plan-gated/);
     expect(description).toMatch(/HTTP 403/);
     expect(description).toMatch(/opa_get_storage covers crude oil/);
     expect(description).toMatch(/eligible account entitlement.*opa_get_plans/);
