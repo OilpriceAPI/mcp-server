@@ -1,7 +1,7 @@
 {
   "$comment": "API-to-MCP capability ledger (#77). One row per operation in the published OpenAPI contract. Checked by `npm run check:capability-ledger` against the live contract, build/capabilities.json and src/index.ts. Bump ledgerVersion and append to changes for every decision change, and link the change from the release notes.",
   "schemaVersion": "1.0.0",
-  "ledgerVersion": 8,
+  "ledgerVersion": 9,
   "source": {
     "openapi": {
       "url": "https://api.oilpriceapi.com/openapi.json",
@@ -166,9 +166,10 @@
       "owner": "mcp-server",
       "tools": [
         "opa_get_futures",
-        "opa_get_futures_history"
+        "opa_get_futures_history",
+        "opa_get_continuous_futures_history"
       ],
-      "reason": "Latest contracts and settlement history (opa_get_futures_history, selection 2) are exposed; calendar spreads are deferred."
+      "reason": "Latest contracts, per-contract settlement history (opa_get_futures_history: Brent, WTI, natural gas and, from ledger 9, ICE gasoil) and the continuous front-month Brent and WTI series (opa_get_continuous_futures_history, ledger 9) are exposed; calendar spreads are deferred."
     },
     {
       "id": "futures-expanded",
@@ -428,16 +429,22 @@
     {
       "id": "natural-gas-fundamentals",
       "title": "Natural-gas fundamentals",
-      "status": "not_exposed",
+      "status": "partial",
       "owner": "mcp-server",
-      "reason": "GET /v1/natural-gas/storage is canonical (ledger 8) and deferred; /v1/fundamentals is a preview family with no stable response schema. No measured MCP demand in the selection window."
+      "tools": [
+        "opa_get_natural_gas_storage"
+      ],
+      "reason": "GET /v1/natural-gas/storage (EIA weekly Lower 48 working gas) is exposed by opa_get_natural_gas_storage (ledger 9). /v1/fundamentals is a preview family with no stable response schema and stays unexposed."
     },
     {
       "id": "macro-calendar",
       "title": "Macro calendar",
-      "status": "not_exposed",
+      "status": "partial",
       "owner": "mcp-server",
-      "reason": "GET /v1/macro/releases is canonical (ledger 8); the rest of /v1/macro is preview. No measured MCP demand in the selection window."
+      "tools": [
+        "opa_get_macro_releases"
+      ],
+      "reason": "GET /v1/macro/releases is exposed by opa_get_macro_releases (ledger 9), which states the calendar's coverage status with every answer. The rest of /v1/macro is preview and stays unexposed."
     },
     {
       "id": "data-quality",
@@ -812,18 +819,20 @@
     {
       "operation": "GET /v1/futures/continuous/brent/historical",
       "family": "futures",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Continuous front-month daily bars from revisable public snapshots, not exchange settlements; opa_get_futures_history serves settlement history. Revisit after the continuous series has a stable schema and measured demand."
+      "status": "exposed",
+      "tools": [
+        "opa_get_continuous_futures_history"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/futures/continuous/wti/historical",
       "family": "futures",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Continuous front-month daily bars from revisable public snapshots, not exchange settlements; opa_get_futures_history serves settlement history. Revisit after the continuous series has a stable schema and measured demand."
+      "status": "exposed",
+      "tools": [
+        "opa_get_continuous_futures_history"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/futures/eua-carbon",
@@ -854,10 +863,11 @@
     {
       "operation": "GET /v1/futures/ice-gasoil/historical",
       "family": "futures",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "ICE Low Sulphur Gas Oil settlement history (USD/t). opa_get_futures_history covers brent, wti and natural-gas only; adding gasoil needs its own input schema and live-contract entry. Revisit on measured demand."
+      "status": "exposed",
+      "tools": [
+        "opa_get_futures_history"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/futures/ice-wti",
@@ -1028,10 +1038,11 @@
     {
       "operation": "GET /v1/macro/releases",
       "family": "macro-calendar",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Release calendar (BLS, EIA, Fed, OPEC, Baker Hughes) is now canonical; no measured MCP demand in the selection window. Revisit when demand is measured."
+      "status": "exposed",
+      "tools": [
+        "opa_get_macro_releases"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/marine-ports",
@@ -1089,10 +1100,11 @@
     {
       "operation": "GET /v1/natural-gas/storage",
       "family": "natural-gas-fundamentals",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "EIA weekly Lower 48 working-gas storage. opa_get_storage covers Cushing crude and SPR only. Revisit on measured MCP demand for gas fundamentals."
+      "status": "exposed",
+      "tools": [
+        "opa_get_natural_gas_storage"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/prices",
@@ -1667,6 +1679,12 @@
       "date": "2026-11-10",
       "issue": "https://github.com/OilpriceAPI/mcp-server/issues/192",
       "summary": "Record 18 operations the live OpenAPI contract published after ledger version 7 (136 operations, was 118 rows). Exposed: GET and POST /v1/alerts (existing price-alert tools; family moves to partial), GET /v1/futures/eua-carbon via the identical /v1/futures/eu-carbon alias. Alias: GET /v1/futures/ice-brent/historical. Deferred: POST /v1/alerts/{alert_id}/test, four /v1/analytics operations (new analytics family), GET /v1/ei/well-permits and /preview, GET /v1/fuel-surcharge/calculate (family moves to partial), continuous Brent and WTI history, ICE gasoil history, GET /v1/macro/releases, GET /v1/natural-gas/storage, GET /v1/status. Route-policy snapshot re-verified at oilpriceapi-api@3c8636e (latest commit to config/openapi_route_policy.yml, 2026-10-27): the 10 families[].pathPrefixes keep their audiences; changes since 66f46ed only add /v1/upgrade, /v1/brent, /v1/drilling/rig-count, /v1/constraints, /v1/price, /v1/prices/historical/week, /v1/prices/{}, PUT /v1/api-keys/{} and /v1/scheduled-deliveries, none of which the MCP calls. Supersedes #187."
+    },
+    {
+      "ledgerVersion": 9,
+      "date": "2026-11-10",
+      "issue": "https://github.com/OilpriceAPI/mcp-server/issues/195",
+      "summary": "Market history (#195): expose five operations deferred in ledger 8. GET /v1/futures/continuous/brent/historical and /wti/historical: new opa_get_continuous_futures_history (daily/weekly/monthly bars, says they are revisable snapshots and not settlements, states any entitlement start-date cap). GET /v1/futures/ice-gasoil/historical: opa_get_futures_history gains contract gasoil (USD per tonne). GET /v1/natural-gas/storage: new opa_get_natural_gas_storage (Scale plan per the API contract; weeks bounded 1-52 by the tool). GET /v1/macro/releases: new opa_get_macro_releases (days 1-90, importance and source filters, calendar coverage caveat). Families futures, natural-gas-fundamentals and macro-calendar are partial. All five verified live 2026-11-10 with a Scale key."
     }
   ]
 }

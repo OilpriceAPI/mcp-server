@@ -117,7 +117,7 @@ try {
     const capabilities = JSON.parse(readFileSync(join(build, "capabilities.json"), "utf8"));
     if (capabilities.package.sourceCommit !== process.env.EXPECTED_SOURCE_COMMIT) throw new Error("capability provenance drift");
     if (capabilities.generatedAt !== process.env.EXPECTED_GENERATED_AT) throw new Error("capability timestamp drift");
-    if (capabilities.tools.length !== 40) throw new Error("capability inventory drift");
+    if (capabilities.tools.length !== 43) throw new Error("capability inventory drift");
     if (existsSync(join(build, "__tests__"))) throw new Error("test artifacts leaked into runtime image");
     for (const entry of readdirSync(build)) {
       if (/\.(?:test|spec)\./.test(entry)) throw new Error("test artifact leaked into runtime image");

@@ -289,7 +289,8 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_get_history_range`   | Dated price rows for 1-5 commodities over a start/end date range, hourly to monthly, paged      |
 | `opa_get_futures`         | Front-month futures (Brent, WTI, gasoil, TTF, JKM, EU carbon)                                   |
 | `opa_get_futures_curve`   | Full forward curve with contango/backwardation analysis                                         |
-| `opa_get_futures_history` | Brent, WTI, NYMEX natural gas OHLC history per contract month, up to 730 days                     |
+| `opa_get_futures_history` | Brent, WTI, NYMEX natural gas, ICE gasoil OHLC history per contract month, up to 730 days        |
+| `opa_get_continuous_futures_history` | Continuous front-month Brent or WTI daily/weekly/monthly bars (revisable snapshots, not settlements) |
 | `opa_get_marine_fuels`    | Bunker fuel prices by port and fuel type (VLSFO/MGO/IFO380)                                     |
 | `opa_get_marine_ports`    | Bunkering port directory (UN/LOCODE, region, fuel services) or one port with recent prices      |
 | `opa_get_marine_fuel_history` | Daily history of one marine fuel at one port; paid subscription or active trial            |
@@ -301,6 +302,7 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_get_opec_production` | OPEC country-level production data                                                              |
 | `opa_get_forecasts`       | EIA STEO energy price forecasts                                                                 |
 | `opa_get_oil_inventories` | EIA weekly petroleum stocks (latest/summary/by_product)                                         |
+| `opa_get_macro_releases`  | Scheduled BLS, EIA, Fed, OPEC and Baker Hughes releases over 1-90 days, with calendar coverage  |
 | `opa_get_well_permits`    | US well drilling permits (latest/by_state/by_operator)                                          |
 | `opa_search_well_permits` | State-scoped permit search by county/operator/date with measured freshness gate                  |
 | `opa_lookup_well`         | API-number lookup with promoted lifecycle and exact monthly production when available            |
@@ -308,6 +310,7 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_get_well_production` | US well production — beta coverage (summary/states/state/well/top_producers/cycle_time/cohorts) |
 | `opa_get_spread`          | Crack (type, crude), basis (pair, or all pairs), margin (index); optional date-range history    |
 | `opa_get_natural_gas_hubs` | US physical gas hub prices as basis to Henry Hub (Waha, SoCal, Chicago and more)              |
+| `opa_get_natural_gas_storage` | EIA weekly Lower 48 working gas: level, change, year-ago, five-year average; Scale plan     |
 | `opa_get_data_quality`    | OilPriceAPI's own data-quality grades per series (completeness, freshness and more)            |
 | `opa_get_account_status`  | Plan tier, request usage, remaining quota and reset date for the configured key                |
 | `opa_get_plans`           | Current subscription plans: price, request limits and included features                        |
