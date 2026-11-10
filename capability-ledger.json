@@ -1,7 +1,7 @@
 {
   "$comment": "API-to-MCP capability ledger (#77). One row per operation in the published OpenAPI contract. Checked by `npm run check:capability-ledger` against the live contract, build/capabilities.json and src/index.ts. Bump ledgerVersion and append to changes for every decision change, and link the change from the release notes.",
   "schemaVersion": "1.0.0",
-  "ledgerVersion": 8,
+  "ledgerVersion": 9,
   "source": {
     "openapi": {
       "url": "https://api.oilpriceapi.com/openapi.json",
@@ -209,12 +209,13 @@
     {
       "id": "fuel-surcharge",
       "title": "LTL and parcel carrier fuel surcharges",
-      "status": "partial",
+      "status": "exposed",
       "owner": "mcp-server",
       "tools": [
-        "opa_get_fuel_surcharge"
+        "opa_get_fuel_surcharge",
+        "opa_calculate_fuel_surcharge"
       ],
-      "reason": "Six carrier-surcharge operations are reachable through opa_get_fuel_surcharge; schedule calculation (GET /v1/fuel-surcharge/calculate) is deferred."
+      "reason": "Six carrier-surcharge operations are reachable through opa_get_fuel_surcharge; schedule calculation (GET /v1/fuel-surcharge/calculate) is exposed by opa_calculate_fuel_surcharge (ledger 9)."
     },
     {
       "id": "drilling",
@@ -306,15 +307,16 @@
     {
       "id": "price-alerts",
       "title": "Legacy price alerts",
-      "status": "partial",
+      "status": "exposed",
       "owner": "mcp-server",
       "tools": [
         "opa_create_price_alert",
         "opa_list_price_alerts",
         "opa_delete_price_alert",
-        "opa_get_alert_triggers"
+        "opa_get_alert_triggers",
+        "opa_test_price_alert"
       ],
-      "reason": "GET and POST /v1/alerts are canonical (ledger 8) and exposed. Delete and trigger history still use the preview /v1/alerts routes, which the API route policy calls legacy in favour of subscriptions; kept for existing MCP users. POST /v1/alerts/{alert_id}/test is deferred.",
+      "reason": "GET and POST /v1/alerts are canonical (ledger 8) and exposed; POST /v1/alerts/{alert_id}/test is exposed by opa_test_price_alert (ledger 9). Delete and trigger history still use the preview /v1/alerts routes, which the API route policy calls legacy in favour of subscriptions; kept for existing MCP users.",
       "pathPrefixes": [
         {
           "prefix": "/v1/alerts",
@@ -445,9 +447,10 @@
       "status": "exposed",
       "owner": "mcp-server",
       "tools": [
-        "opa_get_data_quality"
+        "opa_get_data_quality",
+        "opa_get_service_status"
       ],
-      "reason": "Served from the preview /v1/data-quality family.",
+      "reason": "Per-series grades are served from the preview /v1/data-quality family (opa_get_data_quality); the keyless operational snapshot GET /v1/status is exposed by opa_get_service_status (ledger 9).",
       "pathPrefixes": [
         {
           "prefix": "/v1/data-quality",
@@ -732,10 +735,11 @@
     {
       "operation": "GET /v1/fuel-surcharge/calculate",
       "family": "fuel-surcharge",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Applies a customer-supplied surcharge schedule to the EIA weekly diesel index; opa_get_fuel_surcharge already serves carrier-published surcharges. Revisit when measured MCP demand asks for schedule calculation."
+      "status": "exposed",
+      "tools": [
+        "opa_calculate_fuel_surcharge"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/fuel-surcharge/parcel",
@@ -1359,10 +1363,11 @@
     {
       "operation": "GET /v1/status",
       "family": "data-quality",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Keyless operational status snapshot for humans and monitors, not a market-data answer; an agent gets freshness from each price response. Revisit if agents need service health."
+      "status": "exposed",
+      "tools": [
+        "opa_get_service_status"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/storage/cushing",
@@ -1548,10 +1553,11 @@
     {
       "operation": "POST /v1/alerts/{alert_id}/test",
       "family": "price-alerts",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Dry-run evaluation of one alert against the latest price; no MCP tool calls it. opa_get_price answers the same question for a code. Revisit if agents need to validate an alert before relying on it."
+      "status": "exposed",
+      "tools": [
+        "opa_test_price_alert"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "POST /v1/api-keys",
@@ -1667,6 +1673,12 @@
       "date": "2026-11-10",
       "issue": "https://github.com/OilpriceAPI/mcp-server/issues/192",
       "summary": "Record 18 operations the live OpenAPI contract published after ledger version 7 (136 operations, was 118 rows). Exposed: GET and POST /v1/alerts (existing price-alert tools; family moves to partial), GET /v1/futures/eua-carbon via the identical /v1/futures/eu-carbon alias. Alias: GET /v1/futures/ice-brent/historical. Deferred: POST /v1/alerts/{alert_id}/test, four /v1/analytics operations (new analytics family), GET /v1/ei/well-permits and /preview, GET /v1/fuel-surcharge/calculate (family moves to partial), continuous Brent and WTI history, ICE gasoil history, GET /v1/macro/releases, GET /v1/natural-gas/storage, GET /v1/status. Route-policy snapshot re-verified at oilpriceapi-api@3c8636e (latest commit to config/openapi_route_policy.yml, 2026-10-27): the 10 families[].pathPrefixes keep their audiences; changes since 66f46ed only add /v1/upgrade, /v1/brent, /v1/drilling/rig-count, /v1/constraints, /v1/price, /v1/prices/historical/week, /v1/prices/{}, PUT /v1/api-keys/{} and /v1/scheduled-deliveries, none of which the MCP calls. Supersedes #187."
+    },
+    {
+      "ledgerVersion": 9,
+      "date": "2026-11-10",
+      "issue": "https://github.com/OilpriceAPI/mcp-server/issues/195",
+      "summary": "Tools (#195): expose three operations deferred in ledger 8. GET /v1/fuel-surcharge/calculate: new opa_calculate_fuel_surcharge (percent or per_mile, the seven EIA regions, 1-52 weeks; checks per-method required inputs before the request; states a stale index). POST /v1/alerts/{alert_id}/test: new opa_test_price_alert (read scope, automation category; dry run that sends nothing, metered). GET /v1/status: new keyless opa_get_service_status (core category; a 503 is reported as health unknown and not retried). Families fuel-surcharge, price-alerts and data-quality are exposed. All three verified live 2026-11-10."
     }
   ]
 }

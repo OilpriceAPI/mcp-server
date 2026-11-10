@@ -320,6 +320,22 @@ async function priceAlertLifecycle() {
     for (const tool of ["opa_list_price_alerts", "opa_get_alert_triggers"]) {
       record(tool, "passed", "synthetic alert visible in account-scoped list", { method: "GET", path: "/v1/alerts" });
     }
+
+    // #195: dry-run the synthetic alert through the real handler, so the
+    // formatter is exercised against the live body. The threshold is far above
+    // any price, so the alert must not trigger.
+    const { tools } = await loadRegisteredTools();
+    await pace();
+    const tested = await tools.opa_test_price_alert.handler({ id: String(id) }, {});
+    lastRequestAt = Date.now();
+    const testedText = (tested?.content ?? []).map((item) => item.text).join("\n");
+    assert(!tested?.isError, `alert test answered with an error: ${testedText.split("\n")[0]}`);
+    assert(/Would not trigger now/.test(testedText), "alert test did not report would_trigger=false for a 1,000,000 threshold");
+    assert(!/not reported|undefined|NaN|Invalid Date/.test(testedText), "alert test rendered a missing field");
+    record("opa_test_price_alert", "passed", "dry run on synthetic alert: would not trigger", {
+      method: "POST",
+      path: "/v1/alerts/:id/test",
+    });
   } finally {
     if (sent) await cleanupAndRecord({ tool: "opa_delete_price_alert", collectionPath: "/v1/alerts", id, name });
   }
@@ -383,7 +399,7 @@ async function main() {
   // (a comparison leg, a state-health gate) are budgeted at one per read.
   // Writes: 11 lifecycle requests including the two leak sweeps, plus room
   // for a few swept deletes (#126).
-  const expectedRequests = reads.length * 2 + (writesRequired ? 14 : 1) + 2;
+  const expectedRequests = reads.length * 2 + (writesRequired ? 15 : 1) + 2;
   try {
     await quotaPreflight(expectedRequests);
   } catch (error) {

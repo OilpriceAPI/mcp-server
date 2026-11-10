@@ -297,6 +297,7 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_get_drilling`        | Drilling snapshot: rig counts, frac spreads, 30-day permits, DUCs                               |
 | `opa_get_diesel_by_state` | AAA retail diesel price for any US state (50 states + DC)                                       |
 | `opa_get_fuel_surcharge`  | LTL and parcel carrier fuel surcharge percentages with effective dates and source provenance    |
+| `opa_calculate_fuel_surcharge` | Your own surcharge schedule (percent or per mile) applied to the EIA weekly diesel index     |
 | `opa_get_storage`         | Cushing and SPR oil storage/inventory levels                                                    |
 | `opa_get_opec_production` | OPEC country-level production data                                                              |
 | `opa_get_forecasts`       | EIA STEO energy price forecasts                                                                 |
@@ -309,6 +310,7 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_get_spread`          | Crack (type, crude), basis (pair, or all pairs), margin (index); optional date-range history    |
 | `opa_get_natural_gas_hubs` | US physical gas hub prices as basis to Henry Hub (Waha, SoCal, Chicago and more)              |
 | `opa_get_data_quality`    | OilPriceAPI's own data-quality grades per series (completeness, freshness and more)            |
+| `opa_get_service_status`  | OilPriceAPI's own operational health by component and update tier; no API key needed           |
 | `opa_get_account_status`  | Plan tier, request usage, remaining quota and reset date for the configured key                |
 | `opa_get_plans`           | Current subscription plans: price, request limits and included features                        |
 
@@ -322,6 +324,7 @@ These tools create and manage **persistent** price alerts tied to your OilPriceA
 | `opa_list_price_alerts`  | List all alerts on the account                                               |
 | `opa_delete_price_alert` | Permanently delete an alert by id                                            |
 | `opa_get_alert_triggers` | Recent alert trigger activity (optionally filtered by `since`)               |
+| `opa_test_price_alert`   | Dry-run one alert against the latest price (would it trigger, cooldown)      |
 
 ### Market Brief & Subscription Tools (authenticated)
 
