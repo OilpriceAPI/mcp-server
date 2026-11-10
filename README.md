@@ -306,6 +306,8 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_get_macro_releases`  | Scheduled BLS, EIA, Fed, OPEC and Baker Hughes releases over 1-90 days, with calendar coverage  |
 | `opa_get_well_permits`    | US well drilling permits (latest/by_state/by_operator)                                          |
 | `opa_search_well_permits` | State-scoped permit search by county/operator/date with measured freshness gate                  |
+| `opa_list_well_permits`   | Paged permit records across states and a permit-date range; Well Permits subscription           |
+| `opa_preview_well_permits` | Up to 25 recent permits for one state over 1-90 days, with as-of date; any API key incl. Free  |
 | `opa_lookup_well`         | API-number lookup with promoted lifecycle and exact monthly production when available            |
 | `opa_get_well_activity`   | Recent permit counts/top operators/trends with explicit state-health warnings                    |
 | `opa_get_well_production` | US well production — beta coverage (summary/states/state/well/top_producers/cycle_time/cohorts) |
