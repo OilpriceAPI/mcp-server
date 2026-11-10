@@ -68,10 +68,10 @@ describe("analytics tools share their contract (#195)", () => {
     vi.unstubAllGlobals();
   });
 
-  it("every description states the Professional/Scale gate and the 403", () => {
+  it("every description states the plan gate and the 403", () => {
     for (const name of ANALYTICS_TOOLS) {
       const description = tools[name]?.description ?? "";
-      expect(description, name).toMatch(/Professional and Scale plans/);
+      expect(description, name).toMatch(/plan-gated/);
       expect(description, name).toMatch(/HTTP 403/);
       expect(description, name).not.toMatch(/real-time|forecast(?!s\b)/i);
     }

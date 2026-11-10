@@ -380,7 +380,7 @@
         "opa_get_price_correlation",
         "opa_get_spread_statistics"
       ],
-      "reason": "All four canonical Professional/Scale analytics operations are exposed (ledger 9). Each tool states the plan gate; the API's 403 sample_data is never rendered as data, and the response `tier` field is not rendered because it misreports Gen-2 plans."
+      "reason": "All four canonical analytics operations are exposed (ledger 9). Each tool states that the API gates analytics by entitlement (HTTP 403); the API's 403 sample_data is never rendered as data, and the response `tier` field is not rendered because it misreports Gen-2 plans."
     },
     {
       "id": "forecasts",
@@ -1682,7 +1682,7 @@
       "ledgerVersion": 9,
       "date": "2026-11-10",
       "issue": "https://github.com/OilpriceAPI/mcp-server/issues/195",
-      "summary": "Analytics (#195): expose the four /v1/analytics operations deferred in ledger 8 (new analytics family now exposed). GET /v1/analytics/statistics: opa_get_price_statistics. GET /v1/analytics/trend: opa_get_price_trend (analysis, sma, ema, rsi, levels). GET /v1/analytics/correlation: opa_get_price_correlation (analysis, rolling, matrix of 2-10 codes). GET /v1/analytics/spread: opa_get_spread_statistics (list, current, historical). Professional/Scale plan gate stated in every description; series capped at 400 rows. All four verified live 2026-11-10 with a Scale key."
+      "summary": "Analytics (#195): expose the four /v1/analytics operations deferred in ledger 8 (new analytics family now exposed). GET /v1/analytics/statistics: opa_get_price_statistics. GET /v1/analytics/trend: opa_get_price_trend (analysis, sma, ema, rsi, levels). GET /v1/analytics/correlation: opa_get_price_correlation (analysis, rolling, matrix of 2-10 codes). GET /v1/analytics/spread: opa_get_spread_statistics (list, current, historical). Entitlement gate (HTTP 403) stated in every description; series capped at 400 rows. All four verified live 2026-11-10 with a Scale key."
     }
   ]
 }

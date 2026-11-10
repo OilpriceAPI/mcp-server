@@ -6243,7 +6243,7 @@ server.registerTool(
 // ---------------------------------------------------------------------------
 
 const ANALYTICS_GATE =
-  "The API serves analytics to the Professional and Scale plans (and active trials) per its contract, and answers HTTP 403 for other plans.";
+  "Analytics are plan-gated: the API answers HTTP 403 when the account's plan does not include them.";
 export const ANALYTICS_MAX_ROWS = 400;
 
 function analyticsNumber(value: unknown): string {

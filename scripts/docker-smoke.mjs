@@ -82,7 +82,7 @@ try {
   );
   if (
     tools.scope !== "read" ||
-    tools.tools.length !== 36 ||
+    tools.tools.length !== 40 ||
     tools.tools.some((tool) => tool.access === "write")
   ) {
     throw new Error("Container default tool inventory was not exact/read-only.");
