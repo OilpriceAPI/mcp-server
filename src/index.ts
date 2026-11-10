@@ -2771,6 +2771,16 @@ const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
       example:
         "| MMM DD, YYYY, HH:MM AM UTC | eia | EIA Weekly Petroleum Status Report | CUSHING_STORAGE | medium | scheduled (rule) |",
     },
+    opa_calculate_fuel_surcharge: {
+      does: "Applies your own fuel surcharge schedule (percent bands or USD per mile) to the EIA weekly retail diesel index for the U.S. average, a PADD region or California, for the latest week and a weekly table.",
+      example:
+        "Latest EIA week YYYY-MM-DD: diesel $X.XXX/gal → surcharge **NN%** · | YYYY-MM-DD | X.XXX | -0.0XX | NN% |",
+    },
+    opa_test_price_alert: {
+      does: "Dry-runs one of your price alerts against the latest price: whether it would trigger now and whether it is in cooldown. Sends nothing and changes nothing.",
+      example:
+        "Alert `1234` — Condition BRENT_CRUDE_USD > 95.0 · Latest price XX.XX · Would not trigger now · Not in cooldown",
+    },
     opa_get_marine_fuels: {
       does: "Returns marine bunker fuel prices (VLSFO, MGO, IFO380) across major shipping ports like Singapore and Rotterdam.",
       example: "SINGAPORE | VLSFO | $XXX.XX | USD | metric ton",
@@ -5324,6 +5334,227 @@ server.registerTool(
   },
 );
 
+// ---------------------------------------------------------------------------
+// Fuel surcharge calculator (ledger v9) — wraps GET /v1/fuel-surcharge/calculate.
+//
+// Verified live 2026-11-10: {status: "success", data: {region, commodity_code,
+// index, as_of, stale, stale_reason, inputs, current, weeks[]}}. Any key; no
+// plan gate. A missing parameter is HTTP 400 {status: "fail", data: {error,
+// errors[]}}; a region with no stored week is 404. The tool checks the
+// per-method required inputs itself so the caller gets the fix before a
+// metered request is spent.
+// ---------------------------------------------------------------------------
+
+export const FUEL_SURCHARGE_CALC_METHODS = ["percent", "per_mile"] as const;
+export const FUEL_SURCHARGE_CALC_ROUNDING = ["floor", "ceil", "exact"] as const;
+export const FUEL_SURCHARGE_CALC_REGIONS = [
+  "national",
+  "east-coast",
+  "midwest",
+  "gulf-coast",
+  "rocky-mountain",
+  "west-coast",
+  "california",
+] as const;
+
+interface FuelSurchargeCalcWeek {
+  week_of?: string;
+  diesel_price?: number | null;
+  diesel_change?: number | null;
+  retrieved_at?: string | null;
+  surcharge_percent?: number | null;
+  surcharge_per_mile?: number | null;
+}
+
+interface FuelSurchargeCalcData {
+  region?: string;
+  commodity_code?: string;
+  index?: string;
+  as_of?: string;
+  stale?: boolean;
+  stale_reason?: string | null;
+  inputs?: Record<string, unknown>;
+  current?: FuelSurchargeCalcWeek;
+  weeks?: FuelSurchargeCalcWeek[];
+}
+
+function surchargeCell(
+  week: FuelSurchargeCalcWeek,
+  method: (typeof FUEL_SURCHARGE_CALC_METHODS)[number],
+): string {
+  if (method === "per_mile") {
+    return typeof week.surcharge_per_mile === "number"
+      ? `$${week.surcharge_per_mile} per mile`
+      : NOT_REPORTED;
+  }
+  return typeof week.surcharge_percent === "number"
+    ? `${week.surcharge_percent}%`
+    : NOT_REPORTED;
+}
+
+function dieselCell(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `$${value}`
+    : NOT_REPORTED;
+}
+
+export function formatFuelSurchargeCalculation(
+  data: FuelSurchargeCalcData,
+  method: (typeof FUEL_SURCHARGE_CALC_METHODS)[number],
+): string {
+  const current = data.current ?? {};
+  const inputs = Object.entries(data.inputs ?? {})
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(", ");
+  const lines = [
+    `# Fuel surcharge calculation — ${reportedValue(data.region)} (${method === "per_mile" ? "USD per mile" : "percent"})`,
+    "",
+    `- **Index**: ${reportedValue(data.index)} (${reportedValue(data.commodity_code)})`,
+    `- **Your schedule, as the API applied it**: ${inputs || NOT_REPORTED}`,
+    `- **Latest EIA week**: ${reportedValue(current.week_of ?? data.as_of)}: diesel ${dieselCell(current.diesel_price)}/gal → surcharge **${surchargeCell(current, method)}**`,
+  ];
+  if (data.stale) {
+    lines.push(
+      `- ⚠ The API marks the diesel index stale: ${reportedValue(data.stale_reason)}. The latest week may not be the current EIA week.`,
+    );
+  }
+  const weeks = Array.isArray(data.weeks) ? data.weeks : [];
+  if (weeks.length > 0) {
+    lines.push(
+      "",
+      `## Last ${weeks.length} EIA week(s), newest first`,
+      "",
+      "| EIA week | Diesel (USD/gal) | Change | Surcharge | Retrieved |",
+      "| --- | --- | --- | --- | --- |",
+    );
+    for (const week of weeks) {
+      const change =
+        typeof week.diesel_change === "number"
+          ? `${week.diesel_change >= 0 ? "+" : ""}${week.diesel_change}`
+          : "-";
+      lines.push(
+        `| ${reportedValue(week.week_of)} | ${futuresCell(week.diesel_price)} | ${change} | ${surchargeCell(week, method)} | ${formatUtcTimestamp(week.retrieved_at)} |`,
+      );
+    }
+  }
+  lines.push(
+    "",
+    "_Diesel at or below your base price is a 0 surcharge. This applies your own schedule to the EIA index; it is not a carrier-published rate (see opa_get_fuel_surcharge)._",
+    "",
+    `_Data from [OilPriceAPI](https://oilpriceapi.com)_`,
+  );
+  return lines.join("\n");
+}
+
+server.registerTool(
+  "opa_calculate_fuel_surcharge",
+  {
+    title: "Calculate Fuel Surcharge",
+    description:
+      "Apply the user's own fuel surcharge schedule to the EIA (DOE) weekly retail on-highway diesel index and return the surcharge for the latest EIA week plus a weekly table. Two methods: percent (completed increments above the base price times the percentage per increment; needs increment and percent_per_increment) and per_mile ((diesel - base) / mpg in USD per mile; needs mpg). Regions are the U.S. average, the EIA PADD regions and California. Use when a shipper or carrier asks what their surcharge is this week under their own schedule; opa_get_fuel_surcharge returns carrier-published rates instead. The answer states when the API marks the index stale. Requires an API key; the API applies no plan gate to this endpoint.",
+    inputSchema: {
+      base_price: z
+        .number()
+        .positive()
+        .describe("Diesel price (USD/gallon) already built into the base rate, e.g. 1.25."),
+      method: z
+        .enum(FUEL_SURCHARGE_CALC_METHODS)
+        .default("percent")
+        .describe("percent (default) or per_mile."),
+      increment: z
+        .number()
+        .min(0.001)
+        .optional()
+        .describe("Required for percent: diesel step (USD/gallon) per surcharge step, at least 0.001, e.g. 0.05."),
+      percent_per_increment: z
+        .number()
+        .positive()
+        .optional()
+        .describe("Required for percent: surcharge percentage points added per step, e.g. 1."),
+      rounding: z
+        .enum(FUEL_SURCHARGE_CALC_ROUNDING)
+        .default("floor")
+        .describe("percent only: floor (default, completed steps), ceil (a partial step counts) or exact (no banding)."),
+      mpg: z
+        .number()
+        .min(1)
+        .optional()
+        .describe("Required for per_mile: fleet fuel economy in miles per gallon, at least 1."),
+      region: z
+        .enum(FUEL_SURCHARGE_CALC_REGIONS)
+        .default("national")
+        .describe("EIA diesel region (default: national, the U.S. average)."),
+      weeks: z
+        .number()
+        .int()
+        .min(1)
+        .max(52)
+        .default(4)
+        .describe("Recent EIA weeks in the table, 1 to 52 (default: 4)."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({
+    base_price,
+    method: requestedMethod,
+    increment,
+    percent_per_increment,
+    rounding,
+    mpg,
+    region,
+    weeks,
+  }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_calculate_fuel_surcharge");
+    const method = requestedMethod ?? "percent";
+    const missing: string[] = [];
+    if (method === "percent") {
+      if (increment === undefined) missing.push("increment");
+      if (percent_per_increment === undefined) missing.push("percent_per_increment");
+    } else if (mpg === undefined) {
+      missing.push("mpg");
+    }
+    if (missing.length > 0) {
+      return errorResult(
+        `method ${method} needs ${missing.join(" and ")}. Example: ${
+          method === "percent"
+            ? "base_price 1.25, increment 0.05, percent_per_increment 1"
+            : "base_price 1.25, mpg 6.5"
+        }.`,
+      );
+    }
+
+    const query = new URLSearchParams({
+      base_price: String(base_price),
+      method,
+    });
+    if (method === "percent") {
+      query.set("increment", String(increment));
+      query.set("percent_per_increment", String(percent_per_increment));
+      query.set("rounding", rounding ?? "floor");
+    } else {
+      query.set("mpg", String(mpg));
+    }
+    query.set("region", region ?? "national");
+    query.set("weeks", String(weeks ?? 4));
+
+    const outcome = await requestApi<ApiResponse<FuelSurchargeCalcData>>(
+      `/v1/fuel-surcharge/calculate?${query.toString()}`,
+    );
+    const label = `The fuel surcharge calculation for ${region ?? "national"}`;
+    const data = outcome.data;
+    if (!data || data.status !== "success" || !data.data?.current) {
+      return errorResult(
+        describeUnavailable(
+          label,
+          outcome,
+          `${label}: the API answered without a latest EIA week.`,
+        ),
+      );
+    }
+    return textResult(formatFuelSurchargeCalculation(data.data, method));
+  },
+);
+
 server.registerTool(
   "opa_get_storage",
   {
@@ -7013,6 +7244,157 @@ server.registerTool(
   },
 );
 
+// ---------------------------------------------------------------------------
+// Service status (ledger v9) — wraps GET /v1/status. No API key required.
+//
+// Verified live 2026-11-10: {status: "success", data: {operational, status,
+// score, grade, message, components{}, affected_components[], last_checked,
+// tiers{realtime, daily, weekly, monthly}}}; include=commodities adds each
+// tier's per-code breakdown. The API answers 503 with unknown health and
+// Retry-After: 60 when its snapshot is missing or at least 15 minutes old, so
+// a 503 here is itself the answer "health unknown" and is not retried.
+// ---------------------------------------------------------------------------
+
+interface StatusTierCommodity {
+  code?: string;
+  name?: string;
+  status?: string;
+  freshness_status?: string;
+  last_updated_at?: string;
+}
+
+interface StatusTier {
+  status?: string;
+  score?: number | null;
+  grade?: string;
+  commodities?: StatusTierCommodity[];
+}
+
+interface ServiceStatusData {
+  operational?: boolean;
+  status?: string;
+  score?: number | null;
+  grade?: string;
+  message?: string;
+  components?: Record<string, string>;
+  affected_components?: string[];
+  last_checked?: string;
+  tiers?: Record<string, StatusTier>;
+}
+
+export const SERVICE_STATUS_MAX_LISTED = 25;
+
+export function formatServiceStatus(
+  data: ServiceStatusData,
+  includeCommodities: boolean,
+): string {
+  const lines = [
+    "# OilPriceAPI service status",
+    "",
+    `- **Status**: ${reportedValue(data.status)}${data.operational === false ? " (not operational)" : ""} — ${reportedValue(data.message)}`,
+    `- **Health score**: ${reportedValue(data.score)} (grade ${reportedValue(data.grade)})`,
+    `- **Calculated**: ${formatUtcTimestamp(data.last_checked)} (the API's last health calculation, not the time of this request)`,
+  ];
+  const affected = Array.isArray(data.affected_components)
+    ? data.affected_components
+    : [];
+  lines.push(
+    `- **Affected components**: ${affected.length ? affected.join(", ") : "none"}`,
+  );
+  const components = Object.entries(data.components ?? {});
+  if (components.length) {
+    lines.push("", "| Component | Status |", "| --- | --- |");
+    for (const [name, state] of components) {
+      lines.push(`| ${name} | ${reportedValue(state)} |`);
+    }
+  }
+  const tiers = Object.entries(data.tiers ?? {});
+  if (tiers.length) {
+    lines.push(
+      "",
+      "| Update tier | Status | Score | Grade |",
+      "| --- | --- | --- | --- |",
+    );
+    for (const [name, tier] of tiers) {
+      lines.push(
+        `| ${name} | ${reportedValue(tier.status)} | ${reportedValue(tier.score)} | ${reportedValue(tier.grade)} |`,
+      );
+    }
+  }
+  if (includeCommodities) {
+    for (const [name, tier] of tiers) {
+      const rows = Array.isArray(tier.commodities) ? tier.commodities : [];
+      const unhealthy = rows.filter(
+        (row) =>
+          (row.status && row.status !== "healthy") ||
+          (row.freshness_status && row.freshness_status !== "current"),
+      );
+      lines.push(
+        "",
+        `## ${name}: ${rows.length} series, ${unhealthy.length} not healthy or not current`,
+      );
+      const listed = unhealthy.slice(0, SERVICE_STATUS_MAX_LISTED);
+      for (const row of listed) {
+        lines.push(
+          `- \`${reportedValue(row.code)}\` ${reportedValue(row.name)}: ${reportedValue(row.status)}, freshness ${reportedValue(row.freshness_status)}, last updated ${formatUtcTimestamp(row.last_updated_at)}`,
+        );
+      }
+      if (unhealthy.length > listed.length) {
+        lines.push(`- …and ${unhealthy.length - listed.length} more not listed.`);
+      }
+    }
+  }
+  lines.push(
+    "",
+    "_This is the API's own operational health snapshot. For one series' freshness, use that series' price tool or opa_get_data_quality._",
+    "",
+    `_Data from [OilPriceAPI](https://oilpriceapi.com)_`,
+  );
+  return lines.join("\n");
+}
+
+server.registerTool(
+  "opa_get_service_status",
+  {
+    title: "Get Service Status",
+    description:
+      "Get OilPriceAPI's own operational status: overall health score and grade, component status, and per-update-tier (realtime, daily, weekly, monthly) health from the API's latest background health calculation. Set include_commodities=true to list the series in each tier that are not healthy or not current. Use when the user asks whether OilPriceAPI is up or degraded, or why data looks delayed. This is service health, not market data. Works without an API key. When the API's snapshot is missing or at least 15 minutes old it answers HTTP 503 and this tool reports health as unknown.",
+    inputSchema: {
+      include_commodities: z
+        .boolean()
+        .default(false)
+        .describe(
+          "When true, list series in each tier that are not healthy or not current (default: false).",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ include_commodities }) => {
+    const include = include_commodities === true;
+    const outcome = await requestApi<ApiResponse<ServiceStatusData>>(
+      include ? "/v1/status?include=commodities" : "/v1/status",
+      fetch,
+      { retryServerErrors: false },
+    );
+    const data = outcome.data;
+    if (outcome.status === 503) {
+      return errorResult(
+        `OilPriceAPI service health is unknown right now: the status endpoint answered HTTP 503${outcome.detail ? ` (${outcome.detail})` : ""}, which it does when its health snapshot is missing or at least 15 minutes old. Retry in about a minute. This is not an account or plan restriction.`,
+      );
+    }
+    if (!data || data.status !== "success" || !data.data) {
+      return errorResult(
+        describeUnavailable(
+          "OilPriceAPI service status",
+          outcome,
+          "OilPriceAPI service status: the API answered without a status snapshot.",
+        ),
+      );
+    }
+    return textResult(formatServiceStatus(data.data, include));
+  },
+);
+
 server.registerTool(
   "opa_create_price_alert",
   {
@@ -7299,6 +7681,97 @@ server.registerTool(
 
     sections.push(`\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
     return textResult(sections.join("\n"));
+  },
+);
+
+// POST /v1/alerts/{alert_id}/test (ledger v9). Verified live 2026-11-10 on a
+// synthetic alert: {alert_id, condition, current_price: {value, timestamp},
+// would_trigger, in_cooldown, result}; an unknown id is 404 {"error":"Alert
+// not found"}. The API evaluates without sending anything and changes no
+// state, but the call reads a live price and is metered like a data request.
+interface AlertTestResult {
+  alert_id?: number | string;
+  condition?: string;
+  current_price?: { value?: number | null; timestamp?: string | null };
+  would_trigger?: boolean;
+  in_cooldown?: boolean;
+  result?: string;
+}
+
+export function formatAlertTest(body: AlertTestResult): string {
+  const price = body.current_price ?? {};
+  const verdict =
+    body.would_trigger === true
+      ? "**Would trigger now**: the condition is met at the latest price."
+      : body.would_trigger === false
+        ? "**Would not trigger now**: the condition is not met at the latest price."
+        : `**Would trigger**: ${NOT_REPORTED}.`;
+  const lines = [
+    `# Price Alert Test — alert \`${reportedValue(body.alert_id)}\``,
+    "",
+    `- **Condition**: ${reportedValue(body.condition)}`,
+    `- **Latest price**: ${reportedValue(price.value)} at ${formatUtcTimestamp(price.timestamp)}`,
+    `- ${verdict}`,
+  ];
+  if (body.in_cooldown === true) {
+    lines.push(
+      "- ⚠ The alert is in its cooldown window, so a real crossing right now would not notify until the cooldown ends.",
+    );
+  } else if (body.in_cooldown === false) {
+    lines.push("- Not in cooldown.");
+  }
+  lines.push(
+    "",
+    "_Dry run: the API sent no email or webhook and changed nothing on the alert._",
+    "",
+    `_Data from [OilPriceAPI](https://oilpriceapi.com)_`,
+  );
+  return lines.join("\n");
+}
+
+server.registerTool(
+  "opa_test_price_alert",
+  {
+    title: "Test Price Alert",
+    description:
+      "Dry-run one of the user's price alerts against the latest price for its commodity: reports the condition, the latest price and its timestamp, whether the alert would trigger now, and whether it is in its cooldown window. Nothing is sent and the alert is not changed. Use when the user wants to check an alert is set correctly before relying on it. Get the id from opa_list_price_alerts. REQUIRES an API key (OILPRICEAPI_KEY); the call reads a live price, so it counts against the account's request quota like a data request.",
+    inputSchema: {
+      id: z
+        .string()
+        .regex(/^\d+$/)
+        .describe(
+          "The numeric id of the alert to test, as returned by opa_list_price_alerts or opa_create_price_alert (e.g. '1234').",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ id }) => {
+    const keyErr = requireApiKey("opa_test_price_alert");
+    if (keyErr) return keyErr;
+
+    const result = await makeAuthRequest(
+      `/v1/alerts/${encodeURIComponent(id)}/test`,
+      { method: "POST" },
+    );
+
+    if (result.status === 404) {
+      const detail =
+        result.body && typeof result.body === "object"
+          ? (result.body as { error?: unknown }).error
+          : undefined;
+      if (typeof detail === "string" && /no price/i.test(detail)) {
+        return errorResult(
+          `Alert \`${id}\` exists, but the API has no latest price for its commodity, so it cannot be evaluated (HTTP 404: ${detail}). This is a data-availability limit, not a plan restriction.`,
+        );
+      }
+      return errorResult(
+        `No alert found with id \`${id}\` on this account. Use opa_list_price_alerts to see valid ids.`,
+      );
+    }
+    if (!result.ok) {
+      return errorResult(alertHttpError(result, "test the price alert"));
+    }
+    return textResult(formatAlertTest(result.body as AlertTestResult));
   },
 );
 

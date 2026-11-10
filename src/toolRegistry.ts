@@ -34,6 +34,7 @@ const TOOL_CATEGORY_BY_NAME: Record<string, ToolCategory> = {
   opa_get_history_range: "core",
   opa_get_account_status: "core",
   opa_get_plans: "core",
+  opa_get_service_status: "core",
   opa_get_futures: "market",
   opa_get_futures_curve: "market",
   opa_get_futures_history: "market",
@@ -47,6 +48,7 @@ const TOOL_CATEGORY_BY_NAME: Record<string, ToolCategory> = {
   opa_get_drilling: "market",
   opa_get_diesel_by_state: "market",
   opa_get_fuel_surcharge: "market",
+  opa_calculate_fuel_surcharge: "market",
   opa_get_storage: "market",
   opa_get_opec_production: "market",
   opa_get_forecasts: "market",
@@ -64,6 +66,7 @@ const TOOL_CATEGORY_BY_NAME: Record<string, ToolCategory> = {
   opa_list_price_alerts: "automation",
   opa_delete_price_alert: "automation",
   opa_get_alert_triggers: "automation",
+  opa_test_price_alert: "automation",
   opa_create_price_subscription: "automation",
   opa_list_subscriptions: "automation",
   opa_delete_subscription: "automation",
@@ -73,6 +76,7 @@ const TOOL_CATEGORY_BY_NAME: Record<string, ToolCategory> = {
 const KEYLESS_TOOLS = new Set([
   "opa_get_product_facts",
   "opa_get_plans",
+  "opa_get_service_status",
   "opa_get_price",
   "opa_market_overview",
   "opa_compare_prices",
@@ -449,7 +453,7 @@ export function buildCapabilityManifest(
             ? ("optional" as const)
             : ("required" as const),
       entitlement:
-        name === "opa_get_product_facts"
+        name === "opa_get_product_facts" || name === "opa_get_service_status"
           ? ("none" as const)
           : ("account-and-plan-dependent" as const),
       annotations: tool.annotations || {},

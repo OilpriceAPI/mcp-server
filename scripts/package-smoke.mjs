@@ -201,7 +201,7 @@ try {
   );
   if (
     readTools.scope !== "read" ||
-    readTools.tools.length !== 39 ||
+    readTools.tools.length !== 42 ||
     readTools.tools.some((tool) => tool.access === "write")
   ) {
     throw new Error(
@@ -314,14 +314,14 @@ try {
     entryPoint,
     baseUrl,
     "read",
-    39,
+    42,
     capabilities.tools.length,
   );
   await assertProtocolScope(
     entryPoint,
     baseUrl,
     "write",
-    43,
+    46,
     capabilities.tools.length,
   );
 

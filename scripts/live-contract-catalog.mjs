@@ -153,6 +153,23 @@ export const LIVE_CONTRACT_CATALOG = {
     "conditional",
     { args: { mode: "auto", history: false, per_page: 12 } },
   ),
+  // #195: the path is byte-for-byte the request the handler builds.
+  opa_calculate_fuel_surcharge: read(
+    "/v1/fuel-surcharge/calculate?base_price=1.25&method=percent&increment=0.05&percent_per_increment=1&rounding=floor&region=national&weeks=4",
+    "success-envelope",
+    "ungated",
+    {
+      args: {
+        base_price: 1.25,
+        method: "percent",
+        increment: 0.05,
+        percent_per_increment: 1,
+        rounding: "floor",
+        region: "national",
+        weeks: 4,
+      },
+    },
+  ),
   opa_get_storage: read(
     "/v1/storage/cushing",
     "success-envelope",
@@ -220,6 +237,9 @@ export const LIVE_CONTRACT_CATALOG = {
     "conditional",
     { args: {} },
   ),
+  opa_get_service_status: read("/v1/status", "success-envelope", "ungated", {
+    args: { include_commodities: false },
+  }),
   opa_get_market_brief: read(
     "/v1/market-brief?codes=BRENT_CRUDE_USD",
     "success-envelope",
@@ -232,6 +252,13 @@ export const LIVE_CONTRACT_CATALOG = {
   },
   opa_get_alert_triggers: {
     ...read("/v1/alerts", "array", "ungated"),
+    lifecycle: "price-alert",
+  },
+  // #195: a dry run on the synthetic alert the price-alert lifecycle creates.
+  // POST, but it changes nothing, so it is a read-scope tool.
+  opa_test_price_alert: {
+    ...read("/v1/alerts/:id/test", "alert-test", "ungated"),
+    method: "POST",
     lifecycle: "price-alert",
   },
   opa_create_price_alert: {

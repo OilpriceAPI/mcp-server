@@ -1526,8 +1526,8 @@ describe("tool registration metadata", () => {
   const DELETE_TOOLS = ["opa_delete_price_alert", "opa_delete_subscription"];
   const WRITE_TOOLS = new Set([...CREATE_TOOLS, ...DELETE_TOOLS]);
 
-  it("registers exactly 43 tools", () => {
-    expect(Object.keys(tools)).toHaveLength(43);
+  it("registers exactly 46 tools", () => {
+    expect(Object.keys(tools)).toHaveLength(46);
     expect(tools.opa_get_product_facts).toBeDefined();
     expect(tools.opa_get_natural_gas_hubs).toBeDefined();
     expect(tools.opa_get_account_status).toBeDefined();
