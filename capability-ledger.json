@@ -1,7 +1,7 @@
 {
   "$comment": "API-to-MCP capability ledger (#77). One row per operation in the published OpenAPI contract. Checked by `npm run check:capability-ledger` against the live contract, build/capabilities.json and src/index.ts. Bump ledgerVersion and append to changes for every decision change, and link the change from the release notes.",
   "schemaVersion": "1.0.0",
-  "ledgerVersion": 8,
+  "ledgerVersion": 9,
   "source": {
     "openapi": {
       "url": "https://api.oilpriceapi.com/openapi.json",
@@ -342,9 +342,11 @@
         "opa_lookup_well",
         "opa_get_well_permits",
         "opa_search_well_permits",
-        "opa_get_well_activity"
+        "opa_get_well_activity",
+        "opa_list_well_permits",
+        "opa_preview_well_permits"
       ],
-      "reason": "Per-well lifecycle and the preview permit family are exposed; lifecycle state availability and cohorts are deferred.",
+      "reason": "Per-well lifecycle, the preview permit family, the canonical paginated permit list (opa_list_well_permits, ledger 9) and the any-key permit preview (opa_preview_well_permits, ledger 9) are exposed; lifecycle state availability and cohorts are deferred.",
       "pathPrefixes": [
         {
           "prefix": "/v1/ei/well-permits",
@@ -699,18 +701,20 @@
     {
       "operation": "GET /v1/ei/well-permits",
       "family": "well-lifecycle",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Paginated permit list behind the Well Permits subscription. opa_get_well_permits and opa_search_well_permits read the /latest, /search, /by-state and /by-operator routes of the same family. Revisit if the list adds filters those tools lack."
+      "status": "exposed",
+      "tools": [
+        "opa_list_well_permits"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/ei/well-permits/preview",
       "family": "well-lifecycle",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Keyless-plan preview capped at 25 permits from one state over 90 days. The permit tools already read the family; a Free-plan preview path is a separate entitlement decision."
+      "status": "exposed",
+      "tools": [
+        "opa_preview_well_permits"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/electricity",
@@ -1667,6 +1671,12 @@
       "date": "2026-11-10",
       "issue": "https://github.com/OilpriceAPI/mcp-server/issues/192",
       "summary": "Record 18 operations the live OpenAPI contract published after ledger version 7 (136 operations, was 118 rows). Exposed: GET and POST /v1/alerts (existing price-alert tools; family moves to partial), GET /v1/futures/eua-carbon via the identical /v1/futures/eu-carbon alias. Alias: GET /v1/futures/ice-brent/historical. Deferred: POST /v1/alerts/{alert_id}/test, four /v1/analytics operations (new analytics family), GET /v1/ei/well-permits and /preview, GET /v1/fuel-surcharge/calculate (family moves to partial), continuous Brent and WTI history, ICE gasoil history, GET /v1/macro/releases, GET /v1/natural-gas/storage, GET /v1/status. Route-policy snapshot re-verified at oilpriceapi-api@3c8636e (latest commit to config/openapi_route_policy.yml, 2026-10-27): the 10 families[].pathPrefixes keep their audiences; changes since 66f46ed only add /v1/upgrade, /v1/brent, /v1/drilling/rig-count, /v1/constraints, /v1/price, /v1/prices/historical/week, /v1/prices/{}, PUT /v1/api-keys/{} and /v1/scheduled-deliveries, none of which the MCP calls. Supersedes #187."
+    },
+    {
+      "ledgerVersion": 9,
+      "date": "2026-11-10",
+      "issue": "https://github.com/OilpriceAPI/mcp-server/issues/195",
+      "summary": "Drilling (#195): expose the two well-permit operations deferred in ledger 8. GET /v1/ei/well-permits: new opa_list_well_permits (states, permit-date range, page, per_page 1-100; Well Permits subscription, 403 otherwise). GET /v1/ei/well-permits/preview: new opa_preview_well_permits (one state, 1-90 days, at most 25 rows; any key including Free; renders as_of, data age, stale flag and per-state date coverage). Both verified live 2026-11-10."
     }
   ]
 }

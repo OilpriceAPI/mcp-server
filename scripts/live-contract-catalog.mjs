@@ -162,6 +162,27 @@ export const LIVE_CONTRACT_CATALOG = {
     "conditional",
     { args: { state: "TX", page: 1, per_page: 1 } },
   ),
+  // #195: the paths are byte-for-byte the requests the handlers build.
+  opa_list_well_permits: read(
+    "/v1/ei/well-permits?states=TX&start_date=2026-10-01&end_date=2026-10-31&page=1&per_page=5",
+    "success-envelope",
+    "conditional",
+    {
+      args: {
+        states: ["TX"],
+        start_date: "2026-10-01",
+        end_date: "2026-10-31",
+        page: 1,
+        per_page: 5,
+      },
+    },
+  ),
+  opa_preview_well_permits: read(
+    "/v1/ei/well-permits/preview?state=TX&days=30",
+    "success-envelope",
+    "ungated",
+    { args: { state: "TX", days: 30 } },
+  ),
   opa_lookup_well: read(
     "/v1/well-lifecycle/wells/:promoted-sample",
     "well-lifecycle-lookup",

@@ -51,6 +51,8 @@ const TOOL_CATEGORY_BY_NAME: Record<string, ToolCategory> = {
   opa_get_oil_inventories: "market",
   opa_get_well_permits: "market",
   opa_search_well_permits: "market",
+  opa_list_well_permits: "market",
+  opa_preview_well_permits: "market",
   opa_lookup_well: "market",
   opa_get_well_activity: "market",
   opa_get_well_production: "market",

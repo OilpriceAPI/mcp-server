@@ -1526,8 +1526,8 @@ describe("tool registration metadata", () => {
   const DELETE_TOOLS = ["opa_delete_price_alert", "opa_delete_subscription"];
   const WRITE_TOOLS = new Set([...CREATE_TOOLS, ...DELETE_TOOLS]);
 
-  it("registers exactly 40 tools", () => {
-    expect(Object.keys(tools)).toHaveLength(40);
+  it("registers exactly 42 tools", () => {
+    expect(Object.keys(tools)).toHaveLength(42);
     expect(tools.opa_get_product_facts).toBeDefined();
     expect(tools.opa_get_natural_gas_hubs).toBeDefined();
     expect(tools.opa_get_account_status).toBeDefined();
@@ -1553,6 +1553,7 @@ describe("tool registration metadata", () => {
     opa_get_forecasts: /eligible account entitlement.*opa_get_plans/,
     opa_get_drilling: /eligible account entitlement.*opa_get_plans/,
     opa_get_well_permits: /eligible account entitlement.*opa_get_plans/,
+    opa_list_well_permits: /eligible account entitlement.*opa_get_plans/,
     opa_get_well_production: /eligible account entitlement.*opa_get_plans/,
     opa_get_natural_gas_hubs: /eligible account entitlement.*opa_get_plans/,
     opa_get_data_quality: /eligible account entitlement.*opa_get_plans/,

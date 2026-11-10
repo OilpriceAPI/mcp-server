@@ -2756,6 +2756,16 @@ const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
       example:
         "Brent futures 2026-12 — USD per bbl · | 2026-09-01 | 88.58 | 92.12 | 88.46 | 91.92 | · 4 trading days",
     },
+    opa_list_well_permits: {
+      does: "Lists US drilling permits from state regulators across one or more states and a permit-date range, newest first, up to 100 rows per page.",
+      example:
+        "| YYYY-MM-DD | TX | Midland | Operator LLC | WELL NAME 1H | oil | new_drill, approved | 42XXXXXXXXXXXX | texas_rrc |",
+    },
+    opa_preview_well_permits: {
+      does: "Previews up to 25 recent drilling permits for one US state over the last 1 to 90 days, with the data's as-of date and coverage. Works on any API key, including Free.",
+      example:
+        "Drilling permit preview — TX, last 30 days · Permits shown: 25 · Data as of YYYY-MM-DD (N days old)",
+    },
     opa_get_marine_fuels: {
       does: "Returns marine bunker fuel prices (VLSFO, MGO, IFO380) across major shipping ports like Singapore and Rotterdam.",
       example: "SINGAPORE | VLSFO | $XXX.XX | USD | metric ton",
@@ -5438,6 +5448,287 @@ server.registerTool(
         "_Data and state-health measurement from [OilPriceAPI](https://oilpriceapi.com)_",
       ].join("\n"),
     );
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Permit list and Free-key preview (ledger v9):
+//   GET /v1/ei/well-permits          opa_list_well_permits
+//   GET /v1/ei/well-permits/preview  opa_preview_well_permits
+//
+// Verified live 2026-11-10. Both answer {status: "success", data:
+// {well_permits: [...], meta}}; each row carries api_number, state_code,
+// county, permit_number, permit_type, permit_status, permit_date, operator{},
+// well{}, location{}, target{} and provenance{source, fetched_at}. The list's
+// meta is {total_count, page, per_page, total_pages}; it needs a Well Permits
+// subscription (403 with upgrade_url otherwise). The preview's meta carries
+// as_of, data_age_days, stale and per-state data_quality; any key can call it,
+// capped at 25 permits from one state over at most 90 days. An unsupported
+// preview state is 400 listing the supported codes.
+// ---------------------------------------------------------------------------
+
+interface StateWellPermit {
+  api_number?: string | null;
+  state_code?: string | null;
+  county?: string | null;
+  permit_number?: string | null;
+  permit_type?: string | null;
+  permit_status?: string | null;
+  permit_date?: string | null;
+  operator?: { name?: string | null; name_normalized?: string | null } | null;
+  well?: { name?: string | null; number?: string | null; type?: string | null } | null;
+  target?: { formation?: string | null; total_depth_proposed?: number | null } | null;
+  provenance?: { source?: string | null; fetched_at?: string | null } | null;
+}
+
+interface WellPermitListData {
+  well_permits?: StateWellPermit[];
+  meta?: {
+    total_count?: number;
+    page?: number;
+    per_page?: number;
+    total_pages?: number;
+  };
+}
+
+interface WellPermitPreviewData {
+  well_permits?: StateWellPermit[];
+  meta?: {
+    state?: string;
+    days?: number;
+    count?: number;
+    row_cap?: number;
+    as_of?: string | null;
+    data_age_days?: number | null;
+    stale?: boolean;
+    data_quality?: Record<
+      string,
+      { date_coverage?: string; source?: string; note?: string }
+    >;
+    upgrade?: { message?: string; upgrade_url?: string };
+  };
+}
+
+/** A table cell for an optional permit field: "-" for an absent value. */
+function permitCell(value: unknown): string {
+  if (value === null || value === undefined) return "-";
+  const text = String(value).replace(/\s+/g, " ").replace(/\|/g, "/").trim();
+  return text || "-";
+}
+
+export function formatPermitRows(permits: StateWellPermit[]): string[] {
+  const lines = [
+    "| Permit date | State | County | Operator | Well | Well type | Permit | API number | Source |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+  ];
+  for (const p of permits) {
+    const operator = p.operator?.name_normalized ?? p.operator?.name;
+    const well = [p.well?.name, p.well?.number].filter(Boolean).join(" ");
+    const permit = [p.permit_type, p.permit_status].filter(Boolean).join(", ");
+    lines.push(
+      `| ${permitCell(p.permit_date)} | ${permitCell(p.state_code)} | ${permitCell(p.county)} | ${permitCell(operator)} | ${permitCell(well)} | ${permitCell(p.well?.type)} | ${permitCell(permit)} | ${permitCell(p.api_number)} | ${permitCell(p.provenance?.source)} |`,
+    );
+  }
+  return lines;
+}
+
+export function formatWellPermitList(
+  data: WellPermitListData,
+  filters: { states: string[]; start_date?: string; end_date?: string },
+): string {
+  const permits = Array.isArray(data.well_permits) ? data.well_permits : [];
+  const meta = data.meta ?? {};
+  const scope = [
+    filters.states.length ? `states ${filters.states.join(", ")}` : "every covered state",
+    filters.start_date ? `from ${filters.start_date}` : null,
+    filters.end_date ? `to ${filters.end_date}` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const lines = [
+    "# US Drilling Permits — list",
+    "",
+    `- **Scope**: ${scope}, newest permit date first`,
+    `- **Matching permits**: ${reportedValue(meta.total_count)}; page ${reportedValue(meta.page)} of ${reportedValue(meta.total_pages)} (${permits.length} on this page)`,
+    "- _Rows come from state regulators; '-' marks a field the regulator did not supply._",
+  ];
+  if (permits.length === 0) {
+    lines.push("", "No permits match these filters on this page.");
+  } else {
+    lines.push("", ...formatPermitRows(permits));
+    if (
+      typeof meta.page === "number" &&
+      typeof meta.total_pages === "number" &&
+      meta.page < meta.total_pages
+    ) {
+      lines.push(
+        "",
+        `More permits match: request page ${meta.page + 1}, or narrow states or the date range.`,
+      );
+    }
+  }
+  lines.push("", `_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
+  return lines.join("\n");
+}
+
+export function formatWellPermitPreview(data: WellPermitPreviewData): string {
+  const permits = Array.isArray(data.well_permits) ? data.well_permits : [];
+  const meta = data.meta ?? {};
+  const lines = [
+    `# Drilling permit preview — ${reportedValue(meta.state)}, last ${reportedValue(meta.days)} days`,
+    "",
+    `- **Permits shown**: ${permits.length} (the preview returns at most ${reportedValue(meta.row_cap)}, newest first)`,
+    `- **Data as of**: ${reportedValue(meta.as_of)} (${reportedValue(meta.data_age_days)} days old${meta.stale ? "; the API marks it stale" : ""})`,
+  ];
+  for (const [state, quality] of Object.entries(meta.data_quality ?? {})) {
+    lines.push(
+      `- **${state} coverage**: ${reportedValue(quality.date_coverage)} date coverage from ${reportedValue(quality.source)}${quality.note ? `. ${quality.note}` : ""}`,
+    );
+  }
+  if (meta.stale) {
+    lines.push(
+      "- ⚠ The API marks this state's permit data stale, so recent permits may be missing.",
+    );
+  }
+  if (permits.length === 0) {
+    lines.push("", "No permits in this state and window.");
+  } else {
+    lines.push("", ...formatPermitRows(permits));
+  }
+  lines.push(
+    "",
+    "_This is a bounded preview. Full history, every covered state and operator or county search need a Well Permits subscription (opa_list_well_permits, opa_search_well_permits)._",
+    "",
+    `_Data from [OilPriceAPI](https://oilpriceapi.com)_`,
+  );
+  return lines.join("\n");
+}
+
+server.registerTool(
+  "opa_list_well_permits",
+  {
+    title: "List Well Permits",
+    description:
+      "List US drilling permits from state regulators across one or more states and an optional permit-date range, newest permit date first, paged up to 100 rows per page. Each row has the permit date, state, county, operator, well, permit type and status, API number and source regulator. Use when the user wants raw permit records across several states or a date window; opa_search_well_permits adds a per-state freshness gate and county/operator search, and opa_get_well_activity summarises counts. Requires a Well Permits subscription (an add-on or the Scale plan, per the API contract); the API answers HTTP 403 without it, and opa_preview_well_permits works on any key. " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
+    inputSchema: {
+      states: z
+        .array(z.string())
+        .max(30)
+        .optional()
+        .describe(
+          "Optional US state names or 2-letter codes, e.g. ['TX', 'New Mexico']. Omit for every covered state.",
+        ),
+      start_date: z
+        .string()
+        .optional()
+        .describe("Earliest permit date to include, YYYY-MM-DD."),
+      end_date: z
+        .string()
+        .optional()
+        .describe("Latest permit date to include, YYYY-MM-DD."),
+      page: z.number().int().min(1).default(1).describe("Page number, from 1 (default: 1)."),
+      per_page: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .default(25)
+        .describe("Rows per page, 1 to 100 (default: 25)."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ states, start_date, end_date, page, per_page }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_list_well_permits");
+
+    const codes: string[] = [];
+    for (const state of states ?? []) {
+      const code = resolveStateCode(state);
+      if (!code) {
+        return errorResult(
+          `'${state}' is not a recognized US state. Use a full state name (e.g., 'Texas') or 2-letter code (e.g., 'TX').`,
+        );
+      }
+      if (!codes.includes(code)) codes.push(code);
+    }
+    if (!validIsoDate(start_date) || !validIsoDate(end_date)) {
+      return errorResult("start_date and end_date must be valid dates in YYYY-MM-DD form.");
+    }
+    if (start_date && end_date && start_date > end_date) {
+      return errorResult("start_date must be on or before end_date.");
+    }
+
+    const query = new URLSearchParams();
+    if (codes.length) query.set("states", codes.join(","));
+    if (start_date) query.set("start_date", start_date);
+    if (end_date) query.set("end_date", end_date);
+    query.set("page", String(page ?? 1));
+    query.set("per_page", String(per_page ?? 25));
+
+    const outcome = await requestApi<ApiResponse<WellPermitListData>>(
+      `/v1/ei/well-permits?${query.toString()}`,
+    );
+    const response = outcome.data;
+    if (!response || response.status !== "success" || !response.data) {
+      return errorResult(
+        describeUnavailable(
+          "The well permit list",
+          outcome,
+          "The well permit list is not available: the API answered without a permit list.",
+        ),
+      );
+    }
+    return textResult(
+      formatWellPermitList(response.data, { states: codes, start_date, end_date }),
+    );
+  },
+);
+
+server.registerTool(
+  "opa_preview_well_permits",
+  {
+    title: "Preview Well Permits",
+    description:
+      "Preview the most recent US drilling permits for one state: at most 25 permits from the last 1 to 90 days, newest first, with the data's as-of date, age and the state's date coverage. Any API key can call it, including the Free plan. Use when the user wants a quick look at recent permits in a state, or when the account has no Well Permits subscription. Full history, multiple states and county or operator search need the subscription (opa_list_well_permits, opa_search_well_permits). Requires an API key.",
+    inputSchema: {
+      state: z
+        .string()
+        .default("TX")
+        .describe("US state name or 2-letter code (default: TX)."),
+      days: z
+        .number()
+        .int()
+        .min(1)
+        .max(90)
+        .default(90)
+        .describe("Trailing window in days, 1 to 90 (default: 90)."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ state, days }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_preview_well_permits");
+    const requested = state ?? "TX";
+    const code = resolveStateCode(requested);
+    if (!code) {
+      return errorResult(
+        `'${requested}' is not a recognized US state. Use a full state name (e.g., 'Texas') or 2-letter code (e.g., 'TX').`,
+      );
+    }
+    const query = new URLSearchParams({ state: code, days: String(days ?? 90) });
+    const outcome = await requestApi<ApiResponse<WellPermitPreviewData>>(
+      `/v1/ei/well-permits/preview?${query.toString()}`,
+    );
+    const response = outcome.data;
+    if (!response || response.status !== "success" || !response.data) {
+      return errorResult(
+        describeUnavailable(
+          `The ${code} permit preview`,
+          outcome,
+          `The ${code} permit preview is not available: the API answered without a permit list.`,
+        ),
+      );
+    }
+    return textResult(formatWellPermitPreview(response.data));
   },
 );
 
