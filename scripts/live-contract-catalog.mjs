@@ -84,11 +84,32 @@ export const LIVE_CONTRACT_CATALOG = {
       },
     },
   ),
+  // #195: a closed past window, so the contract is deterministic. The path is
+  // byte-for-byte the request the handler builds from these args.
+  opa_get_continuous_futures_history: read(
+    "/v1/futures/continuous/brent/historical?from=2026-10-20&to=2026-10-24&interval=1d",
+    "continuous-futures-history",
+    "conditional",
+    {
+      args: {
+        contract: "brent",
+        from: "2026-10-20",
+        to: "2026-10-24",
+        interval: "daily",
+      },
+    },
+  ),
   opa_get_natural_gas_hubs: read(
     "/v1/natural-gas/hubs",
     "success-envelope",
     "conditional",
     { args: {} },
+  ),
+  opa_get_natural_gas_storage: read(
+    "/v1/natural-gas/storage?historical=true&weeks=2",
+    "natural-gas-storage",
+    "conditional",
+    { args: { historical: true, weeks: 2 } },
   ),
   opa_get_marine_fuels: read(
     "/v1/prices/marine-fuels/latest?limit=100",
@@ -132,6 +153,23 @@ export const LIVE_CONTRACT_CATALOG = {
     "conditional",
     { args: { mode: "auto", history: false, per_page: 12 } },
   ),
+  // #195: the path is byte-for-byte the request the handler builds.
+  opa_calculate_fuel_surcharge: read(
+    "/v1/fuel-surcharge/calculate?base_price=1.25&method=percent&increment=0.05&percent_per_increment=1&rounding=floor&region=national&weeks=4",
+    "success-envelope",
+    "ungated",
+    {
+      args: {
+        base_price: 1.25,
+        method: "percent",
+        increment: 0.05,
+        percent_per_increment: 1,
+        rounding: "floor",
+        region: "national",
+        weeks: 4,
+      },
+    },
+  ),
   opa_get_storage: read(
     "/v1/storage/cushing",
     "success-envelope",
@@ -147,6 +185,12 @@ export const LIVE_CONTRACT_CATALOG = {
     "/v1/ei/oil_inventories/latest",
     "data-envelope",
   ),
+  opa_get_macro_releases: read(
+    "/v1/macro/releases?days=30",
+    "success-envelope",
+    "ungated",
+    { args: { days: 30 } },
+  ),
   opa_get_well_permits: read(
     "/v1/ei/well-permits/latest",
     "success-envelope",
@@ -161,6 +205,27 @@ export const LIVE_CONTRACT_CATALOG = {
     "success-envelope",
     "conditional",
     { args: { state: "TX", page: 1, per_page: 1 } },
+  ),
+  // #195: the paths are byte-for-byte the requests the handlers build.
+  opa_list_well_permits: read(
+    "/v1/ei/well-permits?states=TX&start_date=2026-10-01&end_date=2026-10-31&page=1&per_page=5",
+    "success-envelope",
+    "conditional",
+    {
+      args: {
+        states: ["TX"],
+        start_date: "2026-10-01",
+        end_date: "2026-10-31",
+        page: 1,
+        per_page: 5,
+      },
+    },
+  ),
+  opa_preview_well_permits: read(
+    "/v1/ei/well-permits/preview?state=TX&days=30",
+    "success-envelope",
+    "ungated",
+    { args: { state: "TX", days: 30 } },
   ),
   opa_lookup_well: read(
     "/v1/well-lifecycle/wells/:promoted-sample",
@@ -181,6 +246,38 @@ export const LIVE_CONTRACT_CATALOG = {
   opa_get_spread: read("/v1/spreads/crack", "success-envelope", "conditional", {
     args: { type: "crack" },
   }),
+  // #195: the paths are byte-for-byte the requests the handlers build.
+  opa_get_price_statistics: read(
+    "/v1/analytics/statistics?code=WTI_USD&period=30",
+    "analytics",
+    "conditional",
+    { args: { commodity: "WTI_USD", period: 30 } },
+  ),
+  opa_get_price_trend: read(
+    "/v1/analytics/trend?code=WTI_USD&period=30&type=analysis",
+    "analytics",
+    "conditional",
+    { args: { commodity: "WTI_USD", period: 30, type: "analysis" } },
+  ),
+  opa_get_price_correlation: read(
+    "/v1/analytics/correlation?code1=WTI_USD&code2=BRENT_CRUDE_USD&period=30&type=analysis",
+    "analytics",
+    "conditional",
+    {
+      args: {
+        commodity1: "WTI_USD",
+        commodity2: "BRENT_CRUDE_USD",
+        period: 30,
+        type: "analysis",
+      },
+    },
+  ),
+  opa_get_spread_statistics: read(
+    "/v1/analytics/spread?spread=wti_brent&period=30&type=current",
+    "analytics",
+    "conditional",
+    { args: { spread: "wti_brent", period: 30, type: "current" } },
+  ),
   opa_get_account_status: read("/v1/dashboard", "success-envelope", "ungated", {
     args: {},
   }),
@@ -193,6 +290,9 @@ export const LIVE_CONTRACT_CATALOG = {
     "conditional",
     { args: {} },
   ),
+  opa_get_service_status: read("/v1/status", "success-envelope", "ungated", {
+    args: { include_commodities: false },
+  }),
   opa_get_market_brief: read(
     "/v1/market-brief?codes=BRENT_CRUDE_USD",
     "success-envelope",
@@ -205,6 +305,13 @@ export const LIVE_CONTRACT_CATALOG = {
   },
   opa_get_alert_triggers: {
     ...read("/v1/alerts", "array", "ungated"),
+    lifecycle: "price-alert",
+  },
+  // #195: a dry run on the synthetic alert the price-alert lifecycle creates.
+  // POST, but it changes nothing, so it is a read-scope tool.
+  opa_test_price_alert: {
+    ...read("/v1/alerts/:id/test", "alert-test", "ungated"),
+    method: "POST",
     lifecycle: "price-alert",
   },
   opa_create_price_alert: {

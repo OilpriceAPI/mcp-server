@@ -145,6 +145,23 @@ function validateShape(shape, body) {
     );
     return;
   }
+  if (shape === "continuous-futures-history") {
+    // #195: a closed past window, so an empty prices array is a failure.
+    assert(Array.isArray(body.prices) && body.prices.length > 0, "continuous futures history has no prices");
+    assert(body.metadata?.official_settlement === false, "continuous futures history must report official_settlement=false");
+    return;
+  }
+  if (shape === "natural-gas-storage") {
+    assert(body.success === true, `expected success=true, received ${String(body.success)}`);
+    assert(body.storage && typeof body.storage === "object", "natural gas storage has no storage report");
+    return;
+  }
+  if (shape === "analytics") {
+    // #195: bare analytics objects; an `error` key is a failed computation.
+    assert(!Array.isArray(body), "expected an analytics object");
+    assert(body.error === undefined, `analytics answered with an error: ${String(body.error)}`);
+    return;
+  }
   if (shape === "subscriptions") {
     const subscriptions = body.subscriptions ?? body.data?.subscriptions;
     assert(Array.isArray(subscriptions), "subscription response has no subscriptions array");
@@ -320,6 +337,22 @@ async function priceAlertLifecycle() {
     for (const tool of ["opa_list_price_alerts", "opa_get_alert_triggers"]) {
       record(tool, "passed", "synthetic alert visible in account-scoped list", { method: "GET", path: "/v1/alerts" });
     }
+
+    // #195: dry-run the synthetic alert through the real handler, so the
+    // formatter is exercised against the live body. The threshold is far above
+    // any price, so the alert must not trigger.
+    const { tools } = await loadRegisteredTools();
+    await pace();
+    const tested = await tools.opa_test_price_alert.handler({ id: String(id) }, {});
+    lastRequestAt = Date.now();
+    const testedText = (tested?.content ?? []).map((item) => item.text).join("\n");
+    assert(!tested?.isError, `alert test answered with an error: ${testedText.split("\n")[0]}`);
+    assert(/Would not trigger now/.test(testedText), "alert test did not report would_trigger=false for a 1,000,000 threshold");
+    assert(!/not reported|undefined|NaN|Invalid Date/.test(testedText), "alert test rendered a missing field");
+    record("opa_test_price_alert", "passed", "dry run on synthetic alert: would not trigger", {
+      method: "POST",
+      path: "/v1/alerts/:id/test",
+    });
   } finally {
     if (sent) await cleanupAndRecord({ tool: "opa_delete_price_alert", collectionPath: "/v1/alerts", id, name });
   }
@@ -383,7 +416,7 @@ async function main() {
   // (a comparison leg, a state-health gate) are budgeted at one per read.
   // Writes: 11 lifecycle requests including the two leak sweeps, plus room
   // for a few swept deletes (#126).
-  const expectedRequests = reads.length * 2 + (writesRequired ? 14 : 1) + 2;
+  const expectedRequests = reads.length * 2 + (writesRequired ? 15 : 1) + 2;
   try {
     await quotaPreflight(expectedRequests);
   } catch (error) {

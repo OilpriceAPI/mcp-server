@@ -1,7 +1,7 @@
 {
   "$comment": "API-to-MCP capability ledger (#77). One row per operation in the published OpenAPI contract. Checked by `npm run check:capability-ledger` against the live contract, build/capabilities.json and src/index.ts. Bump ledgerVersion and append to changes for every decision change, and link the change from the release notes.",
   "schemaVersion": "1.0.0",
-  "ledgerVersion": 8,
+  "ledgerVersion": 9,
   "source": {
     "openapi": {
       "url": "https://api.oilpriceapi.com/openapi.json",
@@ -166,9 +166,10 @@
       "owner": "mcp-server",
       "tools": [
         "opa_get_futures",
-        "opa_get_futures_history"
+        "opa_get_futures_history",
+        "opa_get_continuous_futures_history"
       ],
-      "reason": "Latest contracts and settlement history (opa_get_futures_history, selection 2) are exposed; calendar spreads are deferred."
+      "reason": "Latest contracts, per-contract settlement history (opa_get_futures_history: Brent, WTI, natural gas and, from ledger 9, ICE gasoil) and the continuous front-month Brent and WTI series (opa_get_continuous_futures_history, ledger 9) are exposed; calendar spreads are deferred."
     },
     {
       "id": "futures-expanded",
@@ -209,12 +210,13 @@
     {
       "id": "fuel-surcharge",
       "title": "LTL and parcel carrier fuel surcharges",
-      "status": "partial",
+      "status": "exposed",
       "owner": "mcp-server",
       "tools": [
-        "opa_get_fuel_surcharge"
+        "opa_get_fuel_surcharge",
+        "opa_calculate_fuel_surcharge"
       ],
-      "reason": "Six carrier-surcharge operations are reachable through opa_get_fuel_surcharge; schedule calculation (GET /v1/fuel-surcharge/calculate) is deferred."
+      "reason": "Six carrier-surcharge operations are reachable through opa_get_fuel_surcharge; schedule calculation (GET /v1/fuel-surcharge/calculate) is exposed by opa_calculate_fuel_surcharge (ledger 9)."
     },
     {
       "id": "drilling",
@@ -306,15 +308,16 @@
     {
       "id": "price-alerts",
       "title": "Legacy price alerts",
-      "status": "partial",
+      "status": "exposed",
       "owner": "mcp-server",
       "tools": [
         "opa_create_price_alert",
         "opa_list_price_alerts",
         "opa_delete_price_alert",
-        "opa_get_alert_triggers"
+        "opa_get_alert_triggers",
+        "opa_test_price_alert"
       ],
-      "reason": "GET and POST /v1/alerts are canonical (ledger 8) and exposed. Delete and trigger history still use the preview /v1/alerts routes, which the API route policy calls legacy in favour of subscriptions; kept for existing MCP users. POST /v1/alerts/{alert_id}/test is deferred.",
+      "reason": "GET and POST /v1/alerts are canonical (ledger 8) and exposed; POST /v1/alerts/{alert_id}/test is exposed by opa_test_price_alert (ledger 9). Delete and trigger history still use the preview /v1/alerts routes, which the API route policy calls legacy in favour of subscriptions; kept for existing MCP users.",
       "pathPrefixes": [
         {
           "prefix": "/v1/alerts",
@@ -342,9 +345,11 @@
         "opa_lookup_well",
         "opa_get_well_permits",
         "opa_search_well_permits",
-        "opa_get_well_activity"
+        "opa_get_well_activity",
+        "opa_list_well_permits",
+        "opa_preview_well_permits"
       ],
-      "reason": "Per-well lifecycle and the preview permit family are exposed; lifecycle state availability and cohorts are deferred.",
+      "reason": "Per-well lifecycle, the preview permit family, the canonical paginated permit list (opa_list_well_permits, ledger 9) and the any-key permit preview (opa_preview_well_permits, ledger 9) are exposed; lifecycle state availability and cohorts are deferred.",
       "pathPrefixes": [
         {
           "prefix": "/v1/ei/well-permits",
@@ -372,9 +377,15 @@
     {
       "id": "analytics",
       "title": "Computed price analytics (statistics, trend, correlation, spread distribution)",
-      "status": "not_exposed",
+      "status": "exposed",
       "owner": "mcp-server",
-      "reason": "Four canonical Professional/Scale operations published after ledger version 7; no MCP tool and no measured MCP demand yet."
+      "tools": [
+        "opa_get_price_statistics",
+        "opa_get_price_trend",
+        "opa_get_price_correlation",
+        "opa_get_spread_statistics"
+      ],
+      "reason": "All four canonical analytics operations are exposed (ledger 9). Each tool states that the API gates analytics by entitlement (HTTP 403); the API's 403 sample_data is never rendered as data, and the response `tier` field is not rendered because it misreports Gen-2 plans."
     },
     {
       "id": "forecasts",
@@ -428,16 +439,22 @@
     {
       "id": "natural-gas-fundamentals",
       "title": "Natural-gas fundamentals",
-      "status": "not_exposed",
+      "status": "partial",
       "owner": "mcp-server",
-      "reason": "GET /v1/natural-gas/storage is canonical (ledger 8) and deferred; /v1/fundamentals is a preview family with no stable response schema. No measured MCP demand in the selection window."
+      "tools": [
+        "opa_get_natural_gas_storage"
+      ],
+      "reason": "GET /v1/natural-gas/storage (EIA weekly Lower 48 working gas) is exposed by opa_get_natural_gas_storage (ledger 9). /v1/fundamentals is a preview family with no stable response schema and stays unexposed."
     },
     {
       "id": "macro-calendar",
       "title": "Macro calendar",
-      "status": "not_exposed",
+      "status": "partial",
       "owner": "mcp-server",
-      "reason": "GET /v1/macro/releases is canonical (ledger 8); the rest of /v1/macro is preview. No measured MCP demand in the selection window."
+      "tools": [
+        "opa_get_macro_releases"
+      ],
+      "reason": "GET /v1/macro/releases is exposed by opa_get_macro_releases (ledger 9), which states the calendar's coverage status with every answer. The rest of /v1/macro is preview and stays unexposed."
     },
     {
       "id": "data-quality",
@@ -445,9 +462,10 @@
       "status": "exposed",
       "owner": "mcp-server",
       "tools": [
-        "opa_get_data_quality"
+        "opa_get_data_quality",
+        "opa_get_service_status"
       ],
-      "reason": "Served from the preview /v1/data-quality family.",
+      "reason": "Per-series grades are served from the preview /v1/data-quality family (opa_get_data_quality); the keyless operational snapshot GET /v1/status is exposed by opa_get_service_status (ledger 9).",
       "pathPrefixes": [
         {
           "prefix": "/v1/data-quality",
@@ -517,34 +535,38 @@
     {
       "operation": "GET /v1/analytics/correlation",
       "family": "analytics",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Professional/Scale analytics derived from price history (403 on other plans). opa_get_history and opa_get_history_range return the underlying series; no MCP tool yet. Revisit on measured MCP demand for computed analytics."
+      "status": "exposed",
+      "tools": [
+        "opa_get_price_correlation"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/analytics/spread",
       "family": "analytics",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Professional/Scale spread-distribution analytics (403 on other plans). opa_get_spread serves current crack, basis and margin values and history; this adds percentile and z-score context. Revisit on measured MCP demand."
+      "status": "exposed",
+      "tools": [
+        "opa_get_spread_statistics"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/analytics/statistics",
       "family": "analytics",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Professional/Scale analytics derived from price history (403 on other plans). opa_get_history and opa_get_history_range return the underlying series; no MCP tool yet. Revisit on measured MCP demand for computed analytics."
+      "status": "exposed",
+      "tools": [
+        "opa_get_price_statistics"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/analytics/trend",
       "family": "analytics",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Professional/Scale analytics derived from price history (403 on other plans). opa_get_history and opa_get_history_range return the underlying series; no MCP tool yet. Revisit on measured MCP demand for computed analytics."
+      "status": "exposed",
+      "tools": [
+        "opa_get_price_trend"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/api-keys",
@@ -699,18 +721,20 @@
     {
       "operation": "GET /v1/ei/well-permits",
       "family": "well-lifecycle",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Paginated permit list behind the Well Permits subscription. opa_get_well_permits and opa_search_well_permits read the /latest, /search, /by-state and /by-operator routes of the same family. Revisit if the list adds filters those tools lack."
+      "status": "exposed",
+      "tools": [
+        "opa_list_well_permits"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/ei/well-permits/preview",
       "family": "well-lifecycle",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Keyless-plan preview capped at 25 permits from one state over 90 days. The permit tools already read the family; a Free-plan preview path is a separate entitlement decision."
+      "status": "exposed",
+      "tools": [
+        "opa_preview_well_permits"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/electricity",
@@ -732,10 +756,11 @@
     {
       "operation": "GET /v1/fuel-surcharge/calculate",
       "family": "fuel-surcharge",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Applies a customer-supplied surcharge schedule to the EIA weekly diesel index; opa_get_fuel_surcharge already serves carrier-published surcharges. Revisit when measured MCP demand asks for schedule calculation."
+      "status": "exposed",
+      "tools": [
+        "opa_calculate_fuel_surcharge"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/fuel-surcharge/parcel",
@@ -812,18 +837,20 @@
     {
       "operation": "GET /v1/futures/continuous/brent/historical",
       "family": "futures",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Continuous front-month daily bars from revisable public snapshots, not exchange settlements; opa_get_futures_history serves settlement history. Revisit after the continuous series has a stable schema and measured demand."
+      "status": "exposed",
+      "tools": [
+        "opa_get_continuous_futures_history"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/futures/continuous/wti/historical",
       "family": "futures",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Continuous front-month daily bars from revisable public snapshots, not exchange settlements; opa_get_futures_history serves settlement history. Revisit after the continuous series has a stable schema and measured demand."
+      "status": "exposed",
+      "tools": [
+        "opa_get_continuous_futures_history"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/futures/eua-carbon",
@@ -854,10 +881,11 @@
     {
       "operation": "GET /v1/futures/ice-gasoil/historical",
       "family": "futures",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "ICE Low Sulphur Gas Oil settlement history (USD/t). opa_get_futures_history covers brent, wti and natural-gas only; adding gasoil needs its own input schema and live-contract entry. Revisit on measured demand."
+      "status": "exposed",
+      "tools": [
+        "opa_get_futures_history"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/futures/ice-wti",
@@ -1028,10 +1056,11 @@
     {
       "operation": "GET /v1/macro/releases",
       "family": "macro-calendar",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Release calendar (BLS, EIA, Fed, OPEC, Baker Hughes) is now canonical; no measured MCP demand in the selection window. Revisit when demand is measured."
+      "status": "exposed",
+      "tools": [
+        "opa_get_macro_releases"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/marine-ports",
@@ -1089,10 +1118,11 @@
     {
       "operation": "GET /v1/natural-gas/storage",
       "family": "natural-gas-fundamentals",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "EIA weekly Lower 48 working-gas storage. opa_get_storage covers Cushing crude and SPR only. Revisit on measured MCP demand for gas fundamentals."
+      "status": "exposed",
+      "tools": [
+        "opa_get_natural_gas_storage"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/prices",
@@ -1359,10 +1389,11 @@
     {
       "operation": "GET /v1/status",
       "family": "data-quality",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Keyless operational status snapshot for humans and monitors, not a market-data answer; an agent gets freshness from each price response. Revisit if agents need service health."
+      "status": "exposed",
+      "tools": [
+        "opa_get_service_status"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/storage/cushing",
@@ -1548,10 +1579,11 @@
     {
       "operation": "POST /v1/alerts/{alert_id}/test",
       "family": "price-alerts",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Dry-run evaluation of one alert against the latest price; no MCP tool calls it. opa_get_price answers the same question for a code. Revisit if agents need to validate an alert before relying on it."
+      "status": "exposed",
+      "tools": [
+        "opa_test_price_alert"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "POST /v1/api-keys",
@@ -1667,6 +1699,12 @@
       "date": "2026-11-10",
       "issue": "https://github.com/OilpriceAPI/mcp-server/issues/192",
       "summary": "Record 18 operations the live OpenAPI contract published after ledger version 7 (136 operations, was 118 rows). Exposed: GET and POST /v1/alerts (existing price-alert tools; family moves to partial), GET /v1/futures/eua-carbon via the identical /v1/futures/eu-carbon alias. Alias: GET /v1/futures/ice-brent/historical. Deferred: POST /v1/alerts/{alert_id}/test, four /v1/analytics operations (new analytics family), GET /v1/ei/well-permits and /preview, GET /v1/fuel-surcharge/calculate (family moves to partial), continuous Brent and WTI history, ICE gasoil history, GET /v1/macro/releases, GET /v1/natural-gas/storage, GET /v1/status. Route-policy snapshot re-verified at oilpriceapi-api@3c8636e (latest commit to config/openapi_route_policy.yml, 2026-10-27): the 10 families[].pathPrefixes keep their audiences; changes since 66f46ed only add /v1/upgrade, /v1/brent, /v1/drilling/rig-count, /v1/constraints, /v1/price, /v1/prices/historical/week, /v1/prices/{}, PUT /v1/api-keys/{} and /v1/scheduled-deliveries, none of which the MCP calls. Supersedes #187."
+    },
+    {
+      "ledgerVersion": 9,
+      "date": "2026-11-10",
+      "issue": "https://github.com/OilpriceAPI/mcp-server/issues/195",
+      "summary": "Market history (#195): expose five operations deferred in ledger 8. GET /v1/futures/continuous/brent/historical and /wti/historical: new opa_get_continuous_futures_history (daily/weekly/monthly bars, says they are revisable snapshots and not settlements, states any entitlement start-date cap). GET /v1/futures/ice-gasoil/historical: opa_get_futures_history gains contract gasoil (USD per tonne). GET /v1/natural-gas/storage: new opa_get_natural_gas_storage (plan-gated, HTTP 403 without the entitlement; weeks bounded 1-52 by the tool). GET /v1/macro/releases: new opa_get_macro_releases (days 1-90, importance and source filters, calendar coverage caveat). Families futures, natural-gas-fundamentals and macro-calendar are partial. All five verified live 2026-11-10 with a Scale key. Tools (#195): expose three operations deferred in ledger 8. GET /v1/fuel-surcharge/calculate: new opa_calculate_fuel_surcharge (percent or per_mile, the seven EIA regions, 1-52 weeks; checks per-method required inputs before the request; states a stale index). POST /v1/alerts/{alert_id}/test: new opa_test_price_alert (read scope, automation category; dry run that sends nothing, metered). GET /v1/status: new keyless opa_get_service_status (core category; a 503 is reported as health unknown and not retried). Families fuel-surcharge, price-alerts and data-quality are exposed. All three verified live 2026-11-10. Drilling (#195): expose the two well-permit operations deferred in ledger 8. GET /v1/ei/well-permits: new opa_list_well_permits (states, permit-date range, page, per_page 1-100; Well Permits subscription, 403 otherwise). GET /v1/ei/well-permits/preview: new opa_preview_well_permits (one state, 1-90 days, at most 25 rows; any key including Free; renders as_of, data age, stale flag and per-state date coverage). Both verified live 2026-11-10. Analytics (#195): expose the four /v1/analytics operations deferred in ledger 8 (new analytics family now exposed). GET /v1/analytics/statistics: opa_get_price_statistics. GET /v1/analytics/trend: opa_get_price_trend (analysis, sma, ema, rsi, levels). GET /v1/analytics/correlation: opa_get_price_correlation (analysis, rolling, matrix of 2-10 codes). GET /v1/analytics/spread: opa_get_spread_statistics (list, current, historical). Entitlement gate (HTTP 403) stated in every description; series capped at 400 rows. All four verified live 2026-11-10 with a Scale key."
     }
   ]
 }

@@ -291,7 +291,8 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_get_history_range`   | Dated price rows for 1-5 commodities over a start/end date range, hourly to monthly, paged      |
 | `opa_get_futures`         | Front-month futures (Brent, WTI, gasoil, TTF, JKM, EU carbon)                                   |
 | `opa_get_futures_curve`   | Full forward curve with contango/backwardation analysis                                         |
-| `opa_get_futures_history` | Brent, WTI, NYMEX natural gas OHLC history per contract month, up to 730 days                     |
+| `opa_get_futures_history` | Brent, WTI, NYMEX natural gas, ICE gasoil OHLC history per contract month, up to 730 days        |
+| `opa_get_continuous_futures_history` | Continuous front-month Brent or WTI daily/weekly/monthly bars (revisable snapshots, not settlements) |
 | `opa_get_marine_fuels`    | Bunker fuel prices by port and fuel type (VLSFO/MGO/IFO380)                                     |
 | `opa_get_marine_ports`    | Bunkering port directory (UN/LOCODE, region, fuel services) or one port with recent prices      |
 | `opa_get_marine_fuel_history` | Daily history of one marine fuel at one port; paid subscription or active trial            |
@@ -299,18 +300,28 @@ All tools are prefixed with `opa_` to avoid name collisions when multiple MCP se
 | `opa_get_drilling`        | Drilling snapshot: rig counts, frac spreads, 30-day permits, DUCs                               |
 | `opa_get_diesel_by_state` | AAA retail diesel price for any US state (50 states + DC)                                       |
 | `opa_get_fuel_surcharge`  | LTL and parcel carrier fuel surcharge percentages with effective dates and source provenance    |
+| `opa_calculate_fuel_surcharge` | Your own surcharge schedule (percent or per mile) applied to the EIA weekly diesel index     |
 | `opa_get_storage`         | Cushing and SPR oil storage/inventory levels                                                    |
 | `opa_get_opec_production` | OPEC country-level production data                                                              |
 | `opa_get_forecasts`       | EIA STEO energy price forecasts                                                                 |
 | `opa_get_oil_inventories` | EIA weekly petroleum stocks (latest/summary/by_product)                                         |
+| `opa_get_macro_releases`  | Scheduled BLS, EIA, Fed, OPEC and Baker Hughes releases over 1-90 days, with calendar coverage  |
 | `opa_get_well_permits`    | US well drilling permits (latest/by_state/by_operator)                                          |
 | `opa_search_well_permits` | State-scoped permit search by county/operator/date with measured freshness gate                  |
+| `opa_list_well_permits`   | Paged permit records across states and a permit-date range; Well Permits subscription           |
+| `opa_preview_well_permits` | Up to 25 recent permits for one state over 1-90 days, with as-of date; any API key incl. Free  |
 | `opa_lookup_well`         | API-number lookup with promoted lifecycle and exact monthly production when available            |
 | `opa_get_well_activity`   | Recent permit counts/top operators/trends with explicit state-health warnings                    |
 | `opa_get_well_production` | US well production — beta coverage (summary/states/state/well/top_producers/cycle_time/cohorts) |
 | `opa_get_spread`          | Crack (type, crude), basis (pair, or all pairs), margin (index); optional date-range history    |
+| `opa_get_price_statistics` | Z-score, percentile and volatility of the latest price vs its trailing window; plan-gated |
+| `opa_get_price_trend`     | Trend, RSI, SMA, support/resistance and signal, or one indicator series; plan-gated     |
+| `opa_get_price_correlation` | Correlation of two commodities (rolling series) or a matrix of up to 10; plan-gated   |
+| `opa_get_spread_statistics` | Named basis/crack/ratio spread vs its trailing distribution, or its daily series; plan-gated |
 | `opa_get_natural_gas_hubs` | US physical gas hub prices as basis to Henry Hub (Waha, SoCal, Chicago and more)              |
+| `opa_get_natural_gas_storage` | EIA weekly Lower 48 working gas: level, change, year-ago, five-year average; plan-gated    |
 | `opa_get_data_quality`    | OilPriceAPI's own data-quality grades per series (completeness, freshness and more)            |
+| `opa_get_service_status`  | OilPriceAPI's own operational health by component and update tier; no API key needed           |
 | `opa_get_account_status`  | Plan tier, request usage, remaining quota and reset date for the configured key                |
 | `opa_get_plans`           | Current subscription plans: price, request limits and included features                        |
 
@@ -324,6 +335,7 @@ These tools create and manage **persistent** price alerts tied to your OilPriceA
 | `opa_list_price_alerts`  | List all alerts on the account                                               |
 | `opa_delete_price_alert` | Permanently delete an alert by id                                            |
 | `opa_get_alert_triggers` | Recent alert trigger activity (optionally filtered by `since`)               |
+| `opa_test_price_alert`   | Dry-run one alert against the latest price (would it trigger, cooldown)      |
 
 ### Market Brief & Subscription Tools (authenticated)
 

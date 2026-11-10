@@ -2752,9 +2752,64 @@ const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
         "Month: MMM-YY → Settlement $XX.XX (× NN contracts) | Market Structure: contango/backwardation",
     },
     opa_get_futures_history: {
-      does: "Returns daily, weekly or monthly OHLC history per contract month for Brent, WTI or NYMEX natural gas futures over a date range of up to 730 days, with exchange settlement where the API reports one.",
+      does: "Returns daily, weekly or monthly OHLC history per contract month for Brent, WTI, NYMEX natural gas or ICE Low Sulphur Gas Oil futures over a date range of up to 730 days, with exchange settlement where the API reports one.",
       example:
         "Brent futures 2026-12 — USD per bbl · | 2026-09-01 | 88.58 | 92.12 | 88.46 | 91.92 | · 4 trading days",
+    },
+    opa_get_continuous_futures_history: {
+      does: "Returns daily, weekly or monthly OHLC bars for the continuous (auto-rolled) Brent or WTI front-month futures series, from revisable public snapshots rather than exchange settlements.",
+      example:
+        "Brent continuous front-month futures — daily history · | YYYY-MM-DD | XX.XX | XX.XX | XX.XX | XX.XX | NNNNN |",
+    },
+    opa_get_natural_gas_storage: {
+      does: "Returns the latest EIA Weekly Natural Gas Storage Report for Lower 48 working gas, with the year-ago level, the five-year average and optional weekly history.",
+      example:
+        "Week ending YYYY-MM-DD · Working gas NNNN.N Bcf (+NN.N Bcf on the week) · Five-year average NNNN.N Bcf",
+    },
+    opa_get_macro_releases: {
+      does: "Lists scheduled BLS, EIA, Fed, OPEC and Baker Hughes data releases over the next 1 to 90 days, with the calendar's coverage status.",
+      example:
+        "| MMM DD, YYYY, HH:MM AM UTC | eia | EIA Weekly Petroleum Status Report | CUSHING_STORAGE | medium | scheduled (rule) |",
+    },
+    opa_calculate_fuel_surcharge: {
+      does: "Applies your own fuel surcharge schedule (percent bands or USD per mile) to the EIA weekly retail diesel index for the U.S. average, a PADD region or California, for the latest week and a weekly table.",
+      example:
+        "Latest EIA week YYYY-MM-DD: diesel $X.XXX/gal → surcharge **NN%** · | YYYY-MM-DD | X.XXX | -0.0XX | NN% |",
+    },
+    opa_test_price_alert: {
+      does: "Dry-runs one of your price alerts against the latest price: whether it would trigger now and whether it is in cooldown. Sends nothing and changes nothing.",
+      example:
+        "Alert `1234` — Condition BRENT_CRUDE_USD > 95.0 · Latest price XX.XX · Would not trigger now · Not in cooldown",
+    },
+    opa_list_well_permits: {
+      does: "Lists US drilling permits from state regulators across one or more states and a permit-date range, newest first, up to 100 rows per page.",
+      example:
+        "| YYYY-MM-DD | TX | Midland | Operator LLC | WELL NAME 1H | oil | new_drill, approved | 42XXXXXXXXXXXX | texas_rrc |",
+    },
+    opa_preview_well_permits: {
+      does: "Previews up to 25 recent drilling permits for one US state over the last 1 to 90 days, with the data's as-of date and coverage. Works on any API key, including Free.",
+      example:
+        "Drilling permit preview — TX, last 30 days · Permits shown: 25 · Data as of YYYY-MM-DD (N days old)",
+    },
+    opa_get_price_statistics: {
+      does: "Returns the z-score, percentile and annualized volatility of a commodity's latest price against its trailing window, with interpretations.",
+      example:
+        "Price statistics — WTI_USD, trailing 30 days · Z-score -X.XX · Percentile X.X · Annualized volatility X.XX%",
+    },
+    opa_get_price_trend: {
+      does: "Returns trend direction and strength, RSI, 20-day SMA, support and resistance and a combined signal for a commodity, or one indicator series (SMA, EMA, RSI, levels).",
+      example:
+        "Trend and momentum — WTI_USD · Trend bearish, strength NN · RSI NN.N · 20-day SMA XX.XX",
+    },
+    opa_get_price_correlation: {
+      does: "Returns the correlation of daily prices between two commodities with strength, stability and a rolling series, or a correlation matrix for up to 10 commodities.",
+      example:
+        "Price correlation — WTI_USD vs BRENT_CRUDE_USD · Pearson correlation 0.9XX · Stability 0.XXX",
+    },
+    opa_get_spread_statistics: {
+      does: "Returns a named basis, crack or ratio spread against its trailing distribution (mean, std dev, z-score, percentile), or its daily series.",
+      example:
+        "Spread distribution — WTI-Brent crude oil basis spread · Current -X.XX USD/barrel · z-score X.XX, percentile NN",
     },
     opa_get_marine_fuels: {
       does: "Returns marine bunker fuel prices (VLSFO, MGO, IFO380) across major shipping ports like Singapore and Rotterdam.",
@@ -3968,6 +4023,7 @@ export const FUTURES_HISTORY_INSTRUMENTS = [
   "brent",
   "wti",
   "natural-gas",
+  "gasoil",
 ] as const;
 type FuturesHistoryInstrument = (typeof FUTURES_HISTORY_INSTRUMENTS)[number];
 
@@ -3977,12 +4033,14 @@ const FUTURES_HISTORY_PATHS: Record<FuturesHistoryInstrument, string> = {
   brent: "/v1/futures/brent/historical",
   wti: "/v1/futures/wti/historical",
   "natural-gas": "/v1/futures/natural-gas/historical",
+  gasoil: "/v1/futures/ice-gasoil/historical",
 };
 
 const FUTURES_HISTORY_NAMES: Record<FuturesHistoryInstrument, string> = {
   brent: "ICE Brent crude futures",
   wti: "WTI crude futures",
   "natural-gas": "NYMEX Henry Hub natural gas futures",
+  gasoil: "ICE Low Sulphur Gas Oil futures",
 };
 
 export const FUTURES_HISTORY_MAX_RANGE_DAYS = 730;
@@ -4130,13 +4188,15 @@ server.registerTool(
   {
     title: "Get Futures Settlement History",
     description:
-      "Get daily, weekly or monthly OHLC history per contract month for brent, wti or natural-gas (NYMEX Henry Hub) futures between two dates. Use when the user asks how a futures contract traded over time or for past settlements; opa_get_futures and opa_get_futures_curve return only the current front month and curve. The date range is at most 730 days and cannot include future dates. Pass contract_month (YYYY-MM) for one contract; without it every listed contract month is returned and the answer shows at most 400 rows, saying what it left out. Daily close is the last captured price; exchange settlement is shown where the API reports it. Futures data sits behind the API's futures entitlement. " +
+      "Get daily, weekly or monthly OHLC history per contract month for brent, wti, natural-gas (NYMEX Henry Hub) or gasoil (ICE Low Sulphur Gas Oil, USD per tonne) futures between two dates. Use when the user asks how a futures contract traded over time or for past settlements; opa_get_futures and opa_get_futures_curve return only the current front month and curve. The date range is at most 730 days and cannot include future dates. Pass contract_month (YYYY-MM) for one contract; without it every listed contract month is returned and the answer shows at most 400 rows, saying what it left out. Daily close is the last captured price; exchange settlement is shown where the API reports it. Futures data sits behind the API's futures entitlement. " +
       ACCOUNT_ENTITLEMENT_GUIDANCE,
     inputSchema: {
       contract: z
         .enum(FUTURES_HISTORY_INSTRUMENTS)
         .default("brent")
-        .describe("Instrument: brent, wti, or natural-gas (default: brent)."),
+        .describe(
+          "Instrument: brent, wti, natural-gas, or gasoil (ICE Low Sulphur Gas Oil) (default: brent).",
+        ),
       from: z
         .string()
         .regex(FUTURES_HISTORY_DATE)
@@ -4227,6 +4287,267 @@ server.registerTool(
         to: end,
         contractMonth: contract_month,
         interval,
+        data: response,
+      }),
+    );
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Continuous front-month futures history (ledger v9) — wraps
+// GET /v1/futures/continuous/{brent,wti}/historical.
+//
+// Verified live 2026-11-10 against api.oilpriceapi.com:
+//   - a bare object (no {status, data} envelope): commodity, from, to,
+//     interval, count, prices[], metadata, summary;
+//   - prices[] rows carry numeric date/open/high/low/close/volume, oldest
+//     first; open/high/low/volume may be null;
+//   - metadata.official_settlement is always false: these are revisable daily
+//     bars from collected public snapshots, NOT exchange settlements;
+//   - metadata.history_window says when the account's entitlement capped the
+//     requested start date (limited/applied_from/message);
+//   - 403 without the futures entitlement; 400 on a malformed/reversed range.
+// ---------------------------------------------------------------------------
+
+export const CONTINUOUS_FUTURES_INSTRUMENTS = ["brent", "wti"] as const;
+type ContinuousFuturesInstrument =
+  (typeof CONTINUOUS_FUTURES_INSTRUMENTS)[number];
+
+const CONTINUOUS_FUTURES_PATHS: Record<ContinuousFuturesInstrument, string> = {
+  brent: "/v1/futures/continuous/brent/historical",
+  wti: "/v1/futures/continuous/wti/historical",
+};
+
+const CONTINUOUS_FUTURES_NAMES: Record<ContinuousFuturesInstrument, string> = {
+  brent: "Brent continuous front-month futures",
+  wti: "WTI continuous front-month futures",
+};
+
+// The API's own interval spellings for each bar size.
+const CONTINUOUS_INTERVAL_PARAM: Record<
+  (typeof FUTURES_HISTORY_INTERVALS)[number],
+  string
+> = {
+  daily: "1d",
+  weekly: "1w",
+  monthly: "1m",
+};
+
+export const CONTINUOUS_FUTURES_MAX_ROWS = 400;
+
+interface ContinuousFuturesBar {
+  date?: string;
+  price?: number | null;
+  open?: number | null;
+  high?: number | null;
+  low?: number | null;
+  close?: number | null;
+  volume?: number | null;
+}
+
+interface ContinuousFuturesData {
+  commodity?: string;
+  from?: string;
+  to?: string;
+  interval?: string;
+  count?: number;
+  prices?: ContinuousFuturesBar[];
+  metadata?: {
+    official_settlement?: boolean;
+    daily_price_basis?: string;
+    history_available_from?: string;
+    history_window?: {
+      limited?: boolean;
+      requested_from?: string | null;
+      applied_from?: string | null;
+      message?: string | null;
+    };
+    roll_method?: string;
+    currency?: string;
+    unit?: string;
+    ticker?: string;
+  };
+  summary?: {
+    first_date?: string | null;
+    last_date?: string | null;
+    first_price?: number | null;
+    last_price?: number | null;
+    change?: number | null;
+    change_percent?: number | null;
+  };
+}
+
+export function formatContinuousFuturesHistory(options: {
+  instrument: ContinuousFuturesInstrument;
+  interval: (typeof FUTURES_HISTORY_INTERVALS)[number];
+  from?: string;
+  to: string;
+  data: ContinuousFuturesData;
+}): string {
+  const { instrument, interval, data } = options;
+  const meta = data.metadata ?? {};
+  const bars = (data.prices ?? []).filter(
+    (bar) => bar && typeof bar === "object",
+  );
+  const shown = bars.slice(0, CONTINUOUS_FUTURES_MAX_ROWS);
+  const currency = meta.currency ?? FUTURES_INSTRUMENT_QUOTE[instrument]?.currency;
+  const unit = meta.unit ?? FUTURES_INSTRUMENT_QUOTE[instrument]?.unit;
+  const quote = currency
+    ? `Quoted in ${currency}${unit ? ` per ${unit}` : ""}`
+    : "Quoted in: currency not reported by the API";
+
+  const lines = [
+    `# ${CONTINUOUS_FUTURES_NAMES[instrument]} — ${interval} history`,
+    "",
+    `- **Window**: ${reportedValue(data.from ?? options.from)} to ${reportedValue(data.to ?? options.to)}`,
+    `- **Bars returned by the API**: ${bars.length}`,
+    `- _${quote}. Continuous series rolled by the API (${reportedValue(meta.roll_method)}), not one contract month._`,
+    "- _These are revisable daily bars from collected public futures snapshots, not official exchange settlements. Use opa_get_futures_history for per-contract settlement history._",
+  ];
+  const window = meta.history_window;
+  if (window?.limited) {
+    lines.push(
+      `- ⚠ The account's futures entitlement limited the start date: requested ${reportedValue(window.requested_from)}, applied ${reportedValue(window.applied_from)}.${window.message ? ` ${window.message}` : ""}`,
+    );
+  }
+  if (meta.history_available_from) {
+    lines.push(
+      `- The API reports this series from ${meta.history_available_from}.`,
+    );
+  }
+
+  const summary = data.summary;
+  if (
+    summary &&
+    typeof summary.first_price === "number" &&
+    typeof summary.last_price === "number"
+  ) {
+    const pct =
+      typeof summary.change_percent === "number"
+        ? ` (${summary.change_percent >= 0 ? "+" : ""}${summary.change_percent}%)`
+        : "";
+    const change =
+      typeof summary.change === "number"
+        ? `${summary.change >= 0 ? "+" : ""}${summary.change}`
+        : NOT_REPORTED;
+    lines.push(
+      `- **Change**: ${summary.first_price} on ${reportedValue(summary.first_date)} to ${summary.last_price} on ${reportedValue(summary.last_date)}: ${change}${pct}`,
+    );
+  }
+
+  const hasVolume = shown.some((bar) => typeof bar.volume === "number");
+  const header = [interval === "daily" ? "Date" : "Period start", "Open", "High", "Low", "Close"];
+  if (hasVolume) header.push("Volume");
+  lines.push(
+    "",
+    `| ${header.join(" | ")} |`,
+    `| ${header.map(() => "---").join(" | ")} |`,
+  );
+  for (const bar of shown) {
+    const cells = [
+      futuresCell(bar.date),
+      futuresCell(bar.open),
+      futuresCell(bar.high),
+      futuresCell(bar.low),
+      futuresCell(bar.close ?? bar.price),
+    ];
+    if (hasVolume) cells.push(futuresCell(bar.volume));
+    lines.push(`| ${cells.join(" | ")} |`);
+  }
+
+  if (shown.length < bars.length) {
+    lines.push(
+      "",
+      `⚠ Partial answer: the API returned ${bars.length} bars and this answer shows the first ${shown.length}, through ${reportedValue(shown.at(-1)?.date)}. Narrow the request with a shorter from/to window or a weekly or monthly interval.`,
+    );
+  }
+
+  lines.push("", `_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
+  return lines.join("\n");
+}
+
+server.registerTool(
+  "opa_get_continuous_futures_history",
+  {
+    title: "Get Continuous Futures History",
+    description:
+      "Get daily, weekly or monthly OHLC bars for the continuous (auto-rolled) Brent or WTI front-month futures series between two dates. Use when the user wants one long front-month price series for charting or backtesting, rather than per-contract history. These bars come from collected public futures snapshots and can be revised; they are not official exchange settlements, so use opa_get_futures_history for per-contract settlements. Without from, the API returns its permitted history window; dates cannot be in the future. The answer shows at most 400 bars and says what it left out. Historical depth depends on the account's futures entitlement, and the answer states any start-date cap the API applied. " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
+    inputSchema: {
+      contract: z
+        .enum(CONTINUOUS_FUTURES_INSTRUMENTS)
+        .default("brent")
+        .describe("Continuous series: brent or wti (default: brent)."),
+      from: z
+        .string()
+        .regex(FUTURES_HISTORY_DATE)
+        .optional()
+        .describe(
+          "Inclusive start date, YYYY-MM-DD (UTC). Optional; omit for the API's permitted history window.",
+        ),
+      to: z
+        .string()
+        .regex(FUTURES_HISTORY_DATE)
+        .optional()
+        .describe("Inclusive end date, YYYY-MM-DD (UTC). Defaults to today."),
+      interval: z
+        .enum(FUTURES_HISTORY_INTERVALS)
+        .default("daily")
+        .describe("Bar size: daily, weekly or monthly (default: daily)."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ contract: requestedContract, from, to, interval: requestedInterval }) => {
+    if (!getApiKey()) {
+      return keylessTeaserResult("opa_get_continuous_futures_history");
+    }
+    const instrument = requestedContract ?? "brent";
+    const interval = requestedInterval ?? "daily";
+    const today = new Date().toISOString().slice(0, 10);
+    const end = to ?? today;
+
+    if (from && !futuresHistoryDate(from)) {
+      return errorResult(`from '${from}' is not a valid calendar date. Use YYYY-MM-DD.`);
+    }
+    if (!futuresHistoryDate(end)) {
+      return errorResult(`to '${end}' is not a valid calendar date. Use YYYY-MM-DD.`);
+    }
+    if (from && from > end) {
+      return errorResult(`from ${from} is after to ${end}; from must be on or before to.`);
+    }
+    if (end > today) {
+      return errorResult(
+        `to ${end} is in the future (today is ${today} UTC). Continuous futures history covers past trading days only.`,
+      );
+    }
+
+    const query = new URLSearchParams();
+    if (from) query.set("from", from);
+    query.set("to", end);
+    query.set("interval", CONTINUOUS_INTERVAL_PARAM[interval]);
+    const outcome = await requestApi<ContinuousFuturesData>(
+      `${CONTINUOUS_FUTURES_PATHS[instrument]}?${query.toString()}`,
+    );
+    const label = `${CONTINUOUS_FUTURES_NAMES[instrument]} history${from ? ` from ${from}` : ""} to ${end}`;
+    const response = outcome.data;
+    if (!response) {
+      return errorResult(
+        describeUnavailable(label, outcome, `${label} returned no body.`),
+      );
+    }
+    if (!Array.isArray(response.prices) || response.prices.length === 0) {
+      const since = response.metadata?.history_available_from;
+      return errorResult(
+        `No ${interval} bars for ${label}. The API answered; this is a data-availability fact about the window.${since ? ` The API reports this series from ${since}.` : ""}`,
+      );
+    }
+
+    return textResult(
+      formatContinuousFuturesHistory({
+        instrument,
+        interval,
+        from,
+        to: end,
         data: response,
       }),
     );
@@ -4347,6 +4668,138 @@ server.registerTool(
     text +=
       "\n_USD/MMBtu; basis = hub − Henry Hub, same gas day. Hub histories differ in depth — check history_days. | Data from [OilPriceAPI](https://oilpriceapi.com)_";
     return textResult(text);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// EIA weekly natural gas storage (ledger v9) — wraps GET /v1/natural-gas/storage.
+//
+// Verified live 2026-11-10: {success: true, storage: {...}, metadata: {...},
+// historical_data?: [...]}, numeric values as decimal strings (Bcf), weeks
+// newest first. The API serves it behind a plan gate (403 otherwise) and
+// answers 404 when no report is loaded. `weeks` is not bounded by the API;
+// the tool bounds it.
+// ---------------------------------------------------------------------------
+
+export const NATURAL_GAS_STORAGE_MAX_WEEKS = 52;
+
+interface NaturalGasStorageWeek {
+  report_date?: string;
+  current_bcf?: string | number | null;
+  week_change_bcf?: string | number | null;
+  year_ago_bcf?: string | number | null;
+  five_year_avg_bcf?: string | number | null;
+  surplus_deficit?: string | number | null;
+  percentage_of_avg?: string | number | null;
+  season?: string | null;
+  unusual_change?: boolean | null;
+  last_updated?: string | null;
+}
+
+interface NaturalGasStorageData {
+  success?: boolean;
+  storage?: NaturalGasStorageWeek;
+  historical_data?: NaturalGasStorageWeek[];
+  metadata?: {
+    source?: string;
+    report_week_ending?: string;
+    last_updated?: string;
+    next_update?: string;
+  };
+}
+
+function signedCell(value: unknown): string {
+  const cell = futuresCell(value);
+  if (cell === NOT_REPORTED) return cell;
+  return /^-/.test(cell) ? cell : `+${cell}`;
+}
+
+export function formatNaturalGasStorage(data: NaturalGasStorageData): string {
+  const latest = data.storage ?? {};
+  const meta = data.metadata ?? {};
+  const lines = [
+    "# EIA Weekly Natural Gas Storage — Lower 48 working gas",
+    "",
+    `- **Week ending**: ${reportedValue(latest.report_date ?? meta.report_week_ending)}`,
+    `- **Working gas in storage**: ${futuresCell(latest.current_bcf)} Bcf (${signedCell(latest.week_change_bcf)} Bcf on the week)`,
+    `- **Year ago**: ${futuresCell(latest.year_ago_bcf)} Bcf`,
+    `- **Five-year average**: ${futuresCell(latest.five_year_avg_bcf)} Bcf; surplus (+) or deficit (-) against it: ${signedCell(latest.surplus_deficit)} Bcf (${futuresCell(latest.percentage_of_avg)}% of the average)`,
+  ];
+  if (latest.season) lines.push(`- **Season**: ${latest.season}`);
+  if (latest.unusual_change === true) {
+    lines.push("- ⚠ The API flags this week's change as unusual.");
+  }
+  lines.push(
+    `- **Source**: ${reportedValue(meta.source)}; stored ${formatUtcTimestamp(meta.last_updated ?? latest.last_updated)}; next scheduled report ${reportedValue(meta.next_update)}`,
+  );
+
+  const history = Array.isArray(data.historical_data) ? data.historical_data : [];
+  if (history.length > 0) {
+    lines.push(
+      "",
+      `## Last ${history.length} weekly reports (newest first)`,
+      "",
+      "| Week ending | Working gas (Bcf) | Week change | Year ago | 5-yr avg | vs 5-yr avg |",
+      "| --- | --- | --- | --- | --- | --- |",
+    );
+    for (const week of history) {
+      lines.push(
+        `| ${futuresCell(week.report_date)} | ${futuresCell(week.current_bcf)} | ${signedCell(week.week_change_bcf)} | ${futuresCell(week.year_ago_bcf)} | ${futuresCell(week.five_year_avg_bcf)} | ${signedCell(week.surplus_deficit)} |`,
+      );
+    }
+  }
+
+  lines.push("", `_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
+  return lines.join("\n");
+}
+
+server.registerTool(
+  "opa_get_natural_gas_storage",
+  {
+    title: "Get Natural Gas Storage",
+    description:
+      "Get the latest EIA Weekly Natural Gas Storage Report for Lower 48 working gas: the week's level and change, the year-ago level, the five-year average and the surplus or deficit against it, in Bcf. Set historical=true to add the last N weekly reports. Use when the user asks about US natural gas storage, injections or withdrawals. opa_get_storage covers crude oil at Cushing and the SPR, not gas. This dataset is plan-gated: the API answers HTTP 403 when the account's plan does not include it. " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
+    inputSchema: {
+      historical: z
+        .boolean()
+        .default(false)
+        .describe("When true, include the last `weeks` weekly reports (default: false)."),
+      weeks: z
+        .number()
+        .int()
+        .min(1)
+        .max(NATURAL_GAS_STORAGE_MAX_WEEKS)
+        .default(4)
+        .describe(
+          `Number of weekly reports when historical is true, 1 to ${NATURAL_GAS_STORAGE_MAX_WEEKS} (default: 4).`,
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ historical, weeks }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_natural_gas_storage");
+    const query = new URLSearchParams();
+    if (historical) {
+      query.set("historical", "true");
+      query.set("weeks", String(weeks ?? 4));
+    }
+    const qs = query.toString();
+    const outcome = await requestApi<NaturalGasStorageData>(
+      `/v1/natural-gas/storage${qs ? `?${qs}` : ""}`,
+    );
+    const label = "EIA weekly natural gas storage";
+    const data = outcome.data;
+    if (!data || data.success === false || !data.storage) {
+      return errorResult(
+        describeUnavailable(
+          label,
+          outcome,
+          `${label}: the API answered but returned no storage report.`,
+        ),
+      );
+    }
+    return textResult(formatNaturalGasStorage(data));
   },
 );
 
@@ -4911,6 +5364,227 @@ server.registerTool(
   },
 );
 
+// ---------------------------------------------------------------------------
+// Fuel surcharge calculator (ledger v9) — wraps GET /v1/fuel-surcharge/calculate.
+//
+// Verified live 2026-11-10: {status: "success", data: {region, commodity_code,
+// index, as_of, stale, stale_reason, inputs, current, weeks[]}}. Any key; no
+// plan gate. A missing parameter is HTTP 400 {status: "fail", data: {error,
+// errors[]}}; a region with no stored week is 404. The tool checks the
+// per-method required inputs itself so the caller gets the fix before a
+// metered request is spent.
+// ---------------------------------------------------------------------------
+
+export const FUEL_SURCHARGE_CALC_METHODS = ["percent", "per_mile"] as const;
+export const FUEL_SURCHARGE_CALC_ROUNDING = ["floor", "ceil", "exact"] as const;
+export const FUEL_SURCHARGE_CALC_REGIONS = [
+  "national",
+  "east-coast",
+  "midwest",
+  "gulf-coast",
+  "rocky-mountain",
+  "west-coast",
+  "california",
+] as const;
+
+interface FuelSurchargeCalcWeek {
+  week_of?: string;
+  diesel_price?: number | null;
+  diesel_change?: number | null;
+  retrieved_at?: string | null;
+  surcharge_percent?: number | null;
+  surcharge_per_mile?: number | null;
+}
+
+interface FuelSurchargeCalcData {
+  region?: string;
+  commodity_code?: string;
+  index?: string;
+  as_of?: string;
+  stale?: boolean;
+  stale_reason?: string | null;
+  inputs?: Record<string, unknown>;
+  current?: FuelSurchargeCalcWeek;
+  weeks?: FuelSurchargeCalcWeek[];
+}
+
+function surchargeCell(
+  week: FuelSurchargeCalcWeek,
+  method: (typeof FUEL_SURCHARGE_CALC_METHODS)[number],
+): string {
+  if (method === "per_mile") {
+    return typeof week.surcharge_per_mile === "number"
+      ? `$${week.surcharge_per_mile} per mile`
+      : NOT_REPORTED;
+  }
+  return typeof week.surcharge_percent === "number"
+    ? `${week.surcharge_percent}%`
+    : NOT_REPORTED;
+}
+
+function dieselCell(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? `$${value}`
+    : NOT_REPORTED;
+}
+
+export function formatFuelSurchargeCalculation(
+  data: FuelSurchargeCalcData,
+  method: (typeof FUEL_SURCHARGE_CALC_METHODS)[number],
+): string {
+  const current = data.current ?? {};
+  const inputs = Object.entries(data.inputs ?? {})
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(", ");
+  const lines = [
+    `# Fuel surcharge calculation — ${reportedValue(data.region)} (${method === "per_mile" ? "USD per mile" : "percent"})`,
+    "",
+    `- **Index**: ${reportedValue(data.index)} (${reportedValue(data.commodity_code)})`,
+    `- **Your schedule, as the API applied it**: ${inputs || NOT_REPORTED}`,
+    `- **Latest EIA week**: ${reportedValue(current.week_of ?? data.as_of)}: diesel ${dieselCell(current.diesel_price)}/gal → surcharge **${surchargeCell(current, method)}**`,
+  ];
+  if (data.stale) {
+    lines.push(
+      `- ⚠ The API marks the diesel index stale: ${reportedValue(data.stale_reason)}. The latest week may not be the current EIA week.`,
+    );
+  }
+  const weeks = Array.isArray(data.weeks) ? data.weeks : [];
+  if (weeks.length > 0) {
+    lines.push(
+      "",
+      `## Last ${weeks.length} EIA week(s), newest first`,
+      "",
+      "| EIA week | Diesel (USD/gal) | Change | Surcharge | Retrieved |",
+      "| --- | --- | --- | --- | --- |",
+    );
+    for (const week of weeks) {
+      const change =
+        typeof week.diesel_change === "number"
+          ? `${week.diesel_change >= 0 ? "+" : ""}${week.diesel_change}`
+          : "-";
+      lines.push(
+        `| ${reportedValue(week.week_of)} | ${futuresCell(week.diesel_price)} | ${change} | ${surchargeCell(week, method)} | ${formatUtcTimestamp(week.retrieved_at)} |`,
+      );
+    }
+  }
+  lines.push(
+    "",
+    "_Diesel at or below your base price is a 0 surcharge. This applies your own schedule to the EIA index; it is not a carrier-published rate (see opa_get_fuel_surcharge)._",
+    "",
+    `_Data from [OilPriceAPI](https://oilpriceapi.com)_`,
+  );
+  return lines.join("\n");
+}
+
+server.registerTool(
+  "opa_calculate_fuel_surcharge",
+  {
+    title: "Calculate Fuel Surcharge",
+    description:
+      "Apply the user's own fuel surcharge schedule to the EIA (DOE) weekly retail on-highway diesel index and return the surcharge for the latest EIA week plus a weekly table. Two methods: percent (completed increments above the base price times the percentage per increment; needs increment and percent_per_increment) and per_mile ((diesel - base) / mpg in USD per mile; needs mpg). Regions are the U.S. average, the EIA PADD regions and California. Use when a shipper or carrier asks what their surcharge is this week under their own schedule; opa_get_fuel_surcharge returns carrier-published rates instead. The answer states when the API marks the index stale. Requires an API key; the API applies no plan gate to this endpoint.",
+    inputSchema: {
+      base_price: z
+        .number()
+        .positive()
+        .describe("Diesel price (USD/gallon) already built into the base rate, e.g. 1.25."),
+      method: z
+        .enum(FUEL_SURCHARGE_CALC_METHODS)
+        .default("percent")
+        .describe("percent (default) or per_mile."),
+      increment: z
+        .number()
+        .min(0.001)
+        .optional()
+        .describe("Required for percent: diesel step (USD/gallon) per surcharge step, at least 0.001, e.g. 0.05."),
+      percent_per_increment: z
+        .number()
+        .positive()
+        .optional()
+        .describe("Required for percent: surcharge percentage points added per step, e.g. 1."),
+      rounding: z
+        .enum(FUEL_SURCHARGE_CALC_ROUNDING)
+        .default("floor")
+        .describe("percent only: floor (default, completed steps), ceil (a partial step counts) or exact (no banding)."),
+      mpg: z
+        .number()
+        .min(1)
+        .optional()
+        .describe("Required for per_mile: fleet fuel economy in miles per gallon, at least 1."),
+      region: z
+        .enum(FUEL_SURCHARGE_CALC_REGIONS)
+        .default("national")
+        .describe("EIA diesel region (default: national, the U.S. average)."),
+      weeks: z
+        .number()
+        .int()
+        .min(1)
+        .max(52)
+        .default(4)
+        .describe("Recent EIA weeks in the table, 1 to 52 (default: 4)."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({
+    base_price,
+    method: requestedMethod,
+    increment,
+    percent_per_increment,
+    rounding,
+    mpg,
+    region,
+    weeks,
+  }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_calculate_fuel_surcharge");
+    const method = requestedMethod ?? "percent";
+    const missing: string[] = [];
+    if (method === "percent") {
+      if (increment === undefined) missing.push("increment");
+      if (percent_per_increment === undefined) missing.push("percent_per_increment");
+    } else if (mpg === undefined) {
+      missing.push("mpg");
+    }
+    if (missing.length > 0) {
+      return errorResult(
+        `method ${method} needs ${missing.join(" and ")}. Example: ${
+          method === "percent"
+            ? "base_price 1.25, increment 0.05, percent_per_increment 1"
+            : "base_price 1.25, mpg 6.5"
+        }.`,
+      );
+    }
+
+    const query = new URLSearchParams({
+      base_price: String(base_price),
+      method,
+    });
+    if (method === "percent") {
+      query.set("increment", String(increment));
+      query.set("percent_per_increment", String(percent_per_increment));
+      query.set("rounding", rounding ?? "floor");
+    } else {
+      query.set("mpg", String(mpg));
+    }
+    query.set("region", region ?? "national");
+    query.set("weeks", String(weeks ?? 4));
+
+    const outcome = await requestApi<ApiResponse<FuelSurchargeCalcData>>(
+      `/v1/fuel-surcharge/calculate?${query.toString()}`,
+    );
+    const label = `The fuel surcharge calculation for ${region ?? "national"}`;
+    const data = outcome.data;
+    if (!data || data.status !== "success" || !data.data?.current) {
+      return errorResult(
+        describeUnavailable(
+          label,
+          outcome,
+          `${label}: the API answered without a latest EIA week.`,
+        ),
+      );
+    }
+    return textResult(formatFuelSurchargeCalculation(data.data, method));
+  },
+);
+
 server.registerTool(
   "opa_get_storage",
   {
@@ -5136,6 +5810,185 @@ server.registerTool(
       "\n_Source: EIA Weekly Petroleum Status Report | Data from [OilPriceAPI](https://oilpriceapi.com)_";
 
     return textResult(text);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Macro and energy data release calendar (ledger v9) — wraps
+// GET /v1/macro/releases.
+//
+// Verified live 2026-11-10: {status: "success", data: {releases: [...],
+// meta: {count, period, calendar: {status, coverage_start, coverage_end,
+// forward_coverage_days}, generated_at}}}. Any valid key; no plan gate.
+// meta.calendar.status decides whether an empty list can be trusted:
+// ok = coverage spans the window, gap = coverage ends early, not_loaded = no
+// calendar held.
+// ---------------------------------------------------------------------------
+
+export const MACRO_RELEASE_SOURCES = [
+  "bls",
+  "eia",
+  "fed",
+  "opec",
+  "baker_hughes",
+] as const;
+export const MACRO_RELEASE_IMPORTANCE = ["high", "medium", "low"] as const;
+
+interface MacroRelease {
+  source?: string;
+  indicator_code?: string;
+  name?: string;
+  release_date?: string;
+  importance?: string;
+  released?: boolean;
+  schedule_basis?: string;
+  actual?: number | null;
+  previous?: number | null;
+  consensus?: number | null;
+  surprise?: number | null;
+}
+
+interface MacroReleasesData {
+  releases?: MacroRelease[];
+  meta?: {
+    count?: number;
+    period?: string;
+    calendar?: {
+      status?: string;
+      coverage_start?: string | null;
+      coverage_end?: string | null;
+      forward_coverage_days?: number | null;
+    };
+    generated_at?: string;
+  };
+}
+
+function calendarCaveat(meta: MacroReleasesData["meta"]): string | null {
+  const calendar = meta?.calendar;
+  const status = calendar?.status;
+  if (status === "ok") return null;
+  if (status === "gap") {
+    return `⚠ The API's release calendar ends at ${formatUtcTimestamp(calendar?.coverage_end)}, before the end of this window. Releases after that date are not listed, so their absence is not evidence that none are scheduled.`;
+  }
+  if (status === "not_loaded") {
+    return "⚠ The API holds no release calendar right now (calendar status not_loaded), so an empty or short list says nothing about what is scheduled.";
+  }
+  return `⚠ The API did not report calendar coverage (status ${reportedValue(status)}), so an empty or short list cannot be trusted as complete.`;
+}
+
+export function formatMacroReleases(options: {
+  days: number;
+  importance?: string;
+  source?: string;
+  data: MacroReleasesData;
+}): string {
+  const { data } = options;
+  const releases = Array.isArray(data.releases) ? data.releases : [];
+  const filters = [
+    options.source ? `source ${options.source}` : null,
+    options.importance ? `${options.importance} importance` : null,
+  ].filter(Boolean);
+  const lines = [
+    `# Scheduled economic and energy data releases — next ${options.days} days`,
+    "",
+    `- **Releases listed**: ${releases.length}${filters.length ? ` (${filters.join(", ")})` : ""}`,
+    `- **Calendar coverage**: ${reportedValue(data.meta?.calendar?.status)}, ${formatUtcTimestamp(data.meta?.calendar?.coverage_start)} to ${formatUtcTimestamp(data.meta?.calendar?.coverage_end)}`,
+    "- _Times are UTC. Actual, previous, consensus and surprise appear once the API knows them._",
+  ];
+  const caveat = calendarCaveat(data.meta);
+  if (caveat) lines.push("", caveat);
+
+  if (releases.length === 0) {
+    lines.push("", "No releases are scheduled in this window.");
+  } else {
+    const hasValues = releases.some((r) =>
+      [r.actual, r.previous, r.consensus, r.surprise].some(
+        (v) => typeof v === "number",
+      ),
+    );
+    const header = ["Release (UTC)", "Source", "Release", "Indicator", "Importance", "Status"];
+    if (hasValues) header.push("Actual", "Previous", "Consensus", "Surprise");
+    lines.push(
+      "",
+      `| ${header.join(" | ")} |`,
+      `| ${header.map(() => "---").join(" | ")} |`,
+    );
+    for (const r of releases) {
+      const status =
+        r.released === true
+          ? "released"
+          : r.released === false
+            ? `scheduled (${reportedValue(r.schedule_basis)})`
+            : NOT_REPORTED;
+      const cells = [
+        formatUtcTimestamp(r.release_date),
+        reportedValue(r.source),
+        reportedValue(r.name),
+        reportedValue(r.indicator_code),
+        reportedValue(r.importance),
+        status,
+      ];
+      if (hasValues) {
+        for (const v of [r.actual, r.previous, r.consensus, r.surprise]) {
+          cells.push(typeof v === "number" ? String(v) : "-");
+        }
+      }
+      lines.push(`| ${cells.join(" | ")} |`);
+    }
+  }
+
+  lines.push("", `_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
+  return lines.join("\n");
+}
+
+server.registerTool(
+  "opa_get_macro_releases",
+  {
+    title: "Get Macro Release Calendar",
+    description:
+      "List scheduled economic and energy data releases from BLS, EIA, the Fed, OPEC and Baker Hughes over the next 1 to 90 days, in release order (UTC). Use when the user asks when the next EIA inventory report, CPI print, Fed decision, OPEC report or rig count comes out. Actual, previous, consensus and surprise values appear once the API knows them. The answer states the API's calendar coverage, so an empty list is only reported as 'nothing scheduled' when coverage spans the window. Requires an API key; the API applies no plan gate to this endpoint.",
+    inputSchema: {
+      days: z
+        .number()
+        .int()
+        .min(1)
+        .max(90)
+        .default(30)
+        .describe("Look-ahead window in days, 1 to 90 (default: 30)."),
+      importance: z
+        .enum(MACRO_RELEASE_IMPORTANCE)
+        .optional()
+        .describe("Only releases of this importance: high, medium or low."),
+      source: z
+        .enum(MACRO_RELEASE_SOURCES)
+        .optional()
+        .describe("Only releases from this publisher: bls, eia, fed, opec or baker_hughes."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ days, importance, source }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_macro_releases");
+    const window = days ?? 30;
+    const query = new URLSearchParams({ days: String(window) });
+    if (importance) query.set("importance", importance);
+    if (source) query.set("source", source);
+    const outcome = await requestApi<ApiResponse<MacroReleasesData>>(
+      `/v1/macro/releases?${query.toString()}`,
+    );
+    const label = "The macro release calendar";
+    const data = outcome.data;
+    if (!data || data.status !== "success" || !data.data) {
+      return errorResult(
+        describeUnavailable(
+          label,
+          outcome,
+          `${label}: the API answered without a release list.`,
+        ),
+      );
+    }
+    return textResult(
+      formatMacroReleases({ days: window, importance, source, data: data.data }),
+    );
   },
 );
 
@@ -5438,6 +6291,287 @@ server.registerTool(
         "_Data and state-health measurement from [OilPriceAPI](https://oilpriceapi.com)_",
       ].join("\n"),
     );
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Permit list and Free-key preview (ledger v9):
+//   GET /v1/ei/well-permits          opa_list_well_permits
+//   GET /v1/ei/well-permits/preview  opa_preview_well_permits
+//
+// Verified live 2026-11-10. Both answer {status: "success", data:
+// {well_permits: [...], meta}}; each row carries api_number, state_code,
+// county, permit_number, permit_type, permit_status, permit_date, operator{},
+// well{}, location{}, target{} and provenance{source, fetched_at}. The list's
+// meta is {total_count, page, per_page, total_pages}; it needs a Well Permits
+// subscription (403 with upgrade_url otherwise). The preview's meta carries
+// as_of, data_age_days, stale and per-state data_quality; any key can call it,
+// capped at 25 permits from one state over at most 90 days. An unsupported
+// preview state is 400 listing the supported codes.
+// ---------------------------------------------------------------------------
+
+interface StateWellPermit {
+  api_number?: string | null;
+  state_code?: string | null;
+  county?: string | null;
+  permit_number?: string | null;
+  permit_type?: string | null;
+  permit_status?: string | null;
+  permit_date?: string | null;
+  operator?: { name?: string | null; name_normalized?: string | null } | null;
+  well?: { name?: string | null; number?: string | null; type?: string | null } | null;
+  target?: { formation?: string | null; total_depth_proposed?: number | null } | null;
+  provenance?: { source?: string | null; fetched_at?: string | null } | null;
+}
+
+interface WellPermitListData {
+  well_permits?: StateWellPermit[];
+  meta?: {
+    total_count?: number;
+    page?: number;
+    per_page?: number;
+    total_pages?: number;
+  };
+}
+
+interface WellPermitPreviewData {
+  well_permits?: StateWellPermit[];
+  meta?: {
+    state?: string;
+    days?: number;
+    count?: number;
+    row_cap?: number;
+    as_of?: string | null;
+    data_age_days?: number | null;
+    stale?: boolean;
+    data_quality?: Record<
+      string,
+      { date_coverage?: string; source?: string; note?: string }
+    >;
+    upgrade?: { message?: string; upgrade_url?: string };
+  };
+}
+
+/** A table cell for an optional permit field: "-" for an absent value. */
+function permitCell(value: unknown): string {
+  if (value === null || value === undefined) return "-";
+  const text = String(value).replace(/\s+/g, " ").replace(/\|/g, "/").trim();
+  return text || "-";
+}
+
+export function formatPermitRows(permits: StateWellPermit[]): string[] {
+  const lines = [
+    "| Permit date | State | County | Operator | Well | Well type | Permit | API number | Source |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+  ];
+  for (const p of permits) {
+    const operator = p.operator?.name_normalized ?? p.operator?.name;
+    const well = [p.well?.name, p.well?.number].filter(Boolean).join(" ");
+    const permit = [p.permit_type, p.permit_status].filter(Boolean).join(", ");
+    lines.push(
+      `| ${permitCell(p.permit_date)} | ${permitCell(p.state_code)} | ${permitCell(p.county)} | ${permitCell(operator)} | ${permitCell(well)} | ${permitCell(p.well?.type)} | ${permitCell(permit)} | ${permitCell(p.api_number)} | ${permitCell(p.provenance?.source)} |`,
+    );
+  }
+  return lines;
+}
+
+export function formatWellPermitList(
+  data: WellPermitListData,
+  filters: { states: string[]; start_date?: string; end_date?: string },
+): string {
+  const permits = Array.isArray(data.well_permits) ? data.well_permits : [];
+  const meta = data.meta ?? {};
+  const scope = [
+    filters.states.length ? `states ${filters.states.join(", ")}` : "every covered state",
+    filters.start_date ? `from ${filters.start_date}` : null,
+    filters.end_date ? `to ${filters.end_date}` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const lines = [
+    "# US Drilling Permits — list",
+    "",
+    `- **Scope**: ${scope}, newest permit date first`,
+    `- **Matching permits**: ${reportedValue(meta.total_count)}; page ${reportedValue(meta.page)} of ${reportedValue(meta.total_pages)} (${permits.length} on this page)`,
+    "- _Rows come from state regulators; '-' marks a field the regulator did not supply._",
+  ];
+  if (permits.length === 0) {
+    lines.push("", "No permits match these filters on this page.");
+  } else {
+    lines.push("", ...formatPermitRows(permits));
+    if (
+      typeof meta.page === "number" &&
+      typeof meta.total_pages === "number" &&
+      meta.page < meta.total_pages
+    ) {
+      lines.push(
+        "",
+        `More permits match: request page ${meta.page + 1}, or narrow states or the date range.`,
+      );
+    }
+  }
+  lines.push("", `_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
+  return lines.join("\n");
+}
+
+export function formatWellPermitPreview(data: WellPermitPreviewData): string {
+  const permits = Array.isArray(data.well_permits) ? data.well_permits : [];
+  const meta = data.meta ?? {};
+  const lines = [
+    `# Drilling permit preview — ${reportedValue(meta.state)}, last ${reportedValue(meta.days)} days`,
+    "",
+    `- **Permits shown**: ${permits.length} (the preview returns at most ${reportedValue(meta.row_cap)}, newest first)`,
+    `- **Data as of**: ${reportedValue(meta.as_of)} (${reportedValue(meta.data_age_days)} days old${meta.stale ? "; the API marks it stale" : ""})`,
+  ];
+  for (const [state, quality] of Object.entries(meta.data_quality ?? {})) {
+    lines.push(
+      `- **${state} coverage**: ${reportedValue(quality.date_coverage)} date coverage from ${reportedValue(quality.source)}${quality.note ? `. ${quality.note}` : ""}`,
+    );
+  }
+  if (meta.stale) {
+    lines.push(
+      "- ⚠ The API marks this state's permit data stale, so recent permits may be missing.",
+    );
+  }
+  if (permits.length === 0) {
+    lines.push("", "No permits in this state and window.");
+  } else {
+    lines.push("", ...formatPermitRows(permits));
+  }
+  lines.push(
+    "",
+    "_This is a bounded preview. Full history, every covered state and operator or county search need a Well Permits subscription (opa_list_well_permits, opa_search_well_permits)._",
+    "",
+    `_Data from [OilPriceAPI](https://oilpriceapi.com)_`,
+  );
+  return lines.join("\n");
+}
+
+server.registerTool(
+  "opa_list_well_permits",
+  {
+    title: "List Well Permits",
+    description:
+      "List US drilling permits from state regulators across one or more states and an optional permit-date range, newest permit date first, paged up to 100 rows per page. Each row has the permit date, state, county, operator, well, permit type and status, API number and source regulator. Use when the user wants raw permit records across several states or a date window; opa_search_well_permits adds a per-state freshness gate and county/operator search, and opa_get_well_activity summarises counts. Requires a Well Permits subscription (an add-on, or included in some plans); the API answers HTTP 403 without it, and opa_preview_well_permits works on any key. " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
+    inputSchema: {
+      states: z
+        .array(z.string())
+        .max(30)
+        .optional()
+        .describe(
+          "Optional US state names or 2-letter codes, e.g. ['TX', 'New Mexico']. Omit for every covered state.",
+        ),
+      start_date: z
+        .string()
+        .optional()
+        .describe("Earliest permit date to include, YYYY-MM-DD."),
+      end_date: z
+        .string()
+        .optional()
+        .describe("Latest permit date to include, YYYY-MM-DD."),
+      page: z.number().int().min(1).default(1).describe("Page number, from 1 (default: 1)."),
+      per_page: z
+        .number()
+        .int()
+        .min(1)
+        .max(100)
+        .default(25)
+        .describe("Rows per page, 1 to 100 (default: 25)."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ states, start_date, end_date, page, per_page }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_list_well_permits");
+
+    const codes: string[] = [];
+    for (const state of states ?? []) {
+      const code = resolveStateCode(state);
+      if (!code) {
+        return errorResult(
+          `'${state}' is not a recognized US state. Use a full state name (e.g., 'Texas') or 2-letter code (e.g., 'TX').`,
+        );
+      }
+      if (!codes.includes(code)) codes.push(code);
+    }
+    if (!validIsoDate(start_date) || !validIsoDate(end_date)) {
+      return errorResult("start_date and end_date must be valid dates in YYYY-MM-DD form.");
+    }
+    if (start_date && end_date && start_date > end_date) {
+      return errorResult("start_date must be on or before end_date.");
+    }
+
+    const query = new URLSearchParams();
+    if (codes.length) query.set("states", codes.join(","));
+    if (start_date) query.set("start_date", start_date);
+    if (end_date) query.set("end_date", end_date);
+    query.set("page", String(page ?? 1));
+    query.set("per_page", String(per_page ?? 25));
+
+    const outcome = await requestApi<ApiResponse<WellPermitListData>>(
+      `/v1/ei/well-permits?${query.toString()}`,
+    );
+    const response = outcome.data;
+    if (!response || response.status !== "success" || !response.data) {
+      return errorResult(
+        describeUnavailable(
+          "The well permit list",
+          outcome,
+          "The well permit list is not available: the API answered without a permit list.",
+        ),
+      );
+    }
+    return textResult(
+      formatWellPermitList(response.data, { states: codes, start_date, end_date }),
+    );
+  },
+);
+
+server.registerTool(
+  "opa_preview_well_permits",
+  {
+    title: "Preview Well Permits",
+    description:
+      "Preview the most recent US drilling permits for one state: at most 25 permits from the last 1 to 90 days, newest first, with the data's as-of date, age and the state's date coverage. Any API key can call it, including the Free plan. Use when the user wants a quick look at recent permits in a state, or when the account has no Well Permits subscription. Full history, multiple states and county or operator search need the subscription (opa_list_well_permits, opa_search_well_permits). Requires an API key.",
+    inputSchema: {
+      state: z
+        .string()
+        .default("TX")
+        .describe("US state name or 2-letter code (default: TX)."),
+      days: z
+        .number()
+        .int()
+        .min(1)
+        .max(90)
+        .default(90)
+        .describe("Trailing window in days, 1 to 90 (default: 90)."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ state, days }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_preview_well_permits");
+    const requested = state ?? "TX";
+    const code = resolveStateCode(requested);
+    if (!code) {
+      return errorResult(
+        `'${requested}' is not a recognized US state. Use a full state name (e.g., 'Texas') or 2-letter code (e.g., 'TX').`,
+      );
+    }
+    const query = new URLSearchParams({ state: code, days: String(days ?? 90) });
+    const outcome = await requestApi<ApiResponse<WellPermitPreviewData>>(
+      `/v1/ei/well-permits/preview?${query.toString()}`,
+    );
+    const response = outcome.data;
+    if (!response || response.status !== "success" || !response.data) {
+      return errorResult(
+        describeUnavailable(
+          `The ${code} permit preview`,
+          outcome,
+          `The ${code} permit preview is not available: the API answered without a permit list.`,
+        ),
+      );
+    }
+    return textResult(formatWellPermitPreview(response.data));
   },
 );
 
@@ -6203,6 +7337,562 @@ server.registerTool(
   },
 );
 
+// ---------------------------------------------------------------------------
+// Computed price analytics (ledger v9) — wraps the four /v1/analytics
+// operations:
+//   GET /v1/analytics/statistics   opa_get_price_statistics
+//   GET /v1/analytics/trend        opa_get_price_trend
+//   GET /v1/analytics/correlation  opa_get_price_correlation
+//   GET /v1/analytics/spread       opa_get_spread_statistics
+//
+// Verified live 2026-11-10 with the Scale smoke key. Bodies are bare objects
+// (no {status, data} envelope). Every operation is plan-gated: other plans
+// get HTTP 403 with upgrade_url (statistics also carries a labelled
+// `sample_data` object, which this server never renders as data). An unknown
+// code or spread is 404 {error, ...}; a missing code is 400.
+//
+// The bodies also carry a `tier` field. On 2026-11-10 it read "free" for a
+// Scale account (oilpriceapi-api analytics_controller#current_user_tier does
+// not map Gen-2 plans), so it is not rendered.
+// ---------------------------------------------------------------------------
+
+const ANALYTICS_GATE =
+  "Analytics are plan-gated: the API answers HTTP 403 when the account's plan does not include them.";
+export const ANALYTICS_MAX_ROWS = 400;
+
+function analyticsNumber(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? String(value)
+    : NOT_REPORTED;
+}
+
+function analyticsList(values: unknown): string {
+  return Array.isArray(values) && values.length
+    ? values.map(analyticsNumber).join(", ")
+    : "none reported";
+}
+
+/** Render a dated series of {date, <valueKey>, price?} rows, capped. */
+function analyticsSeries(
+  rows: unknown,
+  columns: Array<{ key: string; label: string }>,
+): string[] {
+  const list = Array.isArray(rows)
+    ? (rows as Array<Record<string, unknown>>)
+    : [];
+  if (list.length === 0) return ["", "The API returned no series rows."];
+  const shown = list.slice(-ANALYTICS_MAX_ROWS);
+  const lines = [
+    "",
+    `| Date | ${columns.map((c) => c.label).join(" | ")} |`,
+    `| --- | ${columns.map(() => "---").join(" | ")} |`,
+  ];
+  for (const row of shown) {
+    lines.push(
+      `| ${reportedValue(row.date as string | undefined)} | ${columns.map((c) => analyticsNumber(row[c.key])).join(" | ")} |`,
+    );
+  }
+  if (shown.length < list.length) {
+    lines.push(
+      "",
+      `⚠ Partial answer: the API returned ${list.length} rows and this answer shows the latest ${shown.length}. Shorten period to see fewer.`,
+    );
+  }
+  return lines;
+}
+
+const ANALYTICS_FOOTER = [
+  "",
+  "_Computed by the API from OilPriceAPI's stored daily prices; an analytic, not a forecast._",
+  "",
+  `_Data from [OilPriceAPI](https://oilpriceapi.com)_`,
+];
+
+/**
+ * Shared request path: resolve nothing, call, and turn a non-2xx into the
+ * right sentence. 403 never reaches here (requestApi throws the gate error).
+ */
+async function analyticsRequest<T>(
+  path: string,
+  label: string,
+): Promise<{ data: T } | { error: ReturnType<typeof errorResult> }> {
+  const outcome = await requestApi<T>(path);
+  if (!outcome.data) {
+    return {
+      error: errorResult(
+        describeUnavailable(label, outcome, `${label}: the API returned no body.`),
+      ),
+    };
+  }
+  return { data: outcome.data };
+}
+
+interface StatisticsData {
+  code?: string;
+  period?: number;
+  statistics?: {
+    z_score?: number;
+    z_score_interpretation?: string;
+    percentile?: number;
+    percentile_interpretation?: string;
+    volatility?: number;
+    volatility_interpretation?: string;
+    calculated_at?: string;
+  };
+}
+
+export function formatPriceStatistics(data: StatisticsData): string {
+  const s = data.statistics ?? {};
+  return [
+    `# Price statistics — ${reportedValue(data.code)}, trailing ${reportedValue(data.period)} days`,
+    "",
+    `- **Z-score of the latest price**: ${analyticsNumber(s.z_score)} — ${reportedValue(s.z_score_interpretation)}`,
+    `- **Percentile within the window**: ${analyticsNumber(s.percentile)} — ${reportedValue(s.percentile_interpretation)}`,
+    `- **Annualized volatility**: ${analyticsNumber(s.volatility)}% — ${reportedValue(s.volatility_interpretation)}`,
+    `- **Calculated**: ${formatUtcTimestamp(s.calculated_at)}`,
+    ...ANALYTICS_FOOTER,
+  ].join("\n");
+}
+
+interface TrendData {
+  type?: string;
+  code?: string;
+  period?: number;
+  window?: number;
+  values?: Array<Record<string, unknown>>;
+  trend?: {
+    direction?: string;
+    strength?: number;
+    strength_interpretation?: string;
+    slope_per_day?: number;
+    price_change_pct?: number;
+    short_term_change_pct?: number;
+    momentum?: string;
+    period_days?: number;
+  };
+  momentum?: { rsi?: number; rsi_interpretation?: string };
+  moving_averages?: { sma_20?: number; price_vs_sma?: string };
+  levels?: { support?: number[]; resistance?: number[]; pivot_point?: number };
+  signal?: { value?: number; interpretation?: string; confidence?: string };
+  current_price?: number;
+  support?: number[];
+  resistance?: number[];
+  pivot_point?: number;
+  range?: { high?: number; low?: number; spread?: number; spread_pct?: number };
+  quartiles?: { q1?: number; median?: number; q3?: number };
+  price_position?: string;
+  calculated_at?: string;
+}
+
+export function formatPriceTrend(data: TrendData): string {
+  const type = data.type ?? "analysis";
+  const code = reportedValue(data.code);
+  if (type === "sma" || type === "ema" || type === "rsi") {
+    return [
+      `# ${type.toUpperCase()} — ${code}, ${reportedValue(data.window)}-day window`,
+      ...analyticsSeries(data.values, [
+        { key: type, label: type.toUpperCase() },
+        { key: "price", label: "Price" },
+      ]),
+      ...ANALYTICS_FOOTER,
+    ].join("\n");
+  }
+  if (type === "levels") {
+    return [
+      `# Support and resistance — ${code}, trailing ${reportedValue(data.period)} days`,
+      "",
+      `- **Current price**: ${analyticsNumber(data.current_price)} (${reportedValue(data.price_position)} of the range)`,
+      `- **Support**: ${analyticsList(data.support)}`,
+      `- **Resistance**: ${analyticsList(data.resistance)}`,
+      `- **Pivot point**: ${analyticsNumber(data.pivot_point)}`,
+      `- **Range**: low ${analyticsNumber(data.range?.low)}, high ${analyticsNumber(data.range?.high)} (${analyticsNumber(data.range?.spread_pct)}%)`,
+      `- **Quartiles**: Q1 ${analyticsNumber(data.quartiles?.q1)}, median ${analyticsNumber(data.quartiles?.median)}, Q3 ${analyticsNumber(data.quartiles?.q3)}`,
+      ...ANALYTICS_FOOTER,
+    ].join("\n");
+  }
+  const t = data.trend ?? {};
+  return [
+    `# Trend and momentum — ${code}, trailing ${reportedValue(t.period_days ?? data.period)} days`,
+    "",
+    `- **Trend**: ${reportedValue(t.direction)}, strength ${analyticsNumber(t.strength)} (${reportedValue(t.strength_interpretation)}), slope ${analyticsNumber(t.slope_per_day)} per day`,
+    `- **Price change over the window**: ${analyticsNumber(t.price_change_pct)}%; short term ${analyticsNumber(t.short_term_change_pct)}%; momentum ${reportedValue(t.momentum)}`,
+    `- **RSI**: ${analyticsNumber(data.momentum?.rsi)} (${reportedValue(data.momentum?.rsi_interpretation)})`,
+    `- **20-day SMA**: ${analyticsNumber(data.moving_averages?.sma_20)} (price ${reportedValue(data.moving_averages?.price_vs_sma)})`,
+    `- **Support**: ${analyticsList(data.levels?.support)}; **resistance**: ${analyticsList(data.levels?.resistance)}; **pivot**: ${analyticsNumber(data.levels?.pivot_point)}`,
+    `- **Combined signal**: ${analyticsNumber(data.signal?.value)} (${reportedValue(data.signal?.interpretation)}, ${reportedValue(data.signal?.confidence)} confidence)`,
+    `- **Calculated**: ${formatUtcTimestamp(data.calculated_at)}`,
+    ...ANALYTICS_FOOTER,
+  ].join("\n");
+}
+
+interface CorrelationData {
+  type?: string;
+  code1?: string;
+  code2?: string;
+  codes?: string[];
+  period?: number;
+  period_days?: number;
+  window?: number;
+  correlation?: number;
+  correlation_interpretation?: string;
+  strength?: string;
+  direction?: string;
+  stability?: number;
+  stability_interpretation?: string;
+  data_points?: number;
+  rolling_correlation?: Array<Record<string, unknown>>;
+  matrix?: Record<string, Record<string, number>>;
+  calculated_at?: string;
+}
+
+export function formatPriceCorrelation(data: CorrelationData): string {
+  const type = data.type ?? "analysis";
+  const pair = `${reportedValue(data.code1)} vs ${reportedValue(data.code2)}`;
+  if (type === "matrix") {
+    const codes = Array.isArray(data.codes)
+      ? data.codes
+      : Object.keys(data.matrix ?? {});
+    const lines = [
+      `# Correlation matrix — trailing ${reportedValue(data.period)} days`,
+      "",
+      `| | ${codes.join(" | ")} |`,
+      `| --- | ${codes.map(() => "---").join(" | ")} |`,
+    ];
+    for (const row of codes) {
+      lines.push(
+        `| ${row} | ${codes.map((col) => analyticsNumber(data.matrix?.[row]?.[col])).join(" | ")} |`,
+      );
+    }
+    return [...lines, ...ANALYTICS_FOOTER].join("\n");
+  }
+  if (type === "rolling") {
+    return [
+      `# Rolling correlation — ${pair}, ${reportedValue(data.window)}-day window over ${reportedValue(data.period)} days`,
+      ...analyticsSeries(data.rolling_correlation, [
+        { key: "correlation", label: "Correlation" },
+      ]),
+      ...ANALYTICS_FOOTER,
+    ].join("\n");
+  }
+  return [
+    `# Price correlation — ${pair}, trailing ${reportedValue(data.period_days ?? data.period)} days`,
+    "",
+    `- **Pearson correlation of daily prices**: ${analyticsNumber(data.correlation)} — ${reportedValue(data.correlation_interpretation)}`,
+    `- **Strength / direction**: ${reportedValue(data.strength)}, ${reportedValue(data.direction)}`,
+    `- **Stability**: ${analyticsNumber(data.stability)} — ${reportedValue(data.stability_interpretation)}`,
+    `- **Data points**: ${analyticsNumber(data.data_points)}`,
+    `- **Calculated**: ${formatUtcTimestamp(data.calculated_at)}`,
+    "",
+    "## Rolling correlation",
+    ...analyticsSeries(data.rolling_correlation, [
+      { key: "correlation", label: "Correlation" },
+    ]),
+    ...ANALYTICS_FOOTER,
+  ].join("\n");
+}
+
+interface SpreadAnalyticsData {
+  type?: string;
+  available_spreads?: Array<{
+    name?: string;
+    type?: string;
+    description?: string;
+    unit?: string;
+  }>;
+  spread?: string;
+  spread_name?: string;
+  code1?: string;
+  code2?: string;
+  price1?: number;
+  price2?: number;
+  current_spread?: number;
+  unit?: string;
+  period?: number;
+  historical?: {
+    mean?: number;
+    std_dev?: number;
+    min?: number;
+    max?: number;
+    percentile?: number;
+    z_score?: number;
+    data_points?: number;
+  };
+  interpretation?: string;
+  data?: Array<Record<string, unknown>>;
+  calculated_at?: string;
+}
+
+export function formatSpreadStatistics(
+  data: SpreadAnalyticsData,
+  period: number,
+): string {
+  if (Array.isArray(data.available_spreads) && !data.type) {
+    const lines = [
+      "# Spreads available for distribution analysis",
+      "",
+      "| Spread | Type | Description | Unit |",
+      "| --- | --- | --- | --- |",
+    ];
+    for (const s of data.available_spreads) {
+      lines.push(
+        `| \`${reportedValue(s.name)}\` | ${reportedValue(s.type)} | ${reportedValue(s.description)} | ${reportedValue(s.unit)} |`,
+      );
+    }
+    lines.push(
+      "",
+      "Pass one of these names as `spread` to get its current value against its trailing distribution.",
+      "",
+      `_Data from [OilPriceAPI](https://oilpriceapi.com)_`,
+    );
+    return lines.join("\n");
+  }
+  if (data.type === "historical") {
+    return [
+      `# Daily spread series — \`${reportedValue(data.spread)}\`, trailing ${reportedValue(data.period ?? period)} days`,
+      ...analyticsSeries(data.data, [
+        { key: "spread", label: "Spread" },
+        { key: "price1", label: "Leg 1" },
+        { key: "price2", label: "Leg 2" },
+      ]),
+      ...ANALYTICS_FOOTER,
+    ].join("\n");
+  }
+  const h = data.historical ?? {};
+  return [
+    `# Spread distribution — ${reportedValue(data.spread_name)}, trailing ${period} days`,
+    "",
+    `- **Current spread**: ${analyticsNumber(data.current_spread)} ${reportedValue(data.unit)} (${reportedValue(data.code1)} ${analyticsNumber(data.price1)} vs ${reportedValue(data.code2)} ${analyticsNumber(data.price2)})`,
+    `- **Window**: mean ${analyticsNumber(h.mean)}, std dev ${analyticsNumber(h.std_dev)}, min ${analyticsNumber(h.min)}, max ${analyticsNumber(h.max)} (${analyticsNumber(h.data_points)} data points)`,
+    `- **Position**: z-score ${analyticsNumber(h.z_score)}, percentile ${analyticsNumber(h.percentile)}`,
+    `- **Interpretation**: ${reportedValue(data.interpretation)}`,
+    `- **Calculated**: ${formatUtcTimestamp(data.calculated_at)}`,
+    ...ANALYTICS_FOOTER,
+  ].join("\n");
+}
+
+const ANALYTICS_PERIOD = z
+  .number()
+  .int()
+  .min(1)
+  .max(365)
+  .default(30)
+  .describe("Trailing window in days, 1 to 365 (default: 30).");
+
+server.registerTool(
+  "opa_get_price_statistics",
+  {
+    title: "Get Price Statistics",
+    description:
+      "Get the z-score, percentile and annualized volatility of a commodity's latest price against its trailing window of daily prices, each with a plain-language interpretation. Use when the user asks whether a price is unusually high or low, or how volatile it has been. opa_get_history returns the underlying series. " +
+      ANALYTICS_GATE +
+      " " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
+    inputSchema: {
+      commodity: z
+        .string()
+        .describe("Commodity name or code (e.g. 'brent', 'WTI_USD')."),
+      period: ANALYTICS_PERIOD,
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ commodity, period }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_price_statistics");
+    const resolved = resolveOrError(commodity);
+    if ("error" in resolved) return resolved.error;
+    const query = new URLSearchParams({
+      code: resolved.code,
+      period: String(period ?? 30),
+    });
+    const result = await analyticsRequest<StatisticsData>(
+      `/v1/analytics/statistics?${query.toString()}`,
+      `Price statistics for ${resolved.code}`,
+    );
+    if ("error" in result) return result.error;
+    return textResult(formatPriceStatistics(result.data));
+  },
+);
+
+export const TREND_TYPES = ["analysis", "sma", "ema", "rsi", "levels"] as const;
+
+server.registerTool(
+  "opa_get_price_trend",
+  {
+    title: "Get Price Trend",
+    description:
+      "Get trend and momentum for a commodity from its daily prices: trend direction and strength, RSI, 20-day SMA, support and resistance levels and a combined signal (type=analysis, the default), or one indicator series: sma, ema or rsi (dated values with the price), or levels (support, resistance, pivot, range and quartiles). Indicator types use at least 90 days of history. Use when the user asks about technical trend, momentum or support and resistance. These are computed indicators, not forecasts. " +
+      ANALYTICS_GATE +
+      " " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
+    inputSchema: {
+      commodity: z
+        .string()
+        .describe("Commodity name or code (e.g. 'brent', 'WTI_USD')."),
+      period: ANALYTICS_PERIOD,
+      type: z
+        .enum(TREND_TYPES)
+        .default("analysis")
+        .describe("analysis (default), sma, ema, rsi or levels."),
+      window: z
+        .number()
+        .int()
+        .min(2)
+        .max(200)
+        .optional()
+        .describe("Indicator window in days for sma/ema (API default 20) or rsi (API default 14)."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ commodity, period, type, window }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_price_trend");
+    const resolved = resolveOrError(commodity);
+    if ("error" in resolved) return resolved.error;
+    const kind = type ?? "analysis";
+    const query = new URLSearchParams({
+      code: resolved.code,
+      period: String(period ?? 30),
+      type: kind,
+    });
+    if (window !== undefined && ["sma", "ema", "rsi"].includes(kind)) {
+      query.set("window", String(window));
+    }
+    const result = await analyticsRequest<TrendData>(
+      `/v1/analytics/trend?${query.toString()}`,
+      `Price trend for ${resolved.code}`,
+    );
+    if ("error" in result) return result.error;
+    return textResult(formatPriceTrend(result.data));
+  },
+);
+
+export const CORRELATION_TYPES = ["analysis", "rolling", "matrix"] as const;
+
+server.registerTool(
+  "opa_get_price_correlation",
+  {
+    title: "Get Price Correlation",
+    description:
+      "Get the Pearson correlation of daily prices between two commodities over a trailing window, with strength, direction, stability and a rolling series (type=analysis, the default); only the rolling series for a chosen window (type=rolling); or a correlation matrix for 2 to 10 commodities (type=matrix with commodities). Use when the user asks how closely two prices move together. " +
+      ANALYTICS_GATE +
+      " " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
+    inputSchema: {
+      commodity1: z.string().describe("First commodity name or code (e.g. 'wti')."),
+      commodity2: z.string().describe("Second commodity name or code (e.g. 'brent')."),
+      period: ANALYTICS_PERIOD,
+      type: z
+        .enum(CORRELATION_TYPES)
+        .default("analysis")
+        .describe("analysis (default), rolling or matrix."),
+      window: z
+        .number()
+        .int()
+        .min(2)
+        .max(90)
+        .optional()
+        .describe("Rolling window in days for type=rolling (API default 7)."),
+      commodities: z
+        .array(z.string())
+        .min(2)
+        .max(10)
+        .optional()
+        .describe("For type=matrix: 2 to 10 commodity names or codes."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ commodity1, commodity2, period, type, window, commodities }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_price_correlation");
+    const kind = type ?? "analysis";
+    const first = resolveOrError(commodity1);
+    if ("error" in first) return first.error;
+    const second = resolveOrError(commodity2);
+    if ("error" in second) return second.error;
+    const query = new URLSearchParams({
+      code1: first.code,
+      code2: second.code,
+      period: String(period ?? 30),
+      type: kind,
+    });
+    if (kind === "rolling" && window !== undefined) {
+      query.set("window", String(window));
+    }
+    if (kind === "matrix") {
+      if (!commodities || commodities.length < 2) {
+        return errorResult(
+          "type=matrix needs commodities: a list of 2 to 10 commodity names or codes.",
+        );
+      }
+      const codes: string[] = [];
+      for (const name of commodities) {
+        const resolved = resolveOrError(name);
+        if ("error" in resolved) return resolved.error;
+        if (!codes.includes(resolved.code)) codes.push(resolved.code);
+      }
+      query.set("codes", codes.join(","));
+    }
+    const result = await analyticsRequest<CorrelationData>(
+      `/v1/analytics/correlation?${query.toString()}`,
+      `Price correlation for ${first.code} and ${second.code}`,
+    );
+    if ("error" in result) return result.error;
+    return textResult(formatPriceCorrelation(result.data));
+  },
+);
+
+export const SPREAD_ANALYTICS_TYPES = ["current", "historical"] as const;
+
+server.registerTool(
+  "opa_get_spread_statistics",
+  {
+    title: "Get Spread Statistics",
+    description:
+      "Get a named basis, crack or ratio spread (for example wti_brent, 321, diesel_crack, lng_us_europe) against its trailing distribution: current value and legs, mean, standard deviation, min, max, z-score and percentile (type=current, the default), or its daily series (type=historical). Omit spread to list the available spread names. Use when the user asks whether a spread is wide or narrow relative to recent history; opa_get_spread returns current crack, basis and margin values without the distribution. " +
+      ANALYTICS_GATE +
+      " " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
+    inputSchema: {
+      spread: z
+        .string()
+        .regex(/^[a-z0-9_]{1,40}$/)
+        .optional()
+        .describe("Spread name, e.g. 'wti_brent'. Omit to list available spreads."),
+      period: ANALYTICS_PERIOD,
+      type: z
+        .enum(SPREAD_ANALYTICS_TYPES)
+        .default("current")
+        .describe("current (default) or historical."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ spread, period, type }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_spread_statistics");
+    const days = period ?? 30;
+    const query = new URLSearchParams();
+    if (spread) {
+      query.set("spread", spread);
+      query.set("period", String(days));
+      query.set("type", type ?? "current");
+    }
+    const qs = query.toString();
+    const outcome = await requestApi<SpreadAnalyticsData>(
+      `/v1/analytics/spread${qs ? `?${qs}` : ""}`,
+    );
+    const label = spread ? `Spread statistics for ${spread}` : "The spread list";
+    if (!outcome.data) {
+      return errorResult(
+        describeUnavailable(
+          label,
+          outcome,
+          `${label}: the API returned no body.`,
+          spread
+            ? "Call opa_get_spread_statistics without spread to list valid names."
+            : undefined,
+        ),
+      );
+    }
+    return textResult(formatSpreadStatistics(outcome.data, days));
+  },
+);
+
 // =========================================================================
 // PRICE ALERT TOOLS (authenticated, stateful — require OILPRICEAPI_KEY)
 //
@@ -6418,6 +8108,157 @@ server.registerTool(
     text +=
       "\n_Per-commodity reports: access varies by account entitlement; use opa_get_plans for current details. | [OilPriceAPI](https://oilpriceapi.com)_";
     return textResult(text);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Service status (ledger v9) — wraps GET /v1/status. No API key required.
+//
+// Verified live 2026-11-10: {status: "success", data: {operational, status,
+// score, grade, message, components{}, affected_components[], last_checked,
+// tiers{realtime, daily, weekly, monthly}}}; include=commodities adds each
+// tier's per-code breakdown. The API answers 503 with unknown health and
+// Retry-After: 60 when its snapshot is missing or at least 15 minutes old, so
+// a 503 here is itself the answer "health unknown" and is not retried.
+// ---------------------------------------------------------------------------
+
+interface StatusTierCommodity {
+  code?: string;
+  name?: string;
+  status?: string;
+  freshness_status?: string;
+  last_updated_at?: string;
+}
+
+interface StatusTier {
+  status?: string;
+  score?: number | null;
+  grade?: string;
+  commodities?: StatusTierCommodity[];
+}
+
+interface ServiceStatusData {
+  operational?: boolean;
+  status?: string;
+  score?: number | null;
+  grade?: string;
+  message?: string;
+  components?: Record<string, string>;
+  affected_components?: string[];
+  last_checked?: string;
+  tiers?: Record<string, StatusTier>;
+}
+
+export const SERVICE_STATUS_MAX_LISTED = 25;
+
+export function formatServiceStatus(
+  data: ServiceStatusData,
+  includeCommodities: boolean,
+): string {
+  const lines = [
+    "# OilPriceAPI service status",
+    "",
+    `- **Status**: ${reportedValue(data.status)}${data.operational === false ? " (not operational)" : ""} — ${reportedValue(data.message)}`,
+    `- **Health score**: ${reportedValue(data.score)} (grade ${reportedValue(data.grade)})`,
+    `- **Calculated**: ${formatUtcTimestamp(data.last_checked)} (the API's last health calculation, not the time of this request)`,
+  ];
+  const affected = Array.isArray(data.affected_components)
+    ? data.affected_components
+    : [];
+  lines.push(
+    `- **Affected components**: ${affected.length ? affected.join(", ") : "none"}`,
+  );
+  const components = Object.entries(data.components ?? {});
+  if (components.length) {
+    lines.push("", "| Component | Status |", "| --- | --- |");
+    for (const [name, state] of components) {
+      lines.push(`| ${name} | ${reportedValue(state)} |`);
+    }
+  }
+  const tiers = Object.entries(data.tiers ?? {});
+  if (tiers.length) {
+    lines.push(
+      "",
+      "| Update tier | Status | Score | Grade |",
+      "| --- | --- | --- | --- |",
+    );
+    for (const [name, tier] of tiers) {
+      lines.push(
+        `| ${name} | ${reportedValue(tier.status)} | ${reportedValue(tier.score)} | ${reportedValue(tier.grade)} |`,
+      );
+    }
+  }
+  if (includeCommodities) {
+    for (const [name, tier] of tiers) {
+      const rows = Array.isArray(tier.commodities) ? tier.commodities : [];
+      const unhealthy = rows.filter(
+        (row) =>
+          (row.status && row.status !== "healthy") ||
+          (row.freshness_status && row.freshness_status !== "current"),
+      );
+      lines.push(
+        "",
+        `## ${name}: ${rows.length} series, ${unhealthy.length} not healthy or not current`,
+      );
+      const listed = unhealthy.slice(0, SERVICE_STATUS_MAX_LISTED);
+      for (const row of listed) {
+        lines.push(
+          `- \`${reportedValue(row.code)}\` ${reportedValue(row.name)}: ${reportedValue(row.status)}, freshness ${reportedValue(row.freshness_status)}, last updated ${formatUtcTimestamp(row.last_updated_at)}`,
+        );
+      }
+      if (unhealthy.length > listed.length) {
+        lines.push(`- …and ${unhealthy.length - listed.length} more not listed.`);
+      }
+    }
+  }
+  lines.push(
+    "",
+    "_This is the API's own operational health snapshot. For one series' freshness, use that series' price tool or opa_get_data_quality._",
+    "",
+    `_Data from [OilPriceAPI](https://oilpriceapi.com)_`,
+  );
+  return lines.join("\n");
+}
+
+server.registerTool(
+  "opa_get_service_status",
+  {
+    title: "Get Service Status",
+    description:
+      "Get OilPriceAPI's own operational status: overall health score and grade, component status, and per-update-tier (realtime, daily, weekly, monthly) health from the API's latest background health calculation. Set include_commodities=true to list the series in each tier that are not healthy or not current. Use when the user asks whether OilPriceAPI is up or degraded, or why data looks delayed. This is service health, not market data. Works without an API key. When the API's snapshot is missing or at least 15 minutes old it answers HTTP 503 and this tool reports health as unknown.",
+    inputSchema: {
+      include_commodities: z
+        .boolean()
+        .default(false)
+        .describe(
+          "When true, list series in each tier that are not healthy or not current (default: false).",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ include_commodities }) => {
+    const include = include_commodities === true;
+    const outcome = await requestApi<ApiResponse<ServiceStatusData>>(
+      include ? "/v1/status?include=commodities" : "/v1/status",
+      fetch,
+      { retryServerErrors: false },
+    );
+    const data = outcome.data;
+    if (outcome.status === 503) {
+      return errorResult(
+        `OilPriceAPI service health is unknown right now: the status endpoint answered HTTP 503${outcome.detail ? ` (${outcome.detail})` : ""}, which it does when its health snapshot is missing or at least 15 minutes old. Retry in about a minute. This is not an account or plan restriction.`,
+      );
+    }
+    if (!data || data.status !== "success" || !data.data) {
+      return errorResult(
+        describeUnavailable(
+          "OilPriceAPI service status",
+          outcome,
+          "OilPriceAPI service status: the API answered without a status snapshot.",
+        ),
+      );
+    }
+    return textResult(formatServiceStatus(data.data, include));
   },
 );
 
@@ -6707,6 +8548,97 @@ server.registerTool(
 
     sections.push(`\n_Data from [OilPriceAPI](https://oilpriceapi.com)_`);
     return textResult(sections.join("\n"));
+  },
+);
+
+// POST /v1/alerts/{alert_id}/test (ledger v9). Verified live 2026-11-10 on a
+// synthetic alert: {alert_id, condition, current_price: {value, timestamp},
+// would_trigger, in_cooldown, result}; an unknown id is 404 {"error":"Alert
+// not found"}. The API evaluates without sending anything and changes no
+// state, but the call reads a live price and is metered like a data request.
+interface AlertTestResult {
+  alert_id?: number | string;
+  condition?: string;
+  current_price?: { value?: number | null; timestamp?: string | null };
+  would_trigger?: boolean;
+  in_cooldown?: boolean;
+  result?: string;
+}
+
+export function formatAlertTest(body: AlertTestResult): string {
+  const price = body.current_price ?? {};
+  const verdict =
+    body.would_trigger === true
+      ? "**Would trigger now**: the condition is met at the latest price."
+      : body.would_trigger === false
+        ? "**Would not trigger now**: the condition is not met at the latest price."
+        : `**Would trigger**: ${NOT_REPORTED}.`;
+  const lines = [
+    `# Price Alert Test — alert \`${reportedValue(body.alert_id)}\``,
+    "",
+    `- **Condition**: ${reportedValue(body.condition)}`,
+    `- **Latest price**: ${reportedValue(price.value)} at ${formatUtcTimestamp(price.timestamp)}`,
+    `- ${verdict}`,
+  ];
+  if (body.in_cooldown === true) {
+    lines.push(
+      "- ⚠ The alert is in its cooldown window, so a real crossing right now would not notify until the cooldown ends.",
+    );
+  } else if (body.in_cooldown === false) {
+    lines.push("- Not in cooldown.");
+  }
+  lines.push(
+    "",
+    "_Dry run: the API sent no email or webhook and changed nothing on the alert._",
+    "",
+    `_Data from [OilPriceAPI](https://oilpriceapi.com)_`,
+  );
+  return lines.join("\n");
+}
+
+server.registerTool(
+  "opa_test_price_alert",
+  {
+    title: "Test Price Alert",
+    description:
+      "Dry-run one of the user's price alerts against the latest price for its commodity: reports the condition, the latest price and its timestamp, whether the alert would trigger now, and whether it is in its cooldown window. Nothing is sent and the alert is not changed. Use when the user wants to check an alert is set correctly before relying on it. Get the id from opa_list_price_alerts. REQUIRES an API key (OILPRICEAPI_KEY); the call reads a live price, so it counts against the account's request quota like a data request.",
+    inputSchema: {
+      id: z
+        .string()
+        .regex(/^\d+$/)
+        .describe(
+          "The numeric id of the alert to test, as returned by opa_list_price_alerts or opa_create_price_alert (e.g. '1234').",
+        ),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ id }) => {
+    const keyErr = requireApiKey("opa_test_price_alert");
+    if (keyErr) return keyErr;
+
+    const result = await makeAuthRequest(
+      `/v1/alerts/${encodeURIComponent(id)}/test`,
+      { method: "POST" },
+    );
+
+    if (result.status === 404) {
+      const detail =
+        result.body && typeof result.body === "object"
+          ? (result.body as { error?: unknown }).error
+          : undefined;
+      if (typeof detail === "string" && /no price/i.test(detail)) {
+        return errorResult(
+          `Alert \`${id}\` exists, but the API has no latest price for its commodity, so it cannot be evaluated (HTTP 404: ${detail}). This is a data-availability limit, not a plan restriction.`,
+        );
+      }
+      return errorResult(
+        `No alert found with id \`${id}\` on this account. Use opa_list_price_alerts to see valid ids.`,
+      );
+    }
+    if (!result.ok) {
+      return errorResult(alertHttpError(result, "test the price alert"));
+    }
+    return textResult(formatAlertTest(result.body as AlertTestResult));
   },
 );
 

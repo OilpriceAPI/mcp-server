@@ -1526,8 +1526,8 @@ describe("tool registration metadata", () => {
   const DELETE_TOOLS = ["opa_delete_price_alert", "opa_delete_subscription"];
   const WRITE_TOOLS = new Set([...CREATE_TOOLS, ...DELETE_TOOLS]);
 
-  it("registers exactly 40 tools", () => {
-    expect(Object.keys(tools)).toHaveLength(40);
+  it("registers exactly 52 tools", () => {
+    expect(Object.keys(tools)).toHaveLength(52);
     expect(tools.opa_get_product_facts).toBeDefined();
     expect(tools.opa_get_natural_gas_hubs).toBeDefined();
     expect(tools.opa_get_account_status).toBeDefined();
@@ -1543,9 +1543,15 @@ describe("tool registration metadata", () => {
     opa_get_futures: /eligible account entitlement.*opa_get_plans/,
     opa_get_futures_curve: /eligible account entitlement.*opa_get_plans/,
     opa_get_futures_history: /eligible account entitlement.*opa_get_plans/,
+    opa_get_continuous_futures_history: /eligible account entitlement.*opa_get_plans/,
+    opa_get_natural_gas_storage: /eligible account entitlement.*opa_get_plans/,
     opa_get_marine_fuels: /eligible account entitlement.*opa_get_plans/,
     opa_get_marine_fuel_history: /eligible account entitlement.*opa_get_plans/,
     opa_get_spread: /eligible account entitlement.*opa_get_plans/,
+    opa_get_price_statistics: /eligible account entitlement.*opa_get_plans/,
+    opa_get_price_trend: /eligible account entitlement.*opa_get_plans/,
+    opa_get_price_correlation: /eligible account entitlement.*opa_get_plans/,
+    opa_get_spread_statistics: /eligible account entitlement.*opa_get_plans/,
     opa_get_storage: /eligible account entitlement.*opa_get_plans/,
     opa_get_rig_counts: /eligible account entitlement.*opa_get_plans/,
     opa_get_opec_production: /eligible account entitlement.*opa_get_plans/,
@@ -1553,6 +1559,7 @@ describe("tool registration metadata", () => {
     opa_get_forecasts: /eligible account entitlement.*opa_get_plans/,
     opa_get_drilling: /eligible account entitlement.*opa_get_plans/,
     opa_get_well_permits: /eligible account entitlement.*opa_get_plans/,
+    opa_list_well_permits: /eligible account entitlement.*opa_get_plans/,
     opa_get_well_production: /eligible account entitlement.*opa_get_plans/,
     opa_get_natural_gas_hubs: /eligible account entitlement.*opa_get_plans/,
     opa_get_data_quality: /eligible account entitlement.*opa_get_plans/,

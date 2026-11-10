@@ -359,16 +359,16 @@ describe("opa_get_futures_history (#124)", () => {
       });
     }
 
-    it("the schema allows only the three canonical instruments and YYYY-MM months", () => {
+    it("the schema allows only the four canonical instruments and YYYY-MM months", () => {
       const schema = tools[TOOL].inputSchema as {
         safeParse: (value: unknown) => { success: boolean };
       };
       const base = { contract: "brent", from: "2026-09-01" };
       expect(schema.safeParse(base).success).toBe(true);
-      for (const contract of ["wti", "natural-gas"]) {
+      for (const contract of ["wti", "natural-gas", "gasoil"]) {
         expect(schema.safeParse({ ...base, contract }).success).toBe(true);
       }
-      for (const contract of ["gasoil", "ttf-gas", "../prices", "BRENT"]) {
+      for (const contract of ["ice-gasoil", "ttf-gas", "../prices", "BRENT"]) {
         expect(schema.safeParse({ ...base, contract }).success).toBe(false);
       }
       expect(
