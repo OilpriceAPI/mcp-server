@@ -202,7 +202,9 @@ package and no remote endpoint.
 The hosted connector at `https://mcp.oilpriceapi.com/mcp` is not this server.
 It is a separate, smaller set of `energy_*` tools with OAuth account linking,
 used by hosted clients that cannot launch a local process. Use this package for
-the full `opa_*` tool set.
+the full `opa_*` tool set. The hosted connector has its own MCP Registry
+record, `io.github.OilpriceAPI/hosted-energy`, defined in `server.hosted.json`
+and published by the manual `registry-hosted.yml` workflow.
 
 ## Environment Variables
 

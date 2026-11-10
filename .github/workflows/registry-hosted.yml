@@ -1,0 +1,102 @@
+name: MCP registry - hosted server
+
+env:
+  MCP_PUBLISHER_VERSION: v1.8.1
+  MCP_PUBLISHER_ARCHIVE: mcp-publisher_linux_amd64.tar.gz
+  MCP_PUBLISHER_SHA256: a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc
+  HOSTED_RECORD_URL: https://registry.modelcontextprotocol.io/v0.1/servers/io.github.OilpriceAPI%2Fhosted-energy/versions/latest
+
+# Publishes server.hosted.json: the official MCP Registry entry for the hosted
+# energy_* server at https://mcp.oilpriceapi.com/mcp (website-clean#2877).
+# This is a different server from the npm opa_*/stdio package in server.json
+# (#146), so it has its own registry name and its own version, which tracks
+# the hosted serverInfo version (src/energyPlugin.ts PLUGIN_VERSION).
+# Manual dispatch only: a registry version is permanent once published.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  registry:
+    name: Publish hosted server to MCP registry
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require dispatch from main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::dispatch from main only (got $GITHUB_REF)"
+            exit 1
+          fi
+
+      - name: Verify the live endpoint reports the record's version
+        run: |
+          WANT=$(jq -r .version server.hosted.json)
+          GOT=$(curl --fail --silent --show-error --max-time 30 \
+            -X POST https://mcp.oilpriceapi.com/mcp \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"registry-hosted-workflow","version":"0"}}}' \
+            | jq -r .result.serverInfo.version)
+          if [ "$WANT" != "$GOT" ]; then
+            echo "::error::server.hosted.json version $WANT but live serverInfo is $GOT"
+            exit 1
+          fi
+
+      - name: Install pinned MCP registry publisher
+        run: |
+          ARCHIVE="$RUNNER_TEMP/$MCP_PUBLISHER_ARCHIVE"
+          curl --fail --location --silent --show-error --max-time 60 --retry 3 \
+            --output "$ARCHIVE" \
+            "https://github.com/modelcontextprotocol/registry/releases/download/$MCP_PUBLISHER_VERSION/$MCP_PUBLISHER_ARCHIVE"
+          echo "$MCP_PUBLISHER_SHA256  $ARCHIVE" | sha256sum -c -
+          tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP" mcp-publisher
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Validate hosted registry metadata
+        run: timeout 2m mcp-publisher validate server.hosted.json
+
+      - name: Check whether the public registry already matches
+        id: registry_state
+        run: |
+          WANT=$(jq -r .version server.hosted.json)
+          GOT=$(curl --silent --max-time 30 "$HOSTED_RECORD_URL" | jq -r '.server.version // empty' || true)
+          if [ "$WANT" = "$GOT" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Login to MCP registry (GitHub OIDC)
+        if: steps.registry_state.outputs.current != 'true'
+        run: timeout 2m mcp-publisher login github-oidc
+
+      - name: Publish server.hosted.json
+        if: steps.registry_state.outputs.current != 'true'
+        run: timeout 5m mcp-publisher publish server.hosted.json
+
+      - name: Verify public registry readback
+        run: |
+          WANT_VERSION=$(jq -r .version server.hosted.json)
+          WANT_REMOTES=$(jq -c .remotes server.hosted.json)
+          for i in 1 2 3 4 5 6; do
+            BODY=$(curl --silent --max-time 30 "$HOSTED_RECORD_URL" || true)
+            GOT_VERSION=$(echo "$BODY" | jq -r '.server.version // empty' 2>/dev/null || true)
+            GOT_REMOTES=$(echo "$BODY" | jq -c '.server.remotes // empty' 2>/dev/null || true)
+            if [ "$GOT_VERSION" = "$WANT_VERSION" ] && [ "$GOT_REMOTES" = "$WANT_REMOTES" ]; then
+              echo "registry readback matches: $GOT_VERSION $GOT_REMOTES"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::registry readback mismatch: version '$GOT_VERSION' remotes '$GOT_REMOTES'"
+          exit 1
