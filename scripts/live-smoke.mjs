@@ -145,6 +145,17 @@ function validateShape(shape, body) {
     );
     return;
   }
+  if (shape === "continuous-futures-history") {
+    // #195: a closed past window, so an empty prices array is a failure.
+    assert(Array.isArray(body.prices) && body.prices.length > 0, "continuous futures history has no prices");
+    assert(body.metadata?.official_settlement === false, "continuous futures history must report official_settlement=false");
+    return;
+  }
+  if (shape === "natural-gas-storage") {
+    assert(body.success === true, `expected success=true, received ${String(body.success)}`);
+    assert(body.storage && typeof body.storage === "object", "natural gas storage has no storage report");
+    return;
+  }
   if (shape === "subscriptions") {
     const subscriptions = body.subscriptions ?? body.data?.subscriptions;
     assert(Array.isArray(subscriptions), "subscription response has no subscriptions array");

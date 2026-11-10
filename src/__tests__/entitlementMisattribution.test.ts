@@ -184,6 +184,22 @@ const SITES: Array<{
     tool: "opa_get_futures_history",
     args: { contract: "brent", from: "2026-09-01", to: "2026-09-03" },
   },
+  // #195: market history tools inherit the same contract.
+  {
+    label: "opa_get_continuous_futures_history",
+    tool: "opa_get_continuous_futures_history",
+    args: { contract: "brent", from: "2026-09-01", to: "2026-09-03" },
+  },
+  {
+    label: "opa_get_natural_gas_storage",
+    tool: "opa_get_natural_gas_storage",
+    args: {},
+  },
+  {
+    label: "opa_get_macro_releases",
+    tool: "opa_get_macro_releases",
+    args: { days: 30 },
+  },
 ];
 
 describe("#103 — a failed request never blames the account's entitlement", () => {

@@ -84,11 +84,32 @@ export const LIVE_CONTRACT_CATALOG = {
       },
     },
   ),
+  // #195: a closed past window, so the contract is deterministic. The path is
+  // byte-for-byte the request the handler builds from these args.
+  opa_get_continuous_futures_history: read(
+    "/v1/futures/continuous/brent/historical?from=2026-10-20&to=2026-10-24&interval=1d",
+    "continuous-futures-history",
+    "conditional",
+    {
+      args: {
+        contract: "brent",
+        from: "2026-10-20",
+        to: "2026-10-24",
+        interval: "daily",
+      },
+    },
+  ),
   opa_get_natural_gas_hubs: read(
     "/v1/natural-gas/hubs",
     "success-envelope",
     "conditional",
     { args: {} },
+  ),
+  opa_get_natural_gas_storage: read(
+    "/v1/natural-gas/storage?historical=true&weeks=2",
+    "natural-gas-storage",
+    "conditional",
+    { args: { historical: true, weeks: 2 } },
   ),
   opa_get_marine_fuels: read(
     "/v1/prices/marine-fuels/latest?limit=100",
@@ -146,6 +167,12 @@ export const LIVE_CONTRACT_CATALOG = {
   opa_get_oil_inventories: read(
     "/v1/ei/oil_inventories/latest",
     "data-envelope",
+  ),
+  opa_get_macro_releases: read(
+    "/v1/macro/releases?days=30",
+    "success-envelope",
+    "ungated",
+    { args: { days: 30 } },
   ),
   opa_get_well_permits: read(
     "/v1/ei/well-permits/latest",
