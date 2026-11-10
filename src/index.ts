@@ -2756,6 +2756,26 @@ const KEYLESS_TOOL_TEASERS: Record<string, { does: string; example: string }> =
       example:
         "Brent futures 2026-12 — USD per bbl · | 2026-09-01 | 88.58 | 92.12 | 88.46 | 91.92 | · 4 trading days",
     },
+    opa_get_price_statistics: {
+      does: "Returns the z-score, percentile and annualized volatility of a commodity's latest price against its trailing window, with interpretations.",
+      example:
+        "Price statistics — WTI_USD, trailing 30 days · Z-score -X.XX · Percentile X.X · Annualized volatility X.XX%",
+    },
+    opa_get_price_trend: {
+      does: "Returns trend direction and strength, RSI, 20-day SMA, support and resistance and a combined signal for a commodity, or one indicator series (SMA, EMA, RSI, levels).",
+      example:
+        "Trend and momentum — WTI_USD · Trend bearish, strength NN · RSI NN.N · 20-day SMA XX.XX",
+    },
+    opa_get_price_correlation: {
+      does: "Returns the correlation of daily prices between two commodities with strength, stability and a rolling series, or a correlation matrix for up to 10 commodities.",
+      example:
+        "Price correlation — WTI_USD vs BRENT_CRUDE_USD · Pearson correlation 0.9XX · Stability 0.XXX",
+    },
+    opa_get_spread_statistics: {
+      does: "Returns a named basis, crack or ratio spread against its trailing distribution (mean, std dev, z-score, percentile), or its daily series.",
+      example:
+        "Spread distribution — WTI-Brent crude oil basis spread · Current -X.XX USD/barrel · z-score X.XX, percentile NN",
+    },
     opa_get_marine_fuels: {
       does: "Returns marine bunker fuel prices (VLSFO, MGO, IFO380) across major shipping ports like Singapore and Rotterdam.",
       example: "SINGAPORE | VLSFO | $XXX.XX | USD | metric ton",
@@ -6200,6 +6220,562 @@ server.registerTool(
     text += "\n_Data from [OilPriceAPI](https://oilpriceapi.com)_";
 
     return textResult(text);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Computed price analytics (ledger v9) — wraps the four /v1/analytics
+// operations:
+//   GET /v1/analytics/statistics   opa_get_price_statistics
+//   GET /v1/analytics/trend        opa_get_price_trend
+//   GET /v1/analytics/correlation  opa_get_price_correlation
+//   GET /v1/analytics/spread       opa_get_spread_statistics
+//
+// Verified live 2026-11-10 with the Scale smoke key. Bodies are bare objects
+// (no {status, data} envelope). Every operation is plan-gated: other plans
+// get HTTP 403 with upgrade_url (statistics also carries a labelled
+// `sample_data` object, which this server never renders as data). An unknown
+// code or spread is 404 {error, ...}; a missing code is 400.
+//
+// The bodies also carry a `tier` field. On 2026-11-10 it read "free" for a
+// Scale account (oilpriceapi-api analytics_controller#current_user_tier does
+// not map Gen-2 plans), so it is not rendered.
+// ---------------------------------------------------------------------------
+
+const ANALYTICS_GATE =
+  "The API serves analytics to the Professional and Scale plans (and active trials) per its contract, and answers HTTP 403 for other plans.";
+export const ANALYTICS_MAX_ROWS = 400;
+
+function analyticsNumber(value: unknown): string {
+  return typeof value === "number" && Number.isFinite(value)
+    ? String(value)
+    : NOT_REPORTED;
+}
+
+function analyticsList(values: unknown): string {
+  return Array.isArray(values) && values.length
+    ? values.map(analyticsNumber).join(", ")
+    : "none reported";
+}
+
+/** Render a dated series of {date, <valueKey>, price?} rows, capped. */
+function analyticsSeries(
+  rows: unknown,
+  columns: Array<{ key: string; label: string }>,
+): string[] {
+  const list = Array.isArray(rows)
+    ? (rows as Array<Record<string, unknown>>)
+    : [];
+  if (list.length === 0) return ["", "The API returned no series rows."];
+  const shown = list.slice(-ANALYTICS_MAX_ROWS);
+  const lines = [
+    "",
+    `| Date | ${columns.map((c) => c.label).join(" | ")} |`,
+    `| --- | ${columns.map(() => "---").join(" | ")} |`,
+  ];
+  for (const row of shown) {
+    lines.push(
+      `| ${reportedValue(row.date as string | undefined)} | ${columns.map((c) => analyticsNumber(row[c.key])).join(" | ")} |`,
+    );
+  }
+  if (shown.length < list.length) {
+    lines.push(
+      "",
+      `⚠ Partial answer: the API returned ${list.length} rows and this answer shows the latest ${shown.length}. Shorten period to see fewer.`,
+    );
+  }
+  return lines;
+}
+
+const ANALYTICS_FOOTER = [
+  "",
+  "_Computed by the API from OilPriceAPI's stored daily prices; an analytic, not a forecast._",
+  "",
+  `_Data from [OilPriceAPI](https://oilpriceapi.com)_`,
+];
+
+/**
+ * Shared request path: resolve nothing, call, and turn a non-2xx into the
+ * right sentence. 403 never reaches here (requestApi throws the gate error).
+ */
+async function analyticsRequest<T>(
+  path: string,
+  label: string,
+): Promise<{ data: T } | { error: ReturnType<typeof errorResult> }> {
+  const outcome = await requestApi<T>(path);
+  if (!outcome.data) {
+    return {
+      error: errorResult(
+        describeUnavailable(label, outcome, `${label}: the API returned no body.`),
+      ),
+    };
+  }
+  return { data: outcome.data };
+}
+
+interface StatisticsData {
+  code?: string;
+  period?: number;
+  statistics?: {
+    z_score?: number;
+    z_score_interpretation?: string;
+    percentile?: number;
+    percentile_interpretation?: string;
+    volatility?: number;
+    volatility_interpretation?: string;
+    calculated_at?: string;
+  };
+}
+
+export function formatPriceStatistics(data: StatisticsData): string {
+  const s = data.statistics ?? {};
+  return [
+    `# Price statistics — ${reportedValue(data.code)}, trailing ${reportedValue(data.period)} days`,
+    "",
+    `- **Z-score of the latest price**: ${analyticsNumber(s.z_score)} — ${reportedValue(s.z_score_interpretation)}`,
+    `- **Percentile within the window**: ${analyticsNumber(s.percentile)} — ${reportedValue(s.percentile_interpretation)}`,
+    `- **Annualized volatility**: ${analyticsNumber(s.volatility)}% — ${reportedValue(s.volatility_interpretation)}`,
+    `- **Calculated**: ${formatUtcTimestamp(s.calculated_at)}`,
+    ...ANALYTICS_FOOTER,
+  ].join("\n");
+}
+
+interface TrendData {
+  type?: string;
+  code?: string;
+  period?: number;
+  window?: number;
+  values?: Array<Record<string, unknown>>;
+  trend?: {
+    direction?: string;
+    strength?: number;
+    strength_interpretation?: string;
+    slope_per_day?: number;
+    price_change_pct?: number;
+    short_term_change_pct?: number;
+    momentum?: string;
+    period_days?: number;
+  };
+  momentum?: { rsi?: number; rsi_interpretation?: string };
+  moving_averages?: { sma_20?: number; price_vs_sma?: string };
+  levels?: { support?: number[]; resistance?: number[]; pivot_point?: number };
+  signal?: { value?: number; interpretation?: string; confidence?: string };
+  current_price?: number;
+  support?: number[];
+  resistance?: number[];
+  pivot_point?: number;
+  range?: { high?: number; low?: number; spread?: number; spread_pct?: number };
+  quartiles?: { q1?: number; median?: number; q3?: number };
+  price_position?: string;
+  calculated_at?: string;
+}
+
+export function formatPriceTrend(data: TrendData): string {
+  const type = data.type ?? "analysis";
+  const code = reportedValue(data.code);
+  if (type === "sma" || type === "ema" || type === "rsi") {
+    return [
+      `# ${type.toUpperCase()} — ${code}, ${reportedValue(data.window)}-day window`,
+      ...analyticsSeries(data.values, [
+        { key: type, label: type.toUpperCase() },
+        { key: "price", label: "Price" },
+      ]),
+      ...ANALYTICS_FOOTER,
+    ].join("\n");
+  }
+  if (type === "levels") {
+    return [
+      `# Support and resistance — ${code}, trailing ${reportedValue(data.period)} days`,
+      "",
+      `- **Current price**: ${analyticsNumber(data.current_price)} (${reportedValue(data.price_position)} of the range)`,
+      `- **Support**: ${analyticsList(data.support)}`,
+      `- **Resistance**: ${analyticsList(data.resistance)}`,
+      `- **Pivot point**: ${analyticsNumber(data.pivot_point)}`,
+      `- **Range**: low ${analyticsNumber(data.range?.low)}, high ${analyticsNumber(data.range?.high)} (${analyticsNumber(data.range?.spread_pct)}%)`,
+      `- **Quartiles**: Q1 ${analyticsNumber(data.quartiles?.q1)}, median ${analyticsNumber(data.quartiles?.median)}, Q3 ${analyticsNumber(data.quartiles?.q3)}`,
+      ...ANALYTICS_FOOTER,
+    ].join("\n");
+  }
+  const t = data.trend ?? {};
+  return [
+    `# Trend and momentum — ${code}, trailing ${reportedValue(t.period_days ?? data.period)} days`,
+    "",
+    `- **Trend**: ${reportedValue(t.direction)}, strength ${analyticsNumber(t.strength)} (${reportedValue(t.strength_interpretation)}), slope ${analyticsNumber(t.slope_per_day)} per day`,
+    `- **Price change over the window**: ${analyticsNumber(t.price_change_pct)}%; short term ${analyticsNumber(t.short_term_change_pct)}%; momentum ${reportedValue(t.momentum)}`,
+    `- **RSI**: ${analyticsNumber(data.momentum?.rsi)} (${reportedValue(data.momentum?.rsi_interpretation)})`,
+    `- **20-day SMA**: ${analyticsNumber(data.moving_averages?.sma_20)} (price ${reportedValue(data.moving_averages?.price_vs_sma)})`,
+    `- **Support**: ${analyticsList(data.levels?.support)}; **resistance**: ${analyticsList(data.levels?.resistance)}; **pivot**: ${analyticsNumber(data.levels?.pivot_point)}`,
+    `- **Combined signal**: ${analyticsNumber(data.signal?.value)} (${reportedValue(data.signal?.interpretation)}, ${reportedValue(data.signal?.confidence)} confidence)`,
+    `- **Calculated**: ${formatUtcTimestamp(data.calculated_at)}`,
+    ...ANALYTICS_FOOTER,
+  ].join("\n");
+}
+
+interface CorrelationData {
+  type?: string;
+  code1?: string;
+  code2?: string;
+  codes?: string[];
+  period?: number;
+  period_days?: number;
+  window?: number;
+  correlation?: number;
+  correlation_interpretation?: string;
+  strength?: string;
+  direction?: string;
+  stability?: number;
+  stability_interpretation?: string;
+  data_points?: number;
+  rolling_correlation?: Array<Record<string, unknown>>;
+  matrix?: Record<string, Record<string, number>>;
+  calculated_at?: string;
+}
+
+export function formatPriceCorrelation(data: CorrelationData): string {
+  const type = data.type ?? "analysis";
+  const pair = `${reportedValue(data.code1)} vs ${reportedValue(data.code2)}`;
+  if (type === "matrix") {
+    const codes = Array.isArray(data.codes)
+      ? data.codes
+      : Object.keys(data.matrix ?? {});
+    const lines = [
+      `# Correlation matrix — trailing ${reportedValue(data.period)} days`,
+      "",
+      `| | ${codes.join(" | ")} |`,
+      `| --- | ${codes.map(() => "---").join(" | ")} |`,
+    ];
+    for (const row of codes) {
+      lines.push(
+        `| ${row} | ${codes.map((col) => analyticsNumber(data.matrix?.[row]?.[col])).join(" | ")} |`,
+      );
+    }
+    return [...lines, ...ANALYTICS_FOOTER].join("\n");
+  }
+  if (type === "rolling") {
+    return [
+      `# Rolling correlation — ${pair}, ${reportedValue(data.window)}-day window over ${reportedValue(data.period)} days`,
+      ...analyticsSeries(data.rolling_correlation, [
+        { key: "correlation", label: "Correlation" },
+      ]),
+      ...ANALYTICS_FOOTER,
+    ].join("\n");
+  }
+  return [
+    `# Price correlation — ${pair}, trailing ${reportedValue(data.period_days ?? data.period)} days`,
+    "",
+    `- **Pearson correlation of daily prices**: ${analyticsNumber(data.correlation)} — ${reportedValue(data.correlation_interpretation)}`,
+    `- **Strength / direction**: ${reportedValue(data.strength)}, ${reportedValue(data.direction)}`,
+    `- **Stability**: ${analyticsNumber(data.stability)} — ${reportedValue(data.stability_interpretation)}`,
+    `- **Data points**: ${analyticsNumber(data.data_points)}`,
+    `- **Calculated**: ${formatUtcTimestamp(data.calculated_at)}`,
+    "",
+    "## Rolling correlation",
+    ...analyticsSeries(data.rolling_correlation, [
+      { key: "correlation", label: "Correlation" },
+    ]),
+    ...ANALYTICS_FOOTER,
+  ].join("\n");
+}
+
+interface SpreadAnalyticsData {
+  type?: string;
+  available_spreads?: Array<{
+    name?: string;
+    type?: string;
+    description?: string;
+    unit?: string;
+  }>;
+  spread?: string;
+  spread_name?: string;
+  code1?: string;
+  code2?: string;
+  price1?: number;
+  price2?: number;
+  current_spread?: number;
+  unit?: string;
+  period?: number;
+  historical?: {
+    mean?: number;
+    std_dev?: number;
+    min?: number;
+    max?: number;
+    percentile?: number;
+    z_score?: number;
+    data_points?: number;
+  };
+  interpretation?: string;
+  data?: Array<Record<string, unknown>>;
+  calculated_at?: string;
+}
+
+export function formatSpreadStatistics(
+  data: SpreadAnalyticsData,
+  period: number,
+): string {
+  if (Array.isArray(data.available_spreads) && !data.type) {
+    const lines = [
+      "# Spreads available for distribution analysis",
+      "",
+      "| Spread | Type | Description | Unit |",
+      "| --- | --- | --- | --- |",
+    ];
+    for (const s of data.available_spreads) {
+      lines.push(
+        `| \`${reportedValue(s.name)}\` | ${reportedValue(s.type)} | ${reportedValue(s.description)} | ${reportedValue(s.unit)} |`,
+      );
+    }
+    lines.push(
+      "",
+      "Pass one of these names as `spread` to get its current value against its trailing distribution.",
+      "",
+      `_Data from [OilPriceAPI](https://oilpriceapi.com)_`,
+    );
+    return lines.join("\n");
+  }
+  if (data.type === "historical") {
+    return [
+      `# Daily spread series — \`${reportedValue(data.spread)}\`, trailing ${reportedValue(data.period ?? period)} days`,
+      ...analyticsSeries(data.data, [
+        { key: "spread", label: "Spread" },
+        { key: "price1", label: "Leg 1" },
+        { key: "price2", label: "Leg 2" },
+      ]),
+      ...ANALYTICS_FOOTER,
+    ].join("\n");
+  }
+  const h = data.historical ?? {};
+  return [
+    `# Spread distribution — ${reportedValue(data.spread_name)}, trailing ${period} days`,
+    "",
+    `- **Current spread**: ${analyticsNumber(data.current_spread)} ${reportedValue(data.unit)} (${reportedValue(data.code1)} ${analyticsNumber(data.price1)} vs ${reportedValue(data.code2)} ${analyticsNumber(data.price2)})`,
+    `- **Window**: mean ${analyticsNumber(h.mean)}, std dev ${analyticsNumber(h.std_dev)}, min ${analyticsNumber(h.min)}, max ${analyticsNumber(h.max)} (${analyticsNumber(h.data_points)} data points)`,
+    `- **Position**: z-score ${analyticsNumber(h.z_score)}, percentile ${analyticsNumber(h.percentile)}`,
+    `- **Interpretation**: ${reportedValue(data.interpretation)}`,
+    `- **Calculated**: ${formatUtcTimestamp(data.calculated_at)}`,
+    ...ANALYTICS_FOOTER,
+  ].join("\n");
+}
+
+const ANALYTICS_PERIOD = z
+  .number()
+  .int()
+  .min(1)
+  .max(365)
+  .default(30)
+  .describe("Trailing window in days, 1 to 365 (default: 30).");
+
+server.registerTool(
+  "opa_get_price_statistics",
+  {
+    title: "Get Price Statistics",
+    description:
+      "Get the z-score, percentile and annualized volatility of a commodity's latest price against its trailing window of daily prices, each with a plain-language interpretation. Use when the user asks whether a price is unusually high or low, or how volatile it has been. opa_get_history returns the underlying series. " +
+      ANALYTICS_GATE +
+      " " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
+    inputSchema: {
+      commodity: z
+        .string()
+        .describe("Commodity name or code (e.g. 'brent', 'WTI_USD')."),
+      period: ANALYTICS_PERIOD,
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ commodity, period }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_price_statistics");
+    const resolved = resolveOrError(commodity);
+    if ("error" in resolved) return resolved.error;
+    const query = new URLSearchParams({
+      code: resolved.code,
+      period: String(period ?? 30),
+    });
+    const result = await analyticsRequest<StatisticsData>(
+      `/v1/analytics/statistics?${query.toString()}`,
+      `Price statistics for ${resolved.code}`,
+    );
+    if ("error" in result) return result.error;
+    return textResult(formatPriceStatistics(result.data));
+  },
+);
+
+export const TREND_TYPES = ["analysis", "sma", "ema", "rsi", "levels"] as const;
+
+server.registerTool(
+  "opa_get_price_trend",
+  {
+    title: "Get Price Trend",
+    description:
+      "Get trend and momentum for a commodity from its daily prices: trend direction and strength, RSI, 20-day SMA, support and resistance levels and a combined signal (type=analysis, the default), or one indicator series: sma, ema or rsi (dated values with the price), or levels (support, resistance, pivot, range and quartiles). Indicator types use at least 90 days of history. Use when the user asks about technical trend, momentum or support and resistance. These are computed indicators, not forecasts. " +
+      ANALYTICS_GATE +
+      " " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
+    inputSchema: {
+      commodity: z
+        .string()
+        .describe("Commodity name or code (e.g. 'brent', 'WTI_USD')."),
+      period: ANALYTICS_PERIOD,
+      type: z
+        .enum(TREND_TYPES)
+        .default("analysis")
+        .describe("analysis (default), sma, ema, rsi or levels."),
+      window: z
+        .number()
+        .int()
+        .min(2)
+        .max(200)
+        .optional()
+        .describe("Indicator window in days for sma/ema (API default 20) or rsi (API default 14)."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ commodity, period, type, window }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_price_trend");
+    const resolved = resolveOrError(commodity);
+    if ("error" in resolved) return resolved.error;
+    const kind = type ?? "analysis";
+    const query = new URLSearchParams({
+      code: resolved.code,
+      period: String(period ?? 30),
+      type: kind,
+    });
+    if (window !== undefined && ["sma", "ema", "rsi"].includes(kind)) {
+      query.set("window", String(window));
+    }
+    const result = await analyticsRequest<TrendData>(
+      `/v1/analytics/trend?${query.toString()}`,
+      `Price trend for ${resolved.code}`,
+    );
+    if ("error" in result) return result.error;
+    return textResult(formatPriceTrend(result.data));
+  },
+);
+
+export const CORRELATION_TYPES = ["analysis", "rolling", "matrix"] as const;
+
+server.registerTool(
+  "opa_get_price_correlation",
+  {
+    title: "Get Price Correlation",
+    description:
+      "Get the Pearson correlation of daily prices between two commodities over a trailing window, with strength, direction, stability and a rolling series (type=analysis, the default); only the rolling series for a chosen window (type=rolling); or a correlation matrix for 2 to 10 commodities (type=matrix with commodities). Use when the user asks how closely two prices move together. " +
+      ANALYTICS_GATE +
+      " " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
+    inputSchema: {
+      commodity1: z.string().describe("First commodity name or code (e.g. 'wti')."),
+      commodity2: z.string().describe("Second commodity name or code (e.g. 'brent')."),
+      period: ANALYTICS_PERIOD,
+      type: z
+        .enum(CORRELATION_TYPES)
+        .default("analysis")
+        .describe("analysis (default), rolling or matrix."),
+      window: z
+        .number()
+        .int()
+        .min(2)
+        .max(90)
+        .optional()
+        .describe("Rolling window in days for type=rolling (API default 7)."),
+      commodities: z
+        .array(z.string())
+        .min(2)
+        .max(10)
+        .optional()
+        .describe("For type=matrix: 2 to 10 commodity names or codes."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ commodity1, commodity2, period, type, window, commodities }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_price_correlation");
+    const kind = type ?? "analysis";
+    const first = resolveOrError(commodity1);
+    if ("error" in first) return first.error;
+    const second = resolveOrError(commodity2);
+    if ("error" in second) return second.error;
+    const query = new URLSearchParams({
+      code1: first.code,
+      code2: second.code,
+      period: String(period ?? 30),
+      type: kind,
+    });
+    if (kind === "rolling" && window !== undefined) {
+      query.set("window", String(window));
+    }
+    if (kind === "matrix") {
+      if (!commodities || commodities.length < 2) {
+        return errorResult(
+          "type=matrix needs commodities: a list of 2 to 10 commodity names or codes.",
+        );
+      }
+      const codes: string[] = [];
+      for (const name of commodities) {
+        const resolved = resolveOrError(name);
+        if ("error" in resolved) return resolved.error;
+        if (!codes.includes(resolved.code)) codes.push(resolved.code);
+      }
+      query.set("codes", codes.join(","));
+    }
+    const result = await analyticsRequest<CorrelationData>(
+      `/v1/analytics/correlation?${query.toString()}`,
+      `Price correlation for ${first.code} and ${second.code}`,
+    );
+    if ("error" in result) return result.error;
+    return textResult(formatPriceCorrelation(result.data));
+  },
+);
+
+export const SPREAD_ANALYTICS_TYPES = ["current", "historical"] as const;
+
+server.registerTool(
+  "opa_get_spread_statistics",
+  {
+    title: "Get Spread Statistics",
+    description:
+      "Get a named basis, crack or ratio spread (for example wti_brent, 321, diesel_crack, lng_us_europe) against its trailing distribution: current value and legs, mean, standard deviation, min, max, z-score and percentile (type=current, the default), or its daily series (type=historical). Omit spread to list the available spread names. Use when the user asks whether a spread is wide or narrow relative to recent history; opa_get_spread returns current crack, basis and margin values without the distribution. " +
+      ANALYTICS_GATE +
+      " " +
+      ACCOUNT_ENTITLEMENT_GUIDANCE,
+    inputSchema: {
+      spread: z
+        .string()
+        .regex(/^[a-z0-9_]{1,40}$/)
+        .optional()
+        .describe("Spread name, e.g. 'wti_brent'. Omit to list available spreads."),
+      period: ANALYTICS_PERIOD,
+      type: z
+        .enum(SPREAD_ANALYTICS_TYPES)
+        .default("current")
+        .describe("current (default) or historical."),
+    },
+    annotations: READ_TOOL_ANNOTATIONS,
+  },
+  async ({ spread, period, type }) => {
+    if (!getApiKey()) return keylessTeaserResult("opa_get_spread_statistics");
+    const days = period ?? 30;
+    const query = new URLSearchParams();
+    if (spread) {
+      query.set("spread", spread);
+      query.set("period", String(days));
+      query.set("type", type ?? "current");
+    }
+    const qs = query.toString();
+    const outcome = await requestApi<SpreadAnalyticsData>(
+      `/v1/analytics/spread${qs ? `?${qs}` : ""}`,
+    );
+    const label = spread ? `Spread statistics for ${spread}` : "The spread list";
+    if (!outcome.data) {
+      return errorResult(
+        describeUnavailable(
+          label,
+          outcome,
+          `${label}: the API returned no body.`,
+          spread
+            ? "Call opa_get_spread_statistics without spread to list valid names."
+            : undefined,
+        ),
+      );
+    }
+    return textResult(formatSpreadStatistics(outcome.data, days));
   },
 );
 

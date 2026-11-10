@@ -145,6 +145,12 @@ function validateShape(shape, body) {
     );
     return;
   }
+  if (shape === "analytics") {
+    // #195: bare analytics objects; an `error` key is a failed computation.
+    assert(!Array.isArray(body), "expected an analytics object");
+    assert(body.error === undefined, `analytics answered with an error: ${String(body.error)}`);
+    return;
+  }
   if (shape === "subscriptions") {
     const subscriptions = body.subscriptions ?? body.data?.subscriptions;
     assert(Array.isArray(subscriptions), "subscription response has no subscriptions array");

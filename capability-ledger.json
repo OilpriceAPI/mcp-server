@@ -1,7 +1,7 @@
 {
   "$comment": "API-to-MCP capability ledger (#77). One row per operation in the published OpenAPI contract. Checked by `npm run check:capability-ledger` against the live contract, build/capabilities.json and src/index.ts. Bump ledgerVersion and append to changes for every decision change, and link the change from the release notes.",
   "schemaVersion": "1.0.0",
-  "ledgerVersion": 8,
+  "ledgerVersion": 9,
   "source": {
     "openapi": {
       "url": "https://api.oilpriceapi.com/openapi.json",
@@ -372,9 +372,15 @@
     {
       "id": "analytics",
       "title": "Computed price analytics (statistics, trend, correlation, spread distribution)",
-      "status": "not_exposed",
+      "status": "exposed",
       "owner": "mcp-server",
-      "reason": "Four canonical Professional/Scale operations published after ledger version 7; no MCP tool and no measured MCP demand yet."
+      "tools": [
+        "opa_get_price_statistics",
+        "opa_get_price_trend",
+        "opa_get_price_correlation",
+        "opa_get_spread_statistics"
+      ],
+      "reason": "All four canonical Professional/Scale analytics operations are exposed (ledger 9). Each tool states the plan gate; the API's 403 sample_data is never rendered as data, and the response `tier` field is not rendered because it misreports Gen-2 plans."
     },
     {
       "id": "forecasts",
@@ -517,34 +523,38 @@
     {
       "operation": "GET /v1/analytics/correlation",
       "family": "analytics",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Professional/Scale analytics derived from price history (403 on other plans). opa_get_history and opa_get_history_range return the underlying series; no MCP tool yet. Revisit on measured MCP demand for computed analytics."
+      "status": "exposed",
+      "tools": [
+        "opa_get_price_correlation"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/analytics/spread",
       "family": "analytics",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Professional/Scale spread-distribution analytics (403 on other plans). opa_get_spread serves current crack, basis and margin values and history; this adds percentile and z-score context. Revisit on measured MCP demand."
+      "status": "exposed",
+      "tools": [
+        "opa_get_spread_statistics"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/analytics/statistics",
       "family": "analytics",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Professional/Scale analytics derived from price history (403 on other plans). opa_get_history and opa_get_history_range return the underlying series; no MCP tool yet. Revisit on measured MCP demand for computed analytics."
+      "status": "exposed",
+      "tools": [
+        "opa_get_price_statistics"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/analytics/trend",
       "family": "analytics",
-      "status": "not_exposed",
-      "disposition": "deferred",
-      "owner": "mcp-server",
-      "reason": "Professional/Scale analytics derived from price history (403 on other plans). opa_get_history and opa_get_history_range return the underlying series; no MCP tool yet. Revisit on measured MCP demand for computed analytics."
+      "status": "exposed",
+      "tools": [
+        "opa_get_price_trend"
+      ],
+      "owner": "mcp-server"
     },
     {
       "operation": "GET /v1/api-keys",
@@ -1667,6 +1677,12 @@
       "date": "2026-11-10",
       "issue": "https://github.com/OilpriceAPI/mcp-server/issues/192",
       "summary": "Record 18 operations the live OpenAPI contract published after ledger version 7 (136 operations, was 118 rows). Exposed: GET and POST /v1/alerts (existing price-alert tools; family moves to partial), GET /v1/futures/eua-carbon via the identical /v1/futures/eu-carbon alias. Alias: GET /v1/futures/ice-brent/historical. Deferred: POST /v1/alerts/{alert_id}/test, four /v1/analytics operations (new analytics family), GET /v1/ei/well-permits and /preview, GET /v1/fuel-surcharge/calculate (family moves to partial), continuous Brent and WTI history, ICE gasoil history, GET /v1/macro/releases, GET /v1/natural-gas/storage, GET /v1/status. Route-policy snapshot re-verified at oilpriceapi-api@3c8636e (latest commit to config/openapi_route_policy.yml, 2026-10-27): the 10 families[].pathPrefixes keep their audiences; changes since 66f46ed only add /v1/upgrade, /v1/brent, /v1/drilling/rig-count, /v1/constraints, /v1/price, /v1/prices/historical/week, /v1/prices/{}, PUT /v1/api-keys/{} and /v1/scheduled-deliveries, none of which the MCP calls. Supersedes #187."
+    },
+    {
+      "ledgerVersion": 9,
+      "date": "2026-11-10",
+      "issue": "https://github.com/OilpriceAPI/mcp-server/issues/195",
+      "summary": "Analytics (#195): expose the four /v1/analytics operations deferred in ledger 8 (new analytics family now exposed). GET /v1/analytics/statistics: opa_get_price_statistics. GET /v1/analytics/trend: opa_get_price_trend (analysis, sma, ema, rsi, levels). GET /v1/analytics/correlation: opa_get_price_correlation (analysis, rolling, matrix of 2-10 codes). GET /v1/analytics/spread: opa_get_spread_statistics (list, current, historical). Professional/Scale plan gate stated in every description; series capped at 400 rows. All four verified live 2026-11-10 with a Scale key."
     }
   ]
 }
