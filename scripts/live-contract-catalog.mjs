@@ -246,6 +246,38 @@ export const LIVE_CONTRACT_CATALOG = {
   opa_get_spread: read("/v1/spreads/crack", "success-envelope", "conditional", {
     args: { type: "crack" },
   }),
+  // #195: the paths are byte-for-byte the requests the handlers build.
+  opa_get_price_statistics: read(
+    "/v1/analytics/statistics?code=WTI_USD&period=30",
+    "analytics",
+    "conditional",
+    { args: { commodity: "WTI_USD", period: 30 } },
+  ),
+  opa_get_price_trend: read(
+    "/v1/analytics/trend?code=WTI_USD&period=30&type=analysis",
+    "analytics",
+    "conditional",
+    { args: { commodity: "WTI_USD", period: 30, type: "analysis" } },
+  ),
+  opa_get_price_correlation: read(
+    "/v1/analytics/correlation?code1=WTI_USD&code2=BRENT_CRUDE_USD&period=30&type=analysis",
+    "analytics",
+    "conditional",
+    {
+      args: {
+        commodity1: "WTI_USD",
+        commodity2: "BRENT_CRUDE_USD",
+        period: 30,
+        type: "analysis",
+      },
+    },
+  ),
+  opa_get_spread_statistics: read(
+    "/v1/analytics/spread?spread=wti_brent&period=30&type=current",
+    "analytics",
+    "conditional",
+    { args: { spread: "wti_brent", period: 30, type: "current" } },
+  ),
   opa_get_account_status: read("/v1/dashboard", "success-envelope", "ungated", {
     args: {},
   }),
