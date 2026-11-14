@@ -337,6 +337,13 @@ export async function executeEnergyTool(
                   signal: combined.signal,
                 });
               } catch {
+                // A cancelled call must surface as an abort so requestApi
+                // stops instead of retrying with backoff (#172).
+                if (combined.signal.aborted)
+                  throw new DOMException(
+                    "Upstream request cancelled",
+                    "AbortError",
+                  );
                 throw new Error("Upstream transport unavailable");
               }
             },
