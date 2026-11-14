@@ -1,7 +1,7 @@
 {
   "$comment": "API-to-MCP capability ledger (#77). One row per operation in the published OpenAPI contract. Checked by `npm run check:capability-ledger` against the live contract, build/capabilities.json and src/index.ts. Bump ledgerVersion and append to changes for every decision change, and link the change from the release notes.",
   "schemaVersion": "1.0.0",
-  "ledgerVersion": 9,
+  "ledgerVersion": 10,
   "source": {
     "openapi": {
       "url": "https://api.oilpriceapi.com/openapi.json",
@@ -644,6 +644,14 @@
       "disposition": "deferred",
       "owner": "mcp-server",
       "reason": "Regional retail series; opa_get_diesel_by_state covers state diesel through /v1/prices/latest. Low measured demand."
+    },
+    {
+      "operation": "GET /v1/diesel-prices/monthly-average",
+      "family": "retail-energy",
+      "status": "not_exposed",
+      "disposition": "deferred",
+      "owner": "mcp-server",
+      "reason": "Monthly average of the regional retail diesel series; same family and demand position as GET /v1/diesel-prices, which is deferred. State diesel stays reachable through opa_get_diesel_by_state."
     },
     {
       "operation": "GET /v1/drilling-intelligence",
@@ -1705,6 +1713,11 @@
       "date": "2026-11-10",
       "issue": "https://github.com/OilpriceAPI/mcp-server/issues/195",
       "summary": "Market history (#195): expose five operations deferred in ledger 8. GET /v1/futures/continuous/brent/historical and /wti/historical: new opa_get_continuous_futures_history (daily/weekly/monthly bars, says they are revisable snapshots and not settlements, states any entitlement start-date cap). GET /v1/futures/ice-gasoil/historical: opa_get_futures_history gains contract gasoil (USD per tonne). GET /v1/natural-gas/storage: new opa_get_natural_gas_storage (plan-gated, HTTP 403 without the entitlement; weeks bounded 1-52 by the tool). GET /v1/macro/releases: new opa_get_macro_releases (days 1-90, importance and source filters, calendar coverage caveat). Families futures, natural-gas-fundamentals and macro-calendar are partial. All five verified live 2026-11-10 with a Scale key. Tools (#195): expose three operations deferred in ledger 8. GET /v1/fuel-surcharge/calculate: new opa_calculate_fuel_surcharge (percent or per_mile, the seven EIA regions, 1-52 weeks; checks per-method required inputs before the request; states a stale index). POST /v1/alerts/{alert_id}/test: new opa_test_price_alert (read scope, automation category; dry run that sends nothing, metered). GET /v1/status: new keyless opa_get_service_status (core category; a 503 is reported as health unknown and not retried). Families fuel-surcharge, price-alerts and data-quality are exposed. All three verified live 2026-11-10. Drilling (#195): expose the two well-permit operations deferred in ledger 8. GET /v1/ei/well-permits: new opa_list_well_permits (states, permit-date range, page, per_page 1-100; Well Permits subscription, 403 otherwise). GET /v1/ei/well-permits/preview: new opa_preview_well_permits (one state, 1-90 days, at most 25 rows; any key including Free; renders as_of, data age, stale flag and per-state date coverage). Both verified live 2026-11-10. Analytics (#195): expose the four /v1/analytics operations deferred in ledger 8 (new analytics family now exposed). GET /v1/analytics/statistics: opa_get_price_statistics. GET /v1/analytics/trend: opa_get_price_trend (analysis, sma, ema, rsi, levels). GET /v1/analytics/correlation: opa_get_price_correlation (analysis, rolling, matrix of 2-10 codes). GET /v1/analytics/spread: opa_get_spread_statistics (list, current, historical). Entitlement gate (HTTP 403) stated in every description; series capped at 400 rows. All four verified live 2026-11-10 with a Scale key."
+    },
+    {
+      "ledgerVersion": 10,
+      "date": "2026-11-14",
+      "summary": "GET /v1/diesel-prices/monthly-average, newly published by the live OpenAPI, recorded as deferred in retail-energy, matching GET /v1/diesel-prices. No tool change."
     }
   ]
 }
