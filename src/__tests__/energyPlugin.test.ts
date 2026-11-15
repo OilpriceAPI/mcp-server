@@ -57,6 +57,40 @@ describe("public energy facade", () => {
       });
     }
   });
+  it("stops at once when cancelled before the upstream sends headers (#172)", async () => {
+    // A fetch that never answers until its signal aborts. Before the fix the
+    // abort was rewrapped as a plain transport error, so requestApi retried
+    // with 1 s + 2 s + 4 s backoff on a call nobody was waiting for.
+    const fetchImpl = vi.fn(
+      (_url: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          const fail = () =>
+            reject(
+              new DOMException("This operation was aborted", "AbortError"),
+            );
+          if (signal?.aborted) return fail();
+          signal?.addEventListener("abort", fail, { once: true });
+        }),
+    );
+    const cancel = new AbortController();
+    const timer = setTimeout(() => cancel.abort(), 20);
+    const started = Date.now();
+    try {
+      const data = body(
+        await executeEnergyTool(
+          "energy_get_price",
+          { benchmark: quote.code },
+          { key: "credential", signal: cancel.signal, fetchImpl },
+        ),
+      );
+      expect(data.outcome).toBe("upstream_error");
+      expect(Date.now() - started).toBeLessThan(900);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    } finally {
+      clearTimeout(timer);
+    }
+  });
   it("does not count malformed futures contracts as usable data", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
       response({
